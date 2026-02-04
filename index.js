@@ -36,7 +36,7 @@ app.get("/", (req, res) => {
 app.use("/accounts", accountRoutes);
 app.use("/leads", leadRoutes);
 app.use("/analytics", analyticsRoutes);
-app.use("/webhook/calendly", calendlyRoutes);
+app.use("/api/calendly", calendlyRoutes);
 
 // auth routes at root level
 app.use("/", accountRoutes);
