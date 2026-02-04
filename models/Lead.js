@@ -20,6 +20,7 @@ const LeadSchema = new mongoose.Schema(
   {
     collection: "leads",
     versionKey: false,
+    bufferCommands: true,
   },
 );
 

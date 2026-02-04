@@ -21,33 +21,34 @@ app.use(
 const MONGO_URI =
   "mongodb+srv://cristianfloreadev_db_user:SyQG2Lk0qsJYks18@cluster0.jumreey.mongodb.net/CRM?appName=Cluster0";
 
-// Cached connection for serverless
-let isConnected = false;
+// Enable command buffering globally
+mongoose.set("bufferCommands", true);
+
+// Cached connection promise for serverless
+let cachedConnection = null;
 
 const connectDB = async () => {
-  if (isConnected) return;
-
-  try {
-    await mongoose.connect(MONGO_URI, {
-      bufferCommands: false,
-    });
-    isConnected = true;
-    console.log("MongoDB connected");
-  } catch (err) {
-    console.error("MongoDB connection error:", err);
-    throw err;
+  if (cachedConnection && mongoose.connection.readyState === 1) {
+    return cachedConnection;
   }
+
+  cachedConnection = await mongoose.connect(MONGO_URI, {
+    bufferCommands: true,
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+  });
+  console.log("MongoDB connected");
+  return cachedConnection;
 };
 
-// Connect on startup
-connectDB();
-
-// Middleware to ensure DB connection
+// Middleware to ensure DB connection before any route
 app.use(async (req, res, next) => {
   try {
     await connectDB();
     next();
   } catch (err) {
+    console.error("MongoDB connection error:", err);
     res.status(500).json({ error: "Database connection failed" });
   }
 });
