@@ -12,8 +12,10 @@ const LeadSchema = new mongoose.Schema(
     booking_at: { type: Date, default: null },
     qualified_at: { type: Date, default: null },
     follow_up_at: { type: Date, default: null },
+    link_sent_at: { type: Date, default: null },
     low_ticket: { type: Date, default: null },
     summary: { type: String, default: null },
+    email: { type: String, default: null },
   },
   {
     collection: "leads",

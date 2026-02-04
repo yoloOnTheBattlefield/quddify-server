@@ -5,6 +5,7 @@ const cors = require("cors");
 const accountRoutes = require("./routes/accounts");
 const leadRoutes = require("./routes/leads");
 const analyticsRoutes = require("./routes/analytics");
+const calendlyRoutes = require("./routes/calendly");
 
 const app = express();
 app.use(express.json());
@@ -35,6 +36,7 @@ app.get("/", (req, res) => {
 app.use("/accounts", accountRoutes);
 app.use("/leads", leadRoutes);
 app.use("/analytics", analyticsRoutes);
+app.use("/calendly", calendlyRoutes);
 
 // auth routes at root level
 app.use("/", accountRoutes);
