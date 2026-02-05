@@ -142,7 +142,7 @@ router.post("/", async (req, res) => {
     // Call external webhook with contact_id
     try {
       await fetch(
-        "https://services.leadconnectorhq.com/hooks/prwfuJM2J2uvIWaTyhPd/webhook-trigger/78223b6a-28f7-4ab9-96a5-f9cf7d1755e5",
+        "https://services.leadconnectorhq.com/hooks/prwfuJM2J2uvIWaTyhPd/webhook-trigger/af3a6920-6d6f-4053-bfbf-24b5f44e7ba2",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -157,6 +157,34 @@ router.post("/", async (req, res) => {
     res.json({ success: true, lead });
   } catch (error) {
     console.error("Calendly webhook error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.post("/test", async (req, res) => {
+  try {
+    console.log(
+      "Calendly webhook received:",
+      JSON.stringify(req.body, null, 2),
+    );
+
+    // Call external webhook with contact_id
+    try {
+      await fetch(
+        "https://services.leadconnectorhq.com/hooks/prwfuJM2J2uvIWaTyhPd/webhook-trigger/af3a6920-6d6f-4053-bfbf-24b5f44e7ba2",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contact_id: "WF8mVUX8DAfOH6QF1uzO" }),
+        },
+      );
+      console.log("External webhook called with contact_id:", contactId);
+    } catch (webhookError) {
+      console.error("External webhook error:", webhookError);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
     res.status(500).json({ error: "Internal server error" });
   }
 });

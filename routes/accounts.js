@@ -1,6 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const Account = require("../models/Account");
+const Lead = require("../models/Lead");
 
 const router = express.Router();
 
@@ -8,6 +9,48 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   const accounts = await Account.find().lean();
   res.json(accounts);
+});
+
+// GET /accounts/analytics - per-account lead stats
+router.get("/analytics", async (req, res) => {
+  try {
+    const { start_date, end_date } = req.query;
+
+    const accounts = await Account.find().lean();
+
+    // Build date filter for leads
+    const dateFilter = {};
+    if (start_date || end_date) {
+      dateFilter.date_created = {};
+      if (start_date) dateFilter.date_created.$gte = `${start_date}T00:00:00.000Z`;
+      if (end_date) dateFilter.date_created.$lte = `${end_date}T23:59:59.999Z`;
+    }
+
+    const results = await Promise.all(
+      accounts.map(async (account) => {
+        const filter = { account_id: account.ghl, ...dateFilter };
+        const leads = await Lead.find(filter).lean();
+
+        return {
+          account_id: account._id,
+          ghl: account.ghl,
+          name: `${account.first_name || ""} ${account.last_name || ""}`.trim() || account.email,
+          totalLeads: leads.length,
+          qualified: leads.filter((l) => l.qualified_at).length,
+          link_sent: leads.filter((l) => l.link_sent_at).length,
+          booked: leads.filter((l) => l.booked_at).length,
+          ghosted: leads.filter((l) => l.ghosted_at && !l.booked_at).length,
+          follow_up: leads.filter((l) => l.follow_up_at).length,
+          low_ticket: leads.filter((l) => l.low_ticket).length,
+        };
+      }),
+    );
+
+    res.json(results);
+  } catch (error) {
+    console.error("Account analytics error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // register
