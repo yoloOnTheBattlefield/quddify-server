@@ -13,9 +13,9 @@ app.use(express.json());
 const allowedOrigins = [
   "http://localhost:8080",
   "http://localhost:5173",
-  "https://dm-setting-mrcristianflorea.app",
-  "https://www.dm-setting-mrcristianflorea.app",
-  "https://dm-setting-mrcristianflorea.vercel.app",
+  "https://quddify-app.app",
+  "https://www.quddify-app.app",
+  "https://quddify-app.vercel.app",
 ];
 
 app.use(
