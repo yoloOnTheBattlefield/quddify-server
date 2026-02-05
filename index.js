@@ -10,17 +10,27 @@ const calendlyRoutes = require("./routes/calendly");
 const app = express();
 app.use(express.json());
 
+const allowedOrigins = [
+  "http://localhost:8080",
+  "http://localhost:5173",
+  "https://dm-setting-mrcristianflorea.app",
+  "https://www.dm-setting-mrcristianflorea.app",
+  "https://dm-setting-mrcristianflorea.vercel.app",
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:8080",
-      "http://localhost:5173",
-      "https://dm-setting-mrcristianflorea.app",
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // allow Postman / server-to-server
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("CORS blocked: " + origin));
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   }),
 );
+
+app.options("*", cors());
 
 const MONGO_URI =
   "mongodb+srv://cristianfloreadev_db_user:SyQG2Lk0qsJYks18@cluster0.jumreey.mongodb.net/CRM?appName=Cluster0";
