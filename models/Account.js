@@ -7,6 +7,8 @@ const AccountSchema = new mongoose.Schema(
     last_name: String,
     email: String,
     password: String,
+    calendly: String,
+    calendly_token: String,
   },
   { collection: "accounts", versionKey: false },
 );

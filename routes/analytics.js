@@ -24,10 +24,16 @@ function round2(num) {
   return Math.round(num * 100) / 100;
 }
 
-// Helper: Get date string (YYYY-MM-DD) from ISO timestamp
-function toDateString(isoString) {
-  if (!isoString) return null;
-  return isoString.slice(0, 10);
+// Helper: Get date string (YYYY-MM-DD) from ISO timestamp or Date object
+function toDateString(dateValue) {
+  if (!dateValue) return null;
+  if (dateValue instanceof Date) {
+    return dateValue.toISOString().slice(0, 10);
+  }
+  if (typeof dateValue === "string") {
+    return dateValue.slice(0, 10);
+  }
+  return null;
 }
 
 // Helper: Calculate hours between two ISO timestamps
