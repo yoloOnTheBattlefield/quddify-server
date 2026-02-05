@@ -9,6 +9,7 @@ const AccountSchema = new mongoose.Schema(
     password: String,
     calendly: String,
     calendly_token: String,
+    ghl_lead_booked_webhook: { type: String, default: null },
   },
   { collection: "accounts", versionKey: false },
 );

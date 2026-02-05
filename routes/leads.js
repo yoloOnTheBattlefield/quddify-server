@@ -3,9 +3,9 @@ const Lead = require("../models/Lead");
 
 const router = express.Router();
 
-// get all leads (optionally filter by account_id/ghl, status, date range, and search)
+// get all leads (optionally filter by account_id/ghl, status, date range, search, and paginate)
 router.get("/", async (req, res) => {
-  const { account_id, ghl, status, start_date, end_date, search } = req.query;
+  const { account_id, ghl, status, start_date, end_date, search, page, limit } = req.query;
   const filter = {};
   if (ghl) filter.account_id = ghl;
   else if (account_id) filter.account_id = account_id;
@@ -23,8 +23,26 @@ router.get("/", async (req, res) => {
     if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
     if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
   }
-  const leads = await Lead.find(filter).lean();
-  res.json(leads);
+
+  // Pagination
+  const pageNum = parseInt(page, 10) || 1;
+  const limitNum = parseInt(limit, 10) || 20;
+  const skip = (pageNum - 1) * limitNum;
+
+  const [leads, total] = await Promise.all([
+    Lead.find(filter).sort({ date_created: -1 }).skip(skip).limit(limitNum).lean(),
+    Lead.countDocuments(filter),
+  ]);
+
+  res.json({
+    leads,
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+    },
+  });
 });
 
 // get lead by id

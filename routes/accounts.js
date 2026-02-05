@@ -22,7 +22,8 @@ router.get("/analytics", async (req, res) => {
     const dateFilter = {};
     if (start_date || end_date) {
       dateFilter.date_created = {};
-      if (start_date) dateFilter.date_created.$gte = `${start_date}T00:00:00.000Z`;
+      if (start_date)
+        dateFilter.date_created.$gte = `${start_date}T00:00:00.000Z`;
       if (end_date) dateFilter.date_created.$lte = `${end_date}T23:59:59.999Z`;
     }
 
@@ -34,7 +35,9 @@ router.get("/analytics", async (req, res) => {
         return {
           account_id: account._id,
           ghl: account.ghl,
-          name: `${account.first_name || ""} ${account.last_name || ""}`.trim() || account.email,
+          name:
+            `${account.first_name || ""} ${account.last_name || ""}`.trim() ||
+            account.email,
           totalLeads: leads.length,
           qualified: leads.filter((l) => l.qualified_at).length,
           link_sent: leads.filter((l) => l.link_sent_at).length,
@@ -94,6 +97,65 @@ router.post("/login", async (req, res) => {
   }
 
   res.json(account);
+});
+
+// GET /accounts/ghl-webhook?_id=<client_id> - Get account info with webhook
+router.get("/ghl-webhook", async (req, res) => {
+  try {
+    const { _id } = req.query;
+
+    if (!_id) {
+      return res.status(400).json({ message: "Missing _id" });
+    }
+
+    const account = await Account.findById(_id).lean();
+
+    if (!account) {
+      return res.status(404).json({ message: "Account not found" });
+    }
+
+    res.json({
+      account_id: account._id,
+      ghl: account.ghl,
+      name:
+        `${account.first_name || ""} ${account.last_name || ""}`.trim() ||
+        account.email,
+      ghl_lead_booked_webhook: account.ghl_lead_booked_webhook || undefined,
+    });
+  } catch (error) {
+    console.error("GHL webhook fetch error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// POST /accounts/ghl-webhook - Set GHL webhook for an account
+router.post("/ghl-webhook", async (req, res) => {
+  try {
+    const { ghl_lead_booked_webhook, _id } = req.body;
+
+    if (!ghl_lead_booked_webhook) {
+      return res.status(400).json({ message: "Missing ghl_lead_booked_webhook" });
+    }
+
+    if (!ghl_lead_booked_webhook.startsWith("http")) {
+      return res.status(400).json({ message: "Invalid URL, must start with http" });
+    }
+
+    const account = await Account.findByIdAndUpdate(
+      _id,
+      { ghl_lead_booked_webhook },
+      { new: true },
+    );
+
+    if (!account) {
+      return res.status(404).json({ message: "Account not found" });
+    }
+
+    res.json({ message: "Webhook saved successfully" });
+  } catch (error) {
+    console.error("GHL webhook update error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
 });
 
 module.exports = router;

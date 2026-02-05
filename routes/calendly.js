@@ -87,7 +87,7 @@ router.post("/add", async (req, res) => {
   }
 });
 
-// POST /calendly - Calendly webhook
+// POST /api/calendly - Calendly webhook
 router.post("/", async (req, res) => {
   try {
     console.log(
@@ -139,19 +139,31 @@ router.post("/", async (req, res) => {
 
     console.log("Lead updated successfully:", lead._id);
 
-    // Call external webhook with contact_id
+    // Fetch account to get dynamic webhook URL
+    const account = await Account.findOne({ ghl: lead.account_id });
+
+    if (!account) {
+      console.log("Account not found for account_id:", lead.account_id);
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    const webhookUrl = account.ghl_lead_booked_webhook;
+
+    if (!webhookUrl) {
+      console.log("No GHL webhook configured for account:", lead.account_id);
+      return res.json({ success: true, lead, message: "Booked. No webhook configured." });
+    }
+
+    // Call account-specific GHL webhook with contact_id
     try {
-      await fetch(
-        "https://services.leadconnectorhq.com/hooks/prwfuJM2J2uvIWaTyhPd/webhook-trigger/af3a6920-6d6f-4053-bfbf-24b5f44e7ba2",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contact_id: contactId }),
-        },
-      );
-      console.log("External webhook called with contact_id:", contactId);
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contact_id: contactId }),
+      });
+      console.log("GHL webhook called:", webhookUrl, "contact_id:", contactId);
     } catch (webhookError) {
-      console.error("External webhook error:", webhookError);
+      console.error("GHL webhook error:", webhookError);
     }
 
     res.json({ success: true, lead });
