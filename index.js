@@ -30,7 +30,7 @@ app.use(
   }),
 );
 
-app.options("*", cors());
+app.options(/.*/, cors());
 
 const MONGO_URI =
   "mongodb+srv://cristianfloreadev_db_user:SyQG2Lk0qsJYks18@cluster0.jumreey.mongodb.net/CRM?appName=Cluster0";
