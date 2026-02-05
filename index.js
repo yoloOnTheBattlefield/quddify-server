@@ -12,7 +12,11 @@ app.use(express.json());
 
 app.use(
   cors({
-    origin: ["http://localhost:8080", "http://localhost:5173"],
+    origin: [
+      "http://localhost:8080",
+      "http://localhost:5173",
+      "https://dm-setting-mrcristianflorea.app",
+    ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
   }),
