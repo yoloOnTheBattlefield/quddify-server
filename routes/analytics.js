@@ -105,9 +105,12 @@ router.get("/", async (req, res) => {
     const qualifiedCount = leads.filter((l) => l.qualified_at).length;
     const qualificationRate =
       totalContacts > 0 ? round2((qualifiedCount / totalContacts) * 100) : 0;
+    const linkSentCount = leads.filter((l) => l.link_sent_at).length;
+    const linkSentRate =
+      qualifiedCount > 0 ? round2((linkSentCount / qualifiedCount) * 100) : 0;
     const bookedCount = leads.filter((l) => l.booked_at).length;
     const bookingRate =
-      qualifiedCount > 0 ? round2((bookedCount / qualifiedCount) * 100) : 0;
+      linkSentCount > 0 ? round2((bookedCount / linkSentCount) * 100) : 0;
     const ghostedCount = leads.filter(
       (l) => l.ghosted_at && !l.booked_at,
     ).length;
@@ -124,6 +127,8 @@ router.get("/", async (req, res) => {
       totalContacts,
       qualifiedCount,
       qualificationRate,
+      linkSentCount,
+      linkSentRate,
       bookedCount,
       bookingRate,
       ghostedCount,
@@ -168,6 +173,7 @@ router.get("/", async (req, res) => {
       dailyVolumeMap[date] = {
         created: 0,
         qualified: 0,
+        link_sent: 0,
         booked: 0,
         ghosted: 0,
       };
@@ -182,6 +188,11 @@ router.get("/", async (req, res) => {
       const qualifiedDate = toDateString(lead.qualified_at);
       if (qualifiedDate && dailyVolumeMap[qualifiedDate]) {
         dailyVolumeMap[qualifiedDate].qualified++;
+      }
+
+      const linkSentDate = toDateString(lead.link_sent_at);
+      if (linkSentDate && dailyVolumeMap[linkSentDate]) {
+        dailyVolumeMap[linkSentDate].link_sent++;
       }
 
       const bookedDate = toDateString(lead.booked_at);
@@ -266,12 +277,23 @@ router.get("/", async (req, res) => {
       .sort((a, b) => b.daysSinceAction - a.daysSinceAction)
       .slice(0, 10);
 
-    // Qualified (Pending) - has qualified_at but no booked_at and no ghosted_at
+    // Qualified (Pending) - has qualified_at but no link_sent_at and no ghosted_at
     const qualifiedPending = leads
-      .filter((l) => l.qualified_at && !l.booked_at && !l.ghosted_at)
+      .filter((l) => l.qualified_at && !l.link_sent_at && !l.ghosted_at)
       .map((l) => ({
         name: `${l.first_name || ""} ${l.last_name || ""}`.trim() || "Unknown",
         daysSinceAction: Math.floor(daysBetween(l.qualified_at, nowISO)),
+      }))
+      .filter((c) => c.daysSinceAction > 1)
+      .sort((a, b) => b.daysSinceAction - a.daysSinceAction)
+      .slice(0, 10);
+
+    // Link Sent (Pending) - has link_sent_at but no booked_at and no ghosted_at
+    const linkSentPending = leads
+      .filter((l) => l.link_sent_at && !l.booked_at && !l.ghosted_at)
+      .map((l) => ({
+        name: `${l.first_name || ""} ${l.last_name || ""}`.trim() || "Unknown",
+        daysSinceAction: Math.floor(daysBetween(l.link_sent_at, nowISO)),
       }))
       .filter((c) => c.daysSinceAction > 1)
       .sort((a, b) => b.daysSinceAction - a.daysSinceAction)
@@ -298,6 +320,11 @@ router.get("/", async (req, res) => {
         stage: "Qualified (Pending)",
         contacts: qualifiedPending,
         count: qualifiedPending.length,
+      },
+      {
+        stage: "Link Sent (Pending)",
+        contacts: linkSentPending,
+        count: linkSentPending.length,
       },
       {
         stage: "In Follow-up",
