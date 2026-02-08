@@ -118,6 +118,22 @@ router.post("/generate", async (req, res) => {
       "Collins", "Edwards", "Stewart", "Morris", "Murphy", "Cook",
     ];
 
+    const igHandles = [
+      "fit_james", "gains_daily", "coach_emma", "iron_will", "flex_nation",
+      "pump_life", "shred_mode", "lift_heavy", "beast_mode", "grind_hard",
+      "no_excuses", "train_insane", "muscle_up", "cardio_king", "sweat_equity",
+    ];
+
+    const investAnswers = [
+      "Yes, I'm ready to invest in myself",
+      "Yes I am, but I dont really have the funds to invest in myself right now",
+      "I need to think about it first",
+      "Absolutely, let's do this",
+      "I'm interested but need more details on pricing",
+      "Yes, health is my top priority right now",
+      "Not sure yet, depends on the cost",
+    ];
+
     const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
     const randId = () =>
       Math.random().toString(36).substring(2, 15) +
@@ -159,6 +175,22 @@ router.post("/generate", async (req, res) => {
         }
       } else if (i >= link_sent && i < link_sent + ghosted) {
         lead.ghosted_at = new Date(createdAt.getTime() + randHours(24, 120) * 3600000);
+      }
+
+      // Booked leads get Calendly-style Q&A
+      if (lead.booked_at) {
+        lead.questions_and_answers = [
+          {
+            answer: `${pick(igHandles)}${Math.floor(Math.random() * 99)}`,
+            position: 0,
+            question: "Whats your Instagram username?",
+          },
+          {
+            answer: pick(investAnswers),
+            position: 1,
+            question: "If accepted into my coaching program, are you ready to financially invest in your health?",
+          },
+        ];
       }
 
       // Follow-ups on the first N eligible non-booked leads

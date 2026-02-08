@@ -14,6 +14,10 @@ const LeadSchema = new mongoose.Schema(
     booked_at: { type: Date, default: null }, // booking has been made
     follow_up_at: { type: Date, default: null }, // follow up before sending the link
     low_ticket: { type: Date, default: null },
+    // sales
+    score: { type: Number, default: null }, // 1-10, null = not set
+    contract_value: { type: Number, default: null }, // in dollars
+    closed_at: { type: Date, default: null }, // payment made
     // ai tags
     summary: { type: String, default: null },
     //calendly
