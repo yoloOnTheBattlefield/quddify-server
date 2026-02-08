@@ -75,7 +75,7 @@ router.post("/add", async (req, res) => {
     console.log("Webhook subscription created:", webhookData);
 
     // Step 3: Save token to user's account
-    await Account.findByIdAndUpdate(
+    await Account.findOneAndUpdate(
       { ghl: accountId },
       { calendly_token: token },
     );

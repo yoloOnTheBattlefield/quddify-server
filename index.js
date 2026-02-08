@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -32,8 +33,7 @@ app.use(
 
 app.options(/.*/, cors());
 
-const MONGO_URI =
-  "mongodb+srv://cristianfloreadev_db_user:SyQG2Lk0qsJYks18@cluster0.jumreey.mongodb.net/CRM?appName=Cluster0";
+const MONGO_URI = process.env.MONGO_URI;
 
 // Enable command buffering globally
 mongoose.set("bufferCommands", true);

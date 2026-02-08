@@ -2,13 +2,9 @@ const mongoose = require("mongoose");
 
 const AccountSchema = new mongoose.Schema(
   {
-    ghl: String,
-    first_name: String,
-    last_name: String,
-    email: String,
-    password: String,
-    calendly: String,
-    calendly_token: String,
+    ghl: { type: String, default: null },
+    calendly: { type: String, default: null },
+    calendly_token: { type: String, default: null },
     ghl_lead_booked_webhook: { type: String, default: null },
   },
   { collection: "accounts", versionKey: false },

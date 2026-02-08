@@ -74,4 +74,122 @@ router.delete("/:id", async (req, res) => {
   res.json({ deleted: true });
 });
 
+// POST /leads/generate - Generate mock leads
+router.post("/generate", async (req, res) => {
+  try {
+    const {
+      ghl,
+      total = 100,
+      qualified = 0,
+      link_sent = 0,
+      booked = 0,
+      ghosted = 0,
+      follow_up = 0,
+      days_back = 30,
+    } = req.body;
+
+    if (!ghl) {
+      return res.status(400).json({ error: "Missing ghl (account_id)" });
+    }
+
+    if (link_sent > qualified) {
+      return res.status(400).json({ error: "link_sent cannot exceed qualified" });
+    }
+    if (booked > link_sent) {
+      return res.status(400).json({ error: "booked cannot exceed link_sent" });
+    }
+    if (qualified + ghosted > total) {
+      return res.status(400).json({ error: "qualified + ghosted cannot exceed total" });
+    }
+
+    const firstNames = [
+      "James", "Emma", "Liam", "Olivia", "Noah", "Ava", "Lucas", "Sophia",
+      "Mason", "Isabella", "Ethan", "Mia", "Logan", "Charlotte", "Aiden",
+      "Amelia", "Jackson", "Harper", "Sebastian", "Evelyn", "Caleb", "Abigail",
+      "Owen", "Emily", "Daniel", "Ella", "Matthew", "Scarlett", "Henry", "Grace",
+      "Alexander", "Chloe", "Michael", "Victoria", "William", "Riley", "David",
+      "Aria", "Joseph", "Lily", "Carter", "Aubrey", "Luke", "Zoey", "Dylan",
+      "Penelope", "Jack", "Layla", "Ryan", "Nora",
+    ];
+
+    const lastNames = [
+      "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
+      "Davis", "Rodriguez", "Martinez", "Anderson", "Taylor", "Thomas", "Moore",
+      "Jackson", "Martin", "Lee", "Thompson", "White", "Harris", "Clark",
+      "Lewis", "Robinson", "Walker", "Hall", "Young", "Allen", "King", "Wright",
+      "Scott", "Green", "Baker", "Adams", "Nelson", "Hill", "Campbell", "Mitchell",
+      "Roberts", "Carter", "Phillips", "Evans", "Turner", "Torres", "Parker",
+      "Collins", "Edwards", "Stewart", "Morris", "Murphy", "Cook",
+    ];
+
+    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const randId = () =>
+      Math.random().toString(36).substring(2, 15) +
+      Math.random().toString(36).substring(2, 15);
+    const randHours = (min, max) => min + Math.random() * (max - min);
+
+    const now = Date.now();
+    const msPerDay = 86400000;
+
+    const leads = [];
+
+    for (let i = 0; i < total; i++) {
+      const firstName = pick(firstNames);
+      const lastName = pick(lastNames);
+      const createdAt = new Date(now - Math.random() * days_back * msPerDay);
+
+      const lead = {
+        first_name: firstName,
+        last_name: lastName,
+        contact_id: randId(),
+        account_id: ghl,
+        date_created: createdAt.toISOString(),
+        email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${Math.floor(Math.random() * 99)}@email.com`,
+        qualified_at: null,
+        link_sent_at: null,
+        booked_at: null,
+        ghosted_at: null,
+        follow_up_at: null,
+        low_ticket: null,
+        summary: null,
+        questions_and_answers: [],
+      };
+
+      // Funnel: booked ⊂ link_sent ⊂ qualified (first indices get furthest)
+      if (i < qualified) {
+        lead.qualified_at = new Date(createdAt.getTime() + randHours(1, 12) * 3600000);
+
+        if (i < link_sent) {
+          lead.link_sent_at = new Date(lead.qualified_at.getTime() + randHours(1, 24) * 3600000);
+
+          if (i < booked) {
+            lead.booked_at = new Date(lead.link_sent_at.getTime() + randHours(2, 48) * 3600000);
+          }
+        }
+      } else if (i >= qualified && i < qualified + ghosted) {
+        lead.ghosted_at = new Date(createdAt.getTime() + randHours(24, 120) * 3600000);
+      }
+
+      // Follow-ups on the first N eligible non-booked leads
+      if (i < follow_up && !lead.booked_at) {
+        const base = lead.qualified_at || lead.ghosted_at || createdAt;
+        lead.follow_up_at = new Date(base.getTime() + randHours(12, 72) * 3600000);
+      }
+
+      leads.push(lead);
+    }
+
+    await Lead.insertMany(leads);
+
+    res.json({
+      success: true,
+      created: leads.length,
+      breakdown: { qualified, link_sent, booked, ghosted, follow_up },
+    });
+  } catch (error) {
+    console.error("Generate leads error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 module.exports = router;
