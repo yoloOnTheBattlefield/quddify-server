@@ -102,12 +102,9 @@ router.get("/", async (req, res) => {
 
     // 1. FUNNEL METRICS
     const totalContacts = leads.length;
-    const qualifiedCount = leads.filter((l) => l.qualified_at).length;
-    const qualificationRate =
-      totalContacts > 0 ? round2((qualifiedCount / totalContacts) * 100) : 0;
     const linkSentCount = leads.filter((l) => l.link_sent_at).length;
     const linkSentRate =
-      qualifiedCount > 0 ? round2((linkSentCount / qualifiedCount) * 100) : 0;
+      totalContacts > 0 ? round2((linkSentCount / totalContacts) * 100) : 0;
     const bookedCount = leads.filter((l) => l.booked_at).length;
     const bookingRate =
       linkSentCount > 0 ? round2((bookedCount / linkSentCount) * 100) : 0;
@@ -125,8 +122,6 @@ router.get("/", async (req, res) => {
 
     const funnel = {
       totalContacts,
-      qualifiedCount,
-      qualificationRate,
       linkSentCount,
       linkSentRate,
       bookedCount,
@@ -139,26 +134,26 @@ router.get("/", async (req, res) => {
     };
 
     // 2. VELOCITY METRICS
-    const createdToQualifiedHours = leads
-      .filter((l) => l.qualified_at && l.date_created)
-      .map((l) => hoursBetween(l.date_created, l.qualified_at));
+    const createdToLinkSentHours = leads
+      .filter((l) => l.link_sent_at && l.date_created)
+      .map((l) => hoursBetween(l.date_created, l.link_sent_at));
 
-    const qualifiedToBookedHours = leads
-      .filter((l) => l.qualified_at && l.booked_at)
-      .map((l) => hoursBetween(l.qualified_at, l.booked_at));
+    const linkSentToBookedHours = leads
+      .filter((l) => l.link_sent_at && l.booked_at)
+      .map((l) => hoursBetween(l.link_sent_at, l.booked_at));
 
     const createdToGhostedHours = leads
       .filter((l) => l.ghosted_at && !l.booked_at && l.date_created)
       .map((l) => hoursBetween(l.date_created, l.ghosted_at));
 
     const velocity = {
-      createdToQualified: {
-        median: round2(median(createdToQualifiedHours)),
-        average: round2(average(createdToQualifiedHours)),
+      createdToLinkSent: {
+        median: round2(median(createdToLinkSentHours)),
+        average: round2(average(createdToLinkSentHours)),
       },
-      qualifiedToBooked: {
-        median: round2(median(qualifiedToBookedHours)),
-        average: round2(average(qualifiedToBookedHours)),
+      linkSentToBooked: {
+        median: round2(median(linkSentToBookedHours)),
+        average: round2(average(linkSentToBookedHours)),
       },
       createdToGhosted: {
         median: round2(median(createdToGhostedHours)),
@@ -172,7 +167,6 @@ router.get("/", async (req, res) => {
     dateRange.forEach((date) => {
       dailyVolumeMap[date] = {
         created: 0,
-        qualified: 0,
         link_sent: 0,
         booked: 0,
         ghosted: 0,
@@ -183,11 +177,6 @@ router.get("/", async (req, res) => {
       const createdDate = toDateString(lead.date_created);
       if (createdDate && dailyVolumeMap[createdDate]) {
         dailyVolumeMap[createdDate].created++;
-      }
-
-      const qualifiedDate = toDateString(lead.qualified_at);
-      if (qualifiedDate && dailyVolumeMap[qualifiedDate]) {
-        dailyVolumeMap[qualifiedDate].qualified++;
       }
 
       const linkSentDate = toDateString(lead.link_sent_at);
@@ -266,23 +255,12 @@ router.get("/", async (req, res) => {
     const now = new Date();
     const nowISO = now.toISOString();
 
-    // New (No Action) - no qualified_at and no ghosted_at, idle > 1 day
+    // New (No Action) - no link_sent_at and no ghosted_at, idle > 1 day
     const newNoAction = leads
-      .filter((l) => !l.qualified_at && !l.ghosted_at && l.date_created)
+      .filter((l) => !l.link_sent_at && !l.ghosted_at && l.date_created)
       .map((l) => ({
         name: `${l.first_name || ""} ${l.last_name || ""}`.trim() || "Unknown",
         daysSinceAction: Math.floor(daysBetween(l.date_created, nowISO)),
-      }))
-      .filter((c) => c.daysSinceAction > 1)
-      .sort((a, b) => b.daysSinceAction - a.daysSinceAction)
-      .slice(0, 10);
-
-    // Qualified (Pending) - has qualified_at but no link_sent_at and no ghosted_at
-    const qualifiedPending = leads
-      .filter((l) => l.qualified_at && !l.link_sent_at && !l.ghosted_at)
-      .map((l) => ({
-        name: `${l.first_name || ""} ${l.last_name || ""}`.trim() || "Unknown",
-        daysSinceAction: Math.floor(daysBetween(l.qualified_at, nowISO)),
       }))
       .filter((c) => c.daysSinceAction > 1)
       .sort((a, b) => b.daysSinceAction - a.daysSinceAction)
@@ -315,11 +293,6 @@ router.get("/", async (req, res) => {
         stage: "New (No Action)",
         contacts: newNoAction,
         count: newNoAction.length,
-      },
-      {
-        stage: "Qualified (Pending)",
-        contacts: qualifiedPending,
-        count: qualifiedPending.length,
       },
       {
         stage: "Link Sent (Pending)",

@@ -10,7 +10,6 @@ const LeadSchema = new mongoose.Schema(
     // ghl tags
     date_created: { type: String, default: null }, // when the lead entered the system
     ghosted_at: { type: Date, default: null },
-    qualified_at: { type: Date, default: null }, // happens before sending the link (not always present)
     link_sent_at: { type: Date, default: null }, // link was sent
     booked_at: { type: Date, default: null }, // booking has been made
     follow_up_at: { type: Date, default: null }, // follow up before sending the link

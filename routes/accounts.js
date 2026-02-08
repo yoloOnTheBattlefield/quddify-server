@@ -10,7 +10,7 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   const [accounts, owners] = await Promise.all([
     Account.find().lean(),
-    User.find({ role: 1 }, { password: 0 }).lean(),
+    User.find({ role: { $lte: 1 } }, { password: 0 }).lean(),
   ]);
 
   const ownerMap = {};
@@ -39,7 +39,7 @@ router.get("/analytics", async (req, res) => {
 
     const [accounts, owners] = await Promise.all([
       Account.find().lean(),
-      User.find({ role: 1 }, { password: 0 }).lean(),
+      User.find({ role: { $lte: 1 } }, { password: 0 }).lean(),
     ]);
 
     const ownerMap = {};
@@ -69,7 +69,6 @@ router.get("/analytics", async (req, res) => {
             ? `${owner.first_name || ""} ${owner.last_name || ""}`.trim() || owner.email
             : "Unknown",
           totalLeads: leads.length,
-          qualified: leads.filter((l) => l.qualified_at).length,
           link_sent: leads.filter((l) => l.link_sent_at).length,
           booked: leads.filter((l) => l.booked_at).length,
           ghosted: leads.filter((l) => l.ghosted_at && !l.booked_at).length,
@@ -137,6 +136,10 @@ router.post("/login", async (req, res) => {
   }
 
   const account = await Account.findById(user.account_id).lean();
+
+  if (account.disabled && user.role !== 0) {
+    return res.status(403).json({ error: "Account is disabled" });
+  }
 
   res.json({
     _id: user._id,
@@ -341,7 +344,7 @@ router.get("/ghl-webhook", async (req, res) => {
       return res.status(404).json({ message: "Account not found" });
     }
 
-    const owner = await User.findOne({ account_id: account._id, role: 1 }, { password: 0 }).lean();
+    const owner = await User.findOne({ account_id: account._id, role: { $lte: 1 } }, { password: 0 }).lean();
 
     res.json({
       account_id: account._id,
@@ -384,6 +387,24 @@ router.post("/ghl-webhook", async (req, res) => {
   } catch (error) {
     console.error("GHL webhook update error:", error);
     res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// PATCH /accounts/:id/disable - Toggle disabled status on an account
+router.patch("/:id/disable", async (req, res) => {
+  try {
+    const account = await Account.findById(req.params.id);
+    if (!account) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    account.disabled = !account.disabled;
+    await account.save();
+
+    res.json({ account_id: account._id, disabled: account.disabled });
+  } catch (error) {
+    console.error("Toggle disable error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

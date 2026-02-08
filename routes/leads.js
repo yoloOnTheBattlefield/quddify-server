@@ -80,7 +80,6 @@ router.post("/generate", async (req, res) => {
     const {
       ghl,
       total = 100,
-      qualified = 0,
       link_sent = 0,
       booked = 0,
       ghosted = 0,
@@ -92,14 +91,11 @@ router.post("/generate", async (req, res) => {
       return res.status(400).json({ error: "Missing ghl (account_id)" });
     }
 
-    if (link_sent > qualified) {
-      return res.status(400).json({ error: "link_sent cannot exceed qualified" });
-    }
     if (booked > link_sent) {
       return res.status(400).json({ error: "booked cannot exceed link_sent" });
     }
-    if (qualified + ghosted > total) {
-      return res.status(400).json({ error: "qualified + ghosted cannot exceed total" });
+    if (link_sent + ghosted > total) {
+      return res.status(400).json({ error: "link_sent + ghosted cannot exceed total" });
     }
 
     const firstNames = [
@@ -145,7 +141,6 @@ router.post("/generate", async (req, res) => {
         account_id: ghl,
         date_created: createdAt.toISOString(),
         email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${Math.floor(Math.random() * 99)}@email.com`,
-        qualified_at: null,
         link_sent_at: null,
         booked_at: null,
         ghosted_at: null,
@@ -155,24 +150,20 @@ router.post("/generate", async (req, res) => {
         questions_and_answers: [],
       };
 
-      // Funnel: booked ⊂ link_sent ⊂ qualified (first indices get furthest)
-      if (i < qualified) {
-        lead.qualified_at = new Date(createdAt.getTime() + randHours(1, 12) * 3600000);
+      // Funnel: booked ⊂ link_sent (first indices get furthest)
+      if (i < link_sent) {
+        lead.link_sent_at = new Date(createdAt.getTime() + randHours(1, 24) * 3600000);
 
-        if (i < link_sent) {
-          lead.link_sent_at = new Date(lead.qualified_at.getTime() + randHours(1, 24) * 3600000);
-
-          if (i < booked) {
-            lead.booked_at = new Date(lead.link_sent_at.getTime() + randHours(2, 48) * 3600000);
-          }
+        if (i < booked) {
+          lead.booked_at = new Date(lead.link_sent_at.getTime() + randHours(2, 48) * 3600000);
         }
-      } else if (i >= qualified && i < qualified + ghosted) {
+      } else if (i >= link_sent && i < link_sent + ghosted) {
         lead.ghosted_at = new Date(createdAt.getTime() + randHours(24, 120) * 3600000);
       }
 
       // Follow-ups on the first N eligible non-booked leads
       if (i < follow_up && !lead.booked_at) {
-        const base = lead.qualified_at || lead.ghosted_at || createdAt;
+        const base = lead.ghosted_at || createdAt;
         lead.follow_up_at = new Date(base.getTime() + randHours(12, 72) * 3600000);
       }
 
@@ -184,7 +175,7 @@ router.post("/generate", async (req, res) => {
     res.json({
       success: true,
       created: leads.length,
-      breakdown: { qualified, link_sent, booked, ghosted, follow_up },
+      breakdown: { link_sent, booked, ghosted, follow_up },
     });
   } catch (error) {
     console.error("Generate leads error:", error);
