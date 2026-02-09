@@ -7,6 +7,8 @@ const accountRoutes = require("./routes/accounts");
 const leadRoutes = require("./routes/leads");
 const analyticsRoutes = require("./routes/analytics");
 const calendlyRoutes = require("./routes/calendly");
+const uploadRoutes = require("./routes/upload");
+const outboundLeadRoutes = require("./routes/outbound-leads");
 
 const app = express();
 app.use(express.json());
@@ -27,7 +29,7 @@ app.use(
       return callback(new Error("CORS blocked: " + origin));
     },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   }),
 );
 
@@ -77,6 +79,8 @@ app.use("/accounts", accountRoutes);
 app.use("/leads", leadRoutes);
 app.use("/analytics", analyticsRoutes);
 app.use("/api/calendly", calendlyRoutes);
+app.use("/api", uploadRoutes);
+app.use("/outbound-leads", outboundLeadRoutes);
 
 // auth routes at root level
 app.use("/", accountRoutes);
