@@ -327,6 +327,31 @@ router.get("/", async (req, res) => {
       return { date, cumulative: runningTotal };
     });
 
+    // 8. RADAR — leads & link_sent grouped by month
+    const radarMap = {};
+    for (const lead of leads) {
+      const created = lead.date_created;
+      if (!created) continue;
+      const month = String(created).slice(0, 7); // "YYYY-MM"
+      if (!radarMap[month]) radarMap[month] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0 };
+      radarMap[month].leads++;
+      if (lead.link_sent_at) radarMap[month].link_sent++;
+      if (lead.booked_at) radarMap[month].booked++;
+      if (lead.ghosted_at) radarMap[month].ghosted++;
+      if (lead.follow_up_at) radarMap[month].follow_up++;
+    }
+
+    const radar = Object.entries(radarMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, counts]) => ({
+        month,
+        leads: counts.leads,
+        link_sent: counts.link_sent,
+        booked: counts.booked,
+        ghosted: counts.ghosted,
+        follow_up: counts.follow_up,
+      }));
+
     // Return all metrics
     res.json({
       funnel,
@@ -336,6 +361,7 @@ router.get("/", async (req, res) => {
       fup,
       aging,
       cumulative,
+      radar,
     });
   } catch (error) {
     console.error("Analytics error:", error);
