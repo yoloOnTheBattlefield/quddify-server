@@ -1,5 +1,6 @@
 require("dotenv").config();
 const express = require("express");
+const http = require("http");
 const mongoose = require("mongoose");
 const cors = require("cors");
 
@@ -9,8 +10,16 @@ const analyticsRoutes = require("./routes/analytics");
 const calendlyRoutes = require("./routes/calendly");
 const uploadRoutes = require("./routes/upload");
 const outboundLeadRoutes = require("./routes/outbound-leads");
+const promptRoutes = require("./routes/prompts");
+const jobRoutes = require("./routes/jobs");
+
+const socketManager = require("./services/socketManager");
+const jobQueue = require("./services/jobQueue");
+const jobWorker = require("./services/jobWorker");
+const { recoverStuckJobs } = require("./services/jobRecovery");
 
 const app = express();
+const server = http.createServer(app);
 app.use(express.json());
 
 const allowedOrigins = [
@@ -34,6 +43,13 @@ app.use(
 );
 
 app.options(/.*/, cors());
+
+// Initialize Socket.IO
+const io = socketManager.init(server, allowedOrigins);
+
+// Initialize job worker with Socket.IO, then init queue
+jobWorker.init(io);
+jobQueue.init(jobWorker.processJob);
 
 const MONGO_URI = process.env.MONGO_URI;
 
@@ -81,10 +97,21 @@ app.use("/analytics", analyticsRoutes);
 app.use("/api/calendly", calendlyRoutes);
 app.use("/api", uploadRoutes);
 app.use("/outbound-leads", outboundLeadRoutes);
+app.use("/prompts", promptRoutes);
+app.use("/jobs", jobRoutes);
 
 // auth routes at root level
 app.use("/", accountRoutes);
 
-app.listen(3000, () => {
-  console.log("Server running on port 3000");
-});
+// Connect to DB, run recovery, then start server
+connectDB()
+  .then(async () => {
+    await recoverStuckJobs();
+    server.listen(3000, () => {
+      console.log("Server running on port 3000");
+    });
+  })
+  .catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  });

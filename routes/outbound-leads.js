@@ -5,11 +5,13 @@ const router = express.Router();
 
 // GET /outbound-leads — list with filters, search, pagination
 router.get("/", async (req, res) => {
-  const { source, qualified, search, page, limit } = req.query;
+  const { source, qualified, search, promptId, promptLabel, page, limit } = req.query;
   const filter = {};
 
   if (source) filter.source = source;
   if (qualified !== undefined) filter.qualified = qualified === "true";
+  if (promptId) filter.promptId = promptId;
+  if (promptLabel) filter.promptLabel = { $regex: promptLabel, $options: "i" };
   if (search) {
     filter.$or = [
       { username: { $regex: search, $options: "i" } },
