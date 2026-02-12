@@ -65,6 +65,7 @@ mongoose.set("bufferCommands", true);
 
 // Cached connection promise for serverless
 let cachedConnection = null;
+let indexesFixed = false;
 
 const connectDB = async () => {
   if (cachedConnection && mongoose.connection.readyState === 1) {
@@ -78,6 +79,20 @@ const connectDB = async () => {
     socketTimeoutMS: 45000,
   });
   console.log("MongoDB connected");
+
+  // Fix stale api_key index (non-sparse → sparse) once per process
+  if (!indexesFixed) {
+    indexesFixed = true;
+    const Account = require("./models/Account");
+    try {
+      await Account.collection.dropIndex("api_key_1");
+      console.log("[startup] Dropped old api_key_1 index");
+    } catch (e) {
+      // Index doesn't exist or already sparse — ignore
+    }
+    await Account.syncIndexes();
+  }
+
   return cachedConnection;
 };
 
@@ -119,16 +134,6 @@ app.use("/", accountRoutes);
 connectDB()
   .then(async () => {
     await recoverStuckJobs();
-
-    // Fix stale api_key index (non-sparse → sparse) so null values don't conflict
-    const Account = require("./models/Account");
-    try {
-      await Account.collection.dropIndex("api_key_1");
-      console.log("[startup] Dropped old api_key_1 index");
-    } catch (e) {
-      // Index doesn't exist or already sparse — ignore
-    }
-    await Account.syncIndexes();
 
     // Reset abandoned in_progress tasks back to pending
     const Task = require("./models/Task");
