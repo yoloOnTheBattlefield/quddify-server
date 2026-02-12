@@ -8,7 +8,7 @@ const AccountSchema = new mongoose.Schema(
     ghl_lead_booked_webhook: { type: String, default: null },
     openai_token: { type: String, default: null },
     disabled: { type: Boolean, default: false },
-    api_key: { type: String, default: null, unique: true, sparse: true },
+    api_key: { type: String, unique: true, sparse: true },
   },
   { collection: "accounts", versionKey: false },
 );

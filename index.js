@@ -80,7 +80,7 @@ const connectDB = async () => {
   });
   console.log("MongoDB connected");
 
-  // Fix stale api_key index (non-sparse → sparse) once per process
+  // Fix stale api_key index and clear null values once per process
   if (!indexesFixed) {
     indexesFixed = true;
     const Account = require("./models/Account");
@@ -90,6 +90,10 @@ const connectDB = async () => {
     } catch (e) {
       // Index doesn't exist or already sparse — ignore
     }
+    await Account.collection.updateMany(
+      { api_key: null },
+      { $unset: { api_key: "" } },
+    );
     await Account.syncIndexes();
   }
 
