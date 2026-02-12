@@ -5,11 +5,16 @@ const router = express.Router();
 
 // GET /outbound-leads — list with filters, search, pagination
 router.get("/", async (req, res) => {
-  const { source, qualified, search, promptId, promptLabel, page, limit } = req.query;
+  const { source, qualified, isMessaged, replied, booked, search, promptId, promptLabel, page, limit } = req.query;
   const filter = {};
 
   if (source) filter.source = source;
   if (qualified !== undefined) filter.qualified = qualified === "true";
+  if (isMessaged !== undefined) {
+    filter.isMessaged = isMessaged === "true" ? true : { $ne: true };
+  }
+  if (replied !== undefined) filter.replied = replied === "true";
+  if (booked !== undefined) filter.booked = booked === "true";
   if (promptId) filter.promptId = promptId;
   if (promptLabel) filter.promptLabel = { $regex: promptLabel, $options: "i" };
   if (search) {
@@ -41,6 +46,38 @@ router.get("/", async (req, res) => {
       totalPages: Math.ceil(total / limitNum),
     },
   });
+});
+
+// GET /outbound-leads/stats — funnel counts
+router.get("/stats", async (req, res) => {
+  try {
+    const [total, qualified, messaged, replied, booked, contractSum] = await Promise.all([
+      OutboundLead.countDocuments({}),
+      OutboundLead.countDocuments({ qualified: true }),
+      OutboundLead.countDocuments({ isMessaged: true }),
+      OutboundLead.countDocuments({ replied: true }),
+      OutboundLead.countDocuments({ booked: true }),
+      OutboundLead.aggregate([
+        { $match: { contract_value: { $gt: 0 } } },
+        { $group: { _id: null, total: { $sum: "$contract_value" }, count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const contractData = contractSum[0] || { total: 0, count: 0 };
+
+    res.json({
+      total,
+      qualified,
+      messaged,
+      replied,
+      booked,
+      contracts: contractData.count,
+      contract_value: contractData.total,
+    });
+  } catch (err) {
+    console.error("Stats error:", err);
+    res.status(500).json({ error: "Failed to fetch stats" });
+  }
 });
 
 // GET /outbound-leads/:id

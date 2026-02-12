@@ -1,4 +1,6 @@
+const OpenAI = require("openai");
 const QualificationJob = require("../models/QualificationJob");
+const Account = require("../models/Account");
 const OutboundLead = require("../models/OutboundLead");
 const IgAccount = require("../models/IgAccount");
 const Prompt = require("../models/Prompt");
@@ -48,14 +50,27 @@ async function processJob(jobId) {
     return;
   }
 
+  // Resolve account's OpenAI token (fall back to env var)
+  const account = await Account.findById(job.account_id, "openai_token").lean();
+  const apiKey = (account && account.openai_token) || process.env.OPENAI;
+  const openaiClient = new OpenAI({ apiKey });
+
   // Resolve prompt once for the entire job
   let promptText = DEFAULT_QUALIFICATION_PROMPT;
+  let promptFilters = {};
   if (job.promptId) {
     const promptDoc = await Prompt.findById(job.promptId).lean();
     if (promptDoc) {
       promptText = promptDoc.promptText;
+      promptFilters = promptDoc.filters || {};
     }
   }
+
+  const minFollowers = promptFilters.minFollowers ?? 40000;
+  const minPosts = promptFilters.minPosts ?? 10;
+  const excludePrivate = promptFilters.excludePrivate ?? true;
+  const verifiedOnly = promptFilters.verifiedOnly ?? false;
+  const bioRequired = promptFilters.bioRequired ?? false;
 
   try {
     for (let fileIndex = 0; fileIndex < job.files.length; fileIndex++) {
@@ -110,23 +125,27 @@ async function processJob(jobId) {
           existingOutboundLeads.map((f) => f.username),
         );
 
-        // Filter rows
+        // Filter rows using prompt filters (or defaults)
         const filtered = rows.filter((row) => {
           const followers = toNumber(row["Followers count"]);
           const posts = toNumber(row["Posts count"]);
           const isPrivate = String(row["Is private"] || "")
             .trim()
             .toUpperCase();
+          const isVerified = String(row["Is verified"] || "")
+            .trim()
+            .toUpperCase();
           const username = String(row["Username"] || "").trim();
-          return (
-            followers !== null &&
-            followers >= 40000 &&
-            isPrivate === "NO" &&
-            posts !== null &&
-            posts > 10 &&
-            username &&
-            !existingUsernames.has(username)
-          );
+          const bio = (row["Biography"] || "").trim();
+
+          if (!username || existingUsernames.has(username)) return false;
+          if (followers === null || followers < minFollowers) return false;
+          if (posts === null || posts <= minPosts) return false;
+          if (excludePrivate && isPrivate !== "NO") return false;
+          if (verifiedOnly && isVerified !== "YES") return false;
+          if (bioRequired && !bio) return false;
+
+          return true;
         });
 
         fileEntry.filteredRows = filtered.length;
@@ -166,7 +185,7 @@ async function processJob(jobId) {
 
           let qualification;
           try {
-            qualification = await qualifyBio(bio, promptText);
+            qualification = await qualifyBio(bio, promptText, openaiClient);
           } catch (err) {
             console.error(
               `OpenAI error for ${row["Username"]}, skipping:`,

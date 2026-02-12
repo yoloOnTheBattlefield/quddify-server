@@ -40,7 +40,7 @@ router.get("/:id", async (req, res) => {
 
 // POST /prompts
 router.post("/", async (req, res) => {
-  const { account_id, label, promptText, isDefault } = req.body;
+  const { account_id, label, promptText, isDefault, filters } = req.body;
 
   if (!account_id || !label || !promptText) {
     return res
@@ -55,12 +55,15 @@ router.post("/", async (req, res) => {
     );
   }
 
-  const prompt = await Prompt.create({
+  const data = {
     account_id,
     label,
     promptText,
     isDefault: isDefault || false,
-  });
+  };
+  if (filters) data.filters = filters;
+
+  const prompt = await Prompt.create(data);
   res.status(201).json(prompt);
 });
 

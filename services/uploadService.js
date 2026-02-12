@@ -28,10 +28,11 @@ Personal development or financial growth + offer to guide/support
 
 Return \`Qualified\` if the bio clearly or strongly implies they help others for money. Otherwise, return \`Unqualified\`.`;
 
-async function qualifyBio(bio, promptText) {
+async function qualifyBio(bio, promptText, openaiClient) {
   if (!bio || bio.trim() === "") return "Unqualified";
 
-  const response = await openai.chat.completions.create({
+  const client = openaiClient || openai;
+  const response = await client.chat.completions.create({
     model: "gpt-4.1-mini",
     messages: [
       { role: "system", content: promptText },
@@ -96,24 +97,34 @@ async function processUpload(fileBuffer, filename, promptId) {
   ).lean();
   const existingUsernames = new Set(existingOutboundLeads.map((f) => f.username));
 
-  // 4. Filter rows: followers >= 40k, not private, posts > 10, not duplicate
+  // 4. Filter rows using prompt filters (or defaults)
+  const f = promptDoc?.filters || {};
+  const minFollowers = f.minFollowers ?? 40000;
+  const minPosts = f.minPosts ?? 10;
+  const excludePrivate = f.excludePrivate ?? true;
+  const verifiedOnly = f.verifiedOnly ?? false;
+  const bioRequired = f.bioRequired ?? false;
+
   const filtered = rows.filter((row) => {
     const followers = toNumber(row["Followers count"]);
     const posts = toNumber(row["Posts count"]);
     const isPrivate = String(row["Is private"] || "")
       .trim()
       .toUpperCase();
+    const isVerified = String(row["Is verified"] || "")
+      .trim()
+      .toUpperCase();
     const username = String(row["Username"] || "").trim();
+    const bio = (row["Biography"] || "").trim();
 
-    return (
-      followers !== null &&
-      followers >= 40000 &&
-      isPrivate === "NO" &&
-      posts !== null &&
-      posts > 10 &&
-      username &&
-      !existingUsernames.has(username)
-    );
+    if (!username || existingUsernames.has(username)) return false;
+    if (followers === null || followers < minFollowers) return false;
+    if (posts === null || posts <= minPosts) return false;
+    if (excludePrivate && isPrivate !== "NO") return false;
+    if (verifiedOnly && isVerified !== "YES") return false;
+    if (bioRequired && !bio) return false;
+
+    return true;
   });
 
   // 5. Qualify each row with OpenAI, upsert qualified ones

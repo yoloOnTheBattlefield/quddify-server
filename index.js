@@ -12,11 +12,17 @@ const uploadRoutes = require("./routes/upload");
 const outboundLeadRoutes = require("./routes/outbound-leads");
 const promptRoutes = require("./routes/prompts");
 const jobRoutes = require("./routes/jobs");
+const taskRoutes = require("./routes/tasks");
+const logRoutes = require("./routes/logs");
+const healthRoutes = require("./routes/health");
+const senderAccountRoutes = require("./routes/sender-accounts");
+const campaignRoutes = require("./routes/campaigns");
 
 const socketManager = require("./services/socketManager");
 const jobQueue = require("./services/jobQueue");
 const jobWorker = require("./services/jobWorker");
 const { recoverStuckJobs } = require("./services/jobRecovery");
+const campaignScheduler = require("./services/campaignScheduler");
 
 const app = express();
 const server = http.createServer(app);
@@ -35,6 +41,7 @@ app.use(
     origin: function (origin, callback) {
       if (!origin) return callback(null, true); // allow Postman / server-to-server
       if (allowedOrigins.includes(origin)) return callback(null, true);
+      if (origin.startsWith("chrome-extension://")) return callback(null, true);
       return callback(new Error("CORS blocked: " + origin));
     },
     credentials: true,
@@ -99,6 +106,11 @@ app.use("/api", uploadRoutes);
 app.use("/outbound-leads", outboundLeadRoutes);
 app.use("/prompts", promptRoutes);
 app.use("/jobs", jobRoutes);
+app.use("/api/tasks", taskRoutes);
+app.use("/api/logs", logRoutes);
+app.use("/api", healthRoutes);
+app.use("/api/sender-accounts", senderAccountRoutes);
+app.use("/api/campaigns", campaignRoutes);
 
 // auth routes at root level
 app.use("/", accountRoutes);
@@ -107,6 +119,20 @@ app.use("/", accountRoutes);
 connectDB()
   .then(async () => {
     await recoverStuckJobs();
+
+    // Reset abandoned in_progress tasks back to pending
+    const Task = require("./models/Task");
+    const stuckResult = await Task.updateMany(
+      { status: "in_progress" },
+      { $set: { status: "pending", startedAt: null } },
+    );
+    if (stuckResult.modifiedCount > 0) {
+      console.log(`[taskRecovery] Reset ${stuckResult.modifiedCount} stuck task(s) to pending`);
+    }
+
+    // Start campaign scheduler
+    campaignScheduler.start();
+
     server.listen(3000, () => {
       console.log("Server running on port 3000");
     });

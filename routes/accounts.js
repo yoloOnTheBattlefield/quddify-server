@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const Account = require("../models/Account");
 const User = require("../models/User");
@@ -151,6 +152,8 @@ router.post("/login", async (req, res) => {
     ghl: account.ghl,
     calendly: account.calendly,
     ghl_lead_booked_webhook: account.ghl_lead_booked_webhook,
+    openai_token: account.openai_token,
+    api_key: account.api_key,
   });
 });
 
@@ -244,7 +247,7 @@ router.delete("/team/:id", async (req, res) => {
 // PATCH /accounts/:id - Update user profile and account info
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, ghl, calendly } = req.body;
+    const { first_name, last_name, email, ghl, calendly, openai_token } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
@@ -254,6 +257,7 @@ router.patch("/:id", async (req, res) => {
     const accountUpdates = {};
     if (ghl !== undefined) accountUpdates.ghl = ghl;
     if (calendly !== undefined) accountUpdates.calendly = calendly;
+    if (openai_token !== undefined) accountUpdates.openai_token = openai_token;
 
     if (Object.keys(userUpdates).length === 0 && Object.keys(accountUpdates).length === 0) {
       return res.status(400).json({ error: "No fields to update" });
@@ -293,6 +297,8 @@ router.patch("/:id", async (req, res) => {
       ghl: updatedAccount.ghl,
       calendly: updatedAccount.calendly,
       ghl_lead_booked_webhook: updatedAccount.ghl_lead_booked_webhook,
+      openai_token: updatedAccount.openai_token,
+      api_key: updatedAccount.api_key,
     });
   } catch (error) {
     console.error("Account update error:", error);
@@ -404,6 +410,30 @@ router.patch("/:id/disable", async (req, res) => {
     res.json({ account_id: account._id, disabled: account.disabled });
   } catch (error) {
     console.error("Toggle disable error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /accounts/:id/api-key - Generate or regenerate API key
+router.post("/:id/api-key", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const account = await Account.findById(user.account_id);
+    if (!account) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    const apiKey = `qd_${crypto.randomUUID().replace(/-/g, "")}`;
+    account.api_key = apiKey;
+    await account.save();
+
+    res.json({ api_key: apiKey });
+  } catch (error) {
+    console.error("Generate API key error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

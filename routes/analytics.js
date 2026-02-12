@@ -1,5 +1,10 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const Lead = require("../models/Lead");
+const CampaignLead = require("../models/CampaignLead");
+const OutboundLead = require("../models/OutboundLead");
+const SenderAccount = require("../models/SenderAccount");
+const Campaign = require("../models/Campaign");
 
 const router = express.Router();
 
@@ -369,6 +374,223 @@ router.get("/", async (req, res) => {
       error: "Internal server error",
       message: "Failed to calculate analytics",
     });
+  }
+});
+
+// GET /analytics/outbound — outbound funnel with optional campaign + date filter
+router.get("/outbound", async (req, res) => {
+  try {
+    const { campaign_id, from, to } = req.query;
+    const outboundFilter = { isMessaged: true };
+
+    if (from || to) {
+      outboundFilter.dmDate = {};
+      if (from) outboundFilter.dmDate.$gte = new Date(from);
+      if (to) outboundFilter.dmDate.$lte = new Date(to);
+    }
+
+    // Scope to specific campaign's leads
+    if (campaign_id) {
+      const campaignLeads = await CampaignLead.find({ campaign_id }).select("outbound_lead_id").lean();
+      outboundFilter._id = { $in: campaignLeads.map((cl) => cl.outbound_lead_id) };
+    }
+
+    const [messaged, replied, booked, contractAgg] = await Promise.all([
+      OutboundLead.countDocuments(outboundFilter),
+      OutboundLead.countDocuments({ ...outboundFilter, replied: true }),
+      OutboundLead.countDocuments({ ...outboundFilter, booked: true }),
+      OutboundLead.aggregate([
+        { $match: { ...outboundFilter, contract_value: { $gt: 0 } } },
+        { $group: { _id: null, total: { $sum: "$contract_value" }, count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const contractData = contractAgg[0] || { total: 0, count: 0 };
+
+    res.json({
+      messaged,
+      replied,
+      booked,
+      contracts: contractData.count,
+      contract_value: contractData.total,
+      reply_rate: messaged > 0 ? round2((replied / messaged) * 100) : 0,
+      book_rate: replied > 0 ? round2((booked / replied) * 100) : 0,
+      close_rate: booked > 0 ? round2((contractData.count / booked) * 100) : 0,
+    });
+  } catch (err) {
+    console.error("Outbound analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch outbound analytics" });
+  }
+});
+
+// GET /analytics/messages — performance per message variant
+router.get("/messages", async (req, res) => {
+  try {
+    const { campaign_id } = req.query;
+    const matchFilter = { status: "sent", message_used: { $ne: null } };
+    if (campaign_id) matchFilter.campaign_id = new mongoose.Types.ObjectId(campaign_id);
+
+    const messageSends = await CampaignLead.aggregate([
+      { $match: matchFilter },
+      {
+        $group: {
+          _id: "$message_used",
+          sent: { $sum: 1 },
+          outbound_lead_ids: { $push: "$outbound_lead_id" },
+        },
+      },
+    ]);
+
+    const results = await Promise.all(
+      messageSends.map(async (msg) => {
+        const [replied, booked, contractAgg] = await Promise.all([
+          OutboundLead.countDocuments({ _id: { $in: msg.outbound_lead_ids }, replied: true }),
+          OutboundLead.countDocuments({ _id: { $in: msg.outbound_lead_ids }, booked: true }),
+          OutboundLead.aggregate([
+            { $match: { _id: { $in: msg.outbound_lead_ids }, contract_value: { $gt: 0 } } },
+            { $group: { _id: null, total: { $sum: "$contract_value" }, count: { $sum: 1 } } },
+          ]),
+        ]);
+
+        const contractData = contractAgg[0] || { total: 0, count: 0 };
+
+        return {
+          message: msg._id,
+          sent: msg.sent,
+          replied,
+          booked,
+          contracts: contractData.count,
+          contract_value: contractData.total,
+          reply_rate: msg.sent > 0 ? round2((replied / msg.sent) * 100) : 0,
+        };
+      }),
+    );
+
+    results.sort((a, b) => b.reply_rate - a.reply_rate);
+    res.json({ messages: results });
+  } catch (err) {
+    console.error("Message analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch message analytics" });
+  }
+});
+
+// GET /analytics/senders — performance per sender account
+router.get("/senders", async (req, res) => {
+  try {
+    const { campaign_id } = req.query;
+    const matchFilter = { sender_id: { $ne: null } };
+    if (campaign_id) matchFilter.campaign_id = new mongoose.Types.ObjectId(campaign_id);
+
+    const senderSends = await CampaignLead.aggregate([
+      { $match: matchFilter },
+      {
+        $group: {
+          _id: "$sender_id",
+          sent: { $sum: { $cond: [{ $eq: ["$status", "sent"] }, 1, 0] } },
+          failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } },
+          skipped: { $sum: { $cond: [{ $eq: ["$status", "skipped"] }, 1, 0] } },
+          outbound_lead_ids: {
+            $push: { $cond: [{ $eq: ["$status", "sent"] }, "$outbound_lead_id", "$$REMOVE"] },
+          },
+        },
+      },
+    ]);
+
+    const senderIds = senderSends.map((s) => s._id);
+    const senders = await SenderAccount.find({ _id: { $in: senderIds } })
+      .select("ig_username display_name status restricted_until restriction_reason")
+      .lean();
+
+    const senderMap = {};
+    for (const s of senders) senderMap[s._id.toString()] = s;
+
+    const results = await Promise.all(
+      senderSends.map(async (s) => {
+        const sender = senderMap[s._id.toString()] || {};
+        const [replied, booked, contractAgg] = await Promise.all([
+          OutboundLead.countDocuments({ _id: { $in: s.outbound_lead_ids }, replied: true }),
+          OutboundLead.countDocuments({ _id: { $in: s.outbound_lead_ids }, booked: true }),
+          OutboundLead.aggregate([
+            { $match: { _id: { $in: s.outbound_lead_ids }, contract_value: { $gt: 0 } } },
+            { $group: { _id: null, total: { $sum: "$contract_value" }, count: { $sum: 1 } } },
+          ]),
+        ]);
+
+        const contractData = contractAgg[0] || { total: 0, count: 0 };
+
+        return {
+          sender_id: s._id,
+          ig_username: sender.ig_username || "unknown",
+          display_name: sender.display_name || null,
+          status: sender.status || "offline",
+          restricted_until: sender.restricted_until || null,
+          sent: s.sent,
+          failed: s.failed,
+          skipped: s.skipped,
+          replied,
+          booked,
+          contracts: contractData.count,
+          contract_value: contractData.total,
+          reply_rate: s.sent > 0 ? round2((replied / s.sent) * 100) : 0,
+        };
+      }),
+    );
+
+    results.sort((a, b) => b.sent - a.sent);
+    res.json({ senders: results });
+  } catch (err) {
+    console.error("Sender analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch sender analytics" });
+  }
+});
+
+// GET /analytics/campaigns — performance per campaign
+router.get("/campaigns", async (req, res) => {
+  try {
+    const campaigns = await Campaign.find()
+      .select("name status stats sender_ids messages createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const results = await Promise.all(
+      campaigns.map(async (c) => {
+        const sentLeads = await CampaignLead.find({ campaign_id: c._id, status: "sent" })
+          .select("outbound_lead_id")
+          .lean();
+        const outboundIds = sentLeads.map((l) => l.outbound_lead_id);
+
+        const [replied, booked, contractAgg] = await Promise.all([
+          OutboundLead.countDocuments({ _id: { $in: outboundIds }, replied: true }),
+          OutboundLead.countDocuments({ _id: { $in: outboundIds }, booked: true }),
+          OutboundLead.aggregate([
+            { $match: { _id: { $in: outboundIds }, contract_value: { $gt: 0 } } },
+            { $group: { _id: null, total: { $sum: "$contract_value" }, count: { $sum: 1 } } },
+          ]),
+        ]);
+
+        const contractData = contractAgg[0] || { total: 0, count: 0 };
+
+        return {
+          _id: c._id,
+          name: c.name,
+          status: c.status,
+          stats: c.stats,
+          sender_count: c.sender_ids.length,
+          message_count: c.messages.length,
+          replied,
+          booked,
+          contracts: contractData.count,
+          contract_value: contractData.total,
+          reply_rate: c.stats.sent > 0 ? round2((replied / c.stats.sent) * 100) : 0,
+          createdAt: c.createdAt,
+        };
+      }),
+    );
+
+    res.json({ campaigns: results });
+  } catch (err) {
+    console.error("Campaign analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch campaign analytics" });
   }
 });
 
