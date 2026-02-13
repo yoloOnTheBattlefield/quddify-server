@@ -95,6 +95,36 @@ const connectDB = async () => {
       { $unset: { api_key: "" } },
     );
     await Account.syncIndexes();
+
+    // Fix OutboundLead: drop old followingKey unique index, dedupe, sync username unique index
+    const OutboundLead = require("./models/OutboundLead");
+    try {
+      await OutboundLead.collection.dropIndex("followingKey_1");
+      console.log("[startup] Dropped old followingKey_1 index");
+    } catch (e) {
+      // Already dropped — ignore
+    }
+
+    // Remove duplicate usernames (keep newest, delete older ones)
+    const dupes = await OutboundLead.aggregate([
+      { $group: { _id: "$username", count: { $sum: 1 }, ids: { $push: "$_id" }, dates: { $push: "$createdAt" } } },
+      { $match: { count: { $gt: 1 } } },
+    ]);
+    if (dupes.length > 0) {
+      const idsToDelete = [];
+      for (const dupe of dupes) {
+        // Pair ids with dates, sort newest first, delete all but the first
+        const pairs = dupe.ids.map((id, i) => ({ id, date: dupe.dates[i] || new Date(0) }));
+        pairs.sort((a, b) => b.date - a.date);
+        for (let i = 1; i < pairs.length; i++) {
+          idsToDelete.push(pairs[i].id);
+        }
+      }
+      const delResult = await OutboundLead.deleteMany({ _id: { $in: idsToDelete } });
+      console.log(`[startup] Removed ${delResult.deletedCount} duplicate outbound lead(s)`);
+    }
+
+    await OutboundLead.syncIndexes();
   }
 
   return cachedConnection;

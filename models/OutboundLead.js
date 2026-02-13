@@ -2,8 +2,8 @@ const mongoose = require("mongoose");
 
 const OutboundLeadSchema = new mongoose.Schema(
   {
-    followingKey: { type: String, required: true, unique: true },
-    username: { type: String },
+    followingKey: { type: String, required: true },
+    username: { type: String, unique: true },
     fullName: { type: String, default: null },
     profileLink: { type: String, default: null },
     isVerified: { type: Boolean, default: null },

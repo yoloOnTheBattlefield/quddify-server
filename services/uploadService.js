@@ -90,9 +90,10 @@ async function processUpload(fileBuffer, filename, promptId) {
   const rows = parseXlsx(fileBuffer);
   const totalRowsParsed = rows.length;
 
-  // 3. Get existing usernames for this source to prevent duplicates
+  // 3. Get existing usernames globally to prevent duplicates
+  const rowUsernames = rows.map((r) => String(r["Username"] || "").trim()).filter(Boolean);
   const existingOutboundLeads = await OutboundLead.find(
-    { source: sourceAccount },
+    { username: { $in: rowUsernames } },
     { username: 1 },
   ).lean();
   const existingUsernames = new Set(existingOutboundLeads.map((f) => f.username));
@@ -152,10 +153,10 @@ async function processUpload(fileBuffer, filename, promptId) {
     const followingKey = `${username}::${sourceAccount}`;
 
     await OutboundLead.findOneAndUpdate(
-      { followingKey },
+      { username },
       {
         $set: {
-          username,
+          followingKey,
           fullName: row["Full name"] || null,
           profileLink: row["Profile link"] || null,
           isVerified: toBoolean(row["Is verified"]),

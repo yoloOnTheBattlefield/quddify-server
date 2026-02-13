@@ -12,6 +12,7 @@ const UserSchema = new mongoose.Schema(
     email: { type: String, required: true },
     password: { type: String, required: true },
     role: { type: Number, default: 1 },
+    has_outbound: { type: Boolean, default: false },
   },
   { collection: "users", versionKey: false },
 );

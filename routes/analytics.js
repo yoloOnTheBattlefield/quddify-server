@@ -65,6 +65,57 @@ function getDateRange(startDate, endDate) {
   return dates;
 }
 
+// Helper: Get Monday of the week for a given date string
+function getMonday(dateStr) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  const day = d.getUTCDay(); // 0=Sun, 1=Mon, ...
+  const diff = day === 0 ? 6 : day - 1;
+  d.setUTCDate(d.getUTCDate() - diff);
+  return d.toISOString().slice(0, 10);
+}
+
+// Helper: Determine grouping based on range span
+function getRadarGrouping(rangeStart, rangeEnd) {
+  const days = daysBetween(rangeStart, rangeEnd);
+  if (days <= 14) return "day";
+  if (days <= 90) return "week";
+  return "month";
+}
+
+// Helper: Get bucket key for a date based on grouping
+function getRadarBucketKey(dateStr, grouping) {
+  if (grouping === "day") return dateStr.slice(0, 10);
+  if (grouping === "week") return getMonday(dateStr);
+  return dateStr.slice(0, 7);
+}
+
+// Helper: Generate all bucket keys for a range
+function getRadarBucketRange(startDate, endDate, grouping) {
+  if (grouping === "day") return getDateRange(startDate, endDate);
+
+  if (grouping === "week") {
+    const weeks = [];
+    const current = new Date(getMonday(startDate) + "T00:00:00Z");
+    const end = new Date(endDate + "T00:00:00Z");
+    while (current <= end) {
+      weeks.push(current.toISOString().slice(0, 10));
+      current.setUTCDate(current.getUTCDate() + 7);
+    }
+    return weeks;
+  }
+
+  // month
+  const months = [];
+  const current = new Date(startDate + "T00:00:00Z");
+  current.setUTCDate(1);
+  const end = new Date(endDate + "T00:00:00Z");
+  while (current <= end) {
+    months.push(current.toISOString().slice(0, 7));
+    current.setUTCMonth(current.getUTCMonth() + 1);
+  }
+  return months;
+}
+
 // GET /analytics
 router.get("/", async (req, res) => {
   try {
@@ -332,18 +383,27 @@ router.get("/", async (req, res) => {
       return { date, cumulative: runningTotal };
     });
 
-    // 8. RADAR — leads & link_sent grouped by month
+    // 8. RADAR — leads & link_sent grouped dynamically (day/week/month)
+    const grouping = getRadarGrouping(rangeStart, rangeEnd);
+    const radarBuckets = getRadarBucketRange(rangeStart, rangeEnd, grouping);
+
+    // Initialize all buckets with zeros
     const radarMap = {};
+    for (const key of radarBuckets) {
+      radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0 };
+    }
+
     for (const lead of leads) {
       const created = lead.date_created;
       if (!created) continue;
-      const month = String(created).slice(0, 7); // "YYYY-MM"
-      if (!radarMap[month]) radarMap[month] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0 };
-      radarMap[month].leads++;
-      if (lead.link_sent_at) radarMap[month].link_sent++;
-      if (lead.booked_at) radarMap[month].booked++;
-      if (lead.ghosted_at) radarMap[month].ghosted++;
-      if (lead.follow_up_at) radarMap[month].follow_up++;
+      const dateStr = String(created).slice(0, 10);
+      const key = getRadarBucketKey(dateStr, grouping);
+      if (!radarMap[key]) radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0 };
+      radarMap[key].leads++;
+      if (lead.link_sent_at) radarMap[key].link_sent++;
+      if (lead.booked_at) radarMap[key].booked++;
+      if (lead.ghosted_at) radarMap[key].ghosted++;
+      if (lead.follow_up_at) radarMap[key].follow_up++;
     }
 
     const radar = Object.entries(radarMap)
