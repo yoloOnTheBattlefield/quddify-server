@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Lead = require("../models/Lead");
+const Account = require("../models/Account");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
@@ -140,9 +141,13 @@ router.get("/", async (req, res) => {
     // Fetch outbound leads (skip if source=inbound)
     let obLeads = [];
     if (dataSource !== "inbound") {
-      const accountId = ghl || account_id;
-      if (accountId) {
-        const campaigns = await Campaign.find({ account_id: accountId }).select("_id").lean();
+      let campaignAccountId = account_id;
+      if (ghl && !campaignAccountId) {
+        const acct = await Account.findOne({ ghl }).select("_id").lean();
+        if (acct) campaignAccountId = acct._id;
+      }
+      if (campaignAccountId) {
+        const campaigns = await Campaign.find({ account_id: campaignAccountId }).select("_id").lean();
         const campaignIds = campaigns.map((c) => c._id);
         if (campaignIds.length > 0) {
           const campaignLeads = await CampaignLead.find({
