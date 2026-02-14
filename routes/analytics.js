@@ -119,7 +119,8 @@ function getRadarBucketRange(startDate, endDate, grouping) {
 // GET /analytics
 router.get("/", async (req, res) => {
   try {
-    const { ghl, account_id, start_date, end_date } = req.query;
+    const { ghl, account_id, start_date, end_date, source } = req.query;
+    const dataSource = source || "all";
 
     // Build filter
     const filter = {};
@@ -133,23 +134,47 @@ router.get("/", async (req, res) => {
 
     console.log(req.query);
 
-    // Fetch all filtered leads
-    const leads = await Lead.find(filter).lean();
+    // Fetch inbound leads (skip if source=outbound)
+    const leads = dataSource !== "outbound" ? await Lead.find(filter).lean() : [];
+
+    // Fetch outbound leads (skip if source=inbound)
+    let obLeads = [];
+    if (dataSource !== "inbound") {
+      const accountId = ghl || account_id;
+      if (accountId) {
+        const campaigns = await Campaign.find({ account_id: accountId }).select("_id").lean();
+        const campaignIds = campaigns.map((c) => c._id);
+        if (campaignIds.length > 0) {
+          const campaignLeads = await CampaignLead.find({
+            campaign_id: { $in: campaignIds },
+            status: "sent",
+          }).select("outbound_lead_id").lean();
+          const obIds = campaignLeads.map((cl) => cl.outbound_lead_id);
+          if (obIds.length > 0) {
+            const obFilter = { _id: { $in: obIds }, isMessaged: true };
+            if (start_date || end_date) {
+              obFilter.dmDate = {};
+              if (start_date) obFilter.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
+              if (end_date) obFilter.dmDate.$lte = new Date(`${end_date}T23:59:59.999Z`);
+            }
+            obLeads = await OutboundLead.find(obFilter).lean();
+          }
+        }
+      }
+    }
 
     // Determine date range for daily metrics
     let rangeStart = start_date;
     let rangeEnd = end_date;
     if (!rangeStart || !rangeEnd) {
-      // If no date range provided, use min/max from data
-      const dates = leads
-        .map((l) => toDateString(l.date_created))
-        .filter(Boolean);
-      if (dates.length > 0) {
-        dates.sort();
-        rangeStart = rangeStart || dates[0];
-        rangeEnd = rangeEnd || dates[dates.length - 1];
+      const inboundDates = leads.map((l) => toDateString(l.date_created)).filter(Boolean);
+      const outboundDates = obLeads.map((l) => toDateString(l.dmDate)).filter(Boolean);
+      const allDates = [...inboundDates, ...outboundDates];
+      if (allDates.length > 0) {
+        allDates.sort();
+        rangeStart = rangeStart || allDates[0];
+        rangeEnd = rangeEnd || allDates[allDates.length - 1];
       } else {
-        // No data, use today
         const today = new Date().toISOString().slice(0, 10);
         rangeStart = rangeStart || today;
         rangeEnd = rangeEnd || today;
@@ -176,6 +201,22 @@ router.get("/", async (req, res) => {
     const recoveryRate =
       fupCount > 0 ? round2((fupToBookedCount / fupCount) * 100) : 0;
 
+    // Outbound funnel metrics
+    const obMessaged = obLeads.length;
+    const obReplied = obLeads.filter((l) => l.replied).length;
+    const obBooked = obLeads.filter((l) => l.booked).length;
+    const obQualified = obLeads.filter((l) => l.qualified).length;
+    const obContracts = obLeads.filter((l) => l.contract_value > 0).length;
+    const obContractValue = obLeads.reduce((sum, l) => sum + (l.contract_value || 0), 0);
+    const obReplyRate = obMessaged > 0 ? round2((obReplied / obMessaged) * 100) : 0;
+    const obBookRate = obReplied > 0 ? round2((obBooked / obReplied) * 100) : 0;
+    const obCloseRate = obBooked > 0 ? round2((obContracts / obBooked) * 100) : 0;
+
+    // Combined metrics
+    const combinedContacts = totalContacts + obMessaged;
+    const combinedBooked = bookedCount + obBooked;
+    const combinedBookedRate = combinedContacts > 0 ? round2((combinedBooked / combinedContacts) * 100) : 0;
+
     const funnel = {
       totalContacts,
       linkSentCount,
@@ -187,6 +228,18 @@ router.get("/", async (req, res) => {
       fupCount,
       fupToBookedCount,
       recoveryRate,
+      obMessaged,
+      obReplied,
+      obBooked,
+      obQualified,
+      obContracts,
+      obContractValue,
+      obReplyRate,
+      obBookRate,
+      obCloseRate,
+      combinedContacts,
+      combinedBooked,
+      combinedBookedRate,
     };
 
     // 2. VELOCITY METRICS
@@ -226,6 +279,9 @@ router.get("/", async (req, res) => {
         link_sent: 0,
         booked: 0,
         ghosted: 0,
+        ob_messaged: 0,
+        ob_replied: 0,
+        ob_booked: 0,
       };
     });
 
@@ -251,6 +307,16 @@ router.get("/", async (req, res) => {
         if (ghostedDate && dailyVolumeMap[ghostedDate]) {
           dailyVolumeMap[ghostedDate].ghosted++;
         }
+      }
+    });
+
+    // Outbound daily volume
+    obLeads.forEach((lead) => {
+      const dmDate = toDateString(lead.dmDate);
+      if (dmDate && dailyVolumeMap[dmDate]) {
+        dailyVolumeMap[dmDate].ob_messaged++;
+        if (lead.replied) dailyVolumeMap[dmDate].ob_replied++;
+        if (lead.booked) dailyVolumeMap[dmDate].ob_booked++;
       }
     });
 
@@ -364,8 +430,10 @@ router.get("/", async (req, res) => {
 
     // 7. CUMULATIVE BOOKINGS
     const bookingsByDate = {};
+    const obBookingsByDate = {};
     dateRange.forEach((date) => {
       bookingsByDate[date] = 0;
+      obBookingsByDate[date] = 0;
     });
 
     leads.forEach((lead) => {
@@ -377,10 +445,26 @@ router.get("/", async (req, res) => {
       }
     });
 
+    obLeads.forEach((lead) => {
+      if (lead.booked) {
+        const dmDate = toDateString(lead.dmDate);
+        if (dmDate && obBookingsByDate[dmDate] !== undefined) {
+          obBookingsByDate[dmDate]++;
+        }
+      }
+    });
+
     let runningTotal = 0;
+    let obRunningTotal = 0;
     const cumulative = dateRange.map((date) => {
       runningTotal += bookingsByDate[date];
-      return { date, cumulative: runningTotal };
+      obRunningTotal += obBookingsByDate[date];
+      return {
+        date,
+        cumulative: runningTotal,
+        ob_cumulative: obRunningTotal,
+        combined_cumulative: runningTotal + obRunningTotal,
+      };
     });
 
     // 8. RADAR — leads & link_sent grouped dynamically (day/week/month)
@@ -390,7 +474,7 @@ router.get("/", async (req, res) => {
     // Initialize all buckets with zeros
     const radarMap = {};
     for (const key of radarBuckets) {
-      radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0 };
+      radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0, ob_messaged: 0, ob_replied: 0, ob_booked: 0 };
     }
 
     for (const lead of leads) {
@@ -398,12 +482,25 @@ router.get("/", async (req, res) => {
       if (!created) continue;
       const dateStr = String(created).slice(0, 10);
       const key = getRadarBucketKey(dateStr, grouping);
-      if (!radarMap[key]) radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0 };
+      if (!radarMap[key]) radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0, ob_messaged: 0, ob_replied: 0, ob_booked: 0 };
       radarMap[key].leads++;
       if (lead.link_sent_at) radarMap[key].link_sent++;
       if (lead.booked_at) radarMap[key].booked++;
       if (lead.ghosted_at) radarMap[key].ghosted++;
       if (lead.follow_up_at) radarMap[key].follow_up++;
+    }
+
+    // Outbound radar
+    for (const lead of obLeads) {
+      const dmDate = lead.dmDate;
+      if (!dmDate) continue;
+      const dateStr = toDateString(dmDate);
+      if (!dateStr) continue;
+      const key = getRadarBucketKey(dateStr, grouping);
+      if (!radarMap[key]) radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0, ob_messaged: 0, ob_replied: 0, ob_booked: 0 };
+      radarMap[key].ob_messaged++;
+      if (lead.replied) radarMap[key].ob_replied++;
+      if (lead.booked) radarMap[key].ob_booked++;
     }
 
     const radar = Object.entries(radarMap)
@@ -415,6 +512,9 @@ router.get("/", async (req, res) => {
         booked: counts.booked,
         ghosted: counts.ghosted,
         follow_up: counts.follow_up,
+        ob_messaged: counts.ob_messaged,
+        ob_replied: counts.ob_replied,
+        ob_booked: counts.ob_booked,
       }));
 
     // Return all metrics
