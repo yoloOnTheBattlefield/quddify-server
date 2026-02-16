@@ -9,6 +9,8 @@ const AccountSchema = new mongoose.Schema(
     openai_token: { type: String, default: null },
     disabled: { type: Boolean, default: false },
     api_key: { type: String, unique: true, sparse: true },
+    tracking_enabled: { type: Boolean, default: false },
+    tracking_conversion_rules: [{ type: String }],
   },
   { collection: "accounts", versionKey: false },
 );

@@ -20,6 +20,8 @@ const campaignRoutes = require("./routes/campaigns");
 const manualCampaignRoutes = require("./routes/manual-campaigns");
 const outboundAccountRoutes = require("./routes/outbound-accounts");
 const warmupRoutes = require("./routes/warmup");
+const trackingPublicRoutes = require("./routes/tracking-public");
+const trackingRoutes = require("./routes/tracking");
 
 const { auth } = require("./middleware/auth");
 const socketManager = require("./services/socketManager");
@@ -197,6 +199,7 @@ app.post("/accounts/login", accountRoutes);
 app.post("/accounts/register", accountRoutes);
 app.use("/api/calendly", calendlyRoutes);
 app.get("/api/health", healthRoutes);
+app.use("/t", cors({ origin: true, credentials: false }), trackingPublicRoutes);
 
 // Auth middleware — everything below requires JWT or API key
 app.use(auth);
@@ -217,6 +220,7 @@ app.use("/api/manual-campaigns", manualCampaignRoutes);
 app.use("/api/campaigns", campaignRoutes);
 app.use("/api/outbound-accounts", outboundAccountRoutes);
 app.use("/api/warmup", warmupRoutes);
+app.use("/tracking", trackingRoutes);
 
 // Connect to DB, run recovery, then start server
 connectDB()
