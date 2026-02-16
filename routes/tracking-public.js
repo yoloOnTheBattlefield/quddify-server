@@ -162,10 +162,14 @@ router.post("/event", async (req, res) => {
       user_agent: req.headers["user-agent"] || null,
     });
 
-    // On conversion, set booked_at on the lead (lead_id = contact_id from utm_medium)
+    // On conversion, set booked_at on the lead
+    // lead_id (from utm_medium) can be the lead's _id or contact_id
     if (event_type === "conversion") {
+      const idQuery = mongoose.Types.ObjectId.isValid(lead_id)
+        ? { $or: [{ _id: lead_id }, { contact_id: lead_id }] }
+        : { contact_id: lead_id };
       await Lead.findOneAndUpdate(
-        { contact_id: lead_id, booked_at: null },
+        { ...idQuery, booked_at: null },
         { $set: { booked_at: new Date() } },
       );
     }
