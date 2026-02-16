@@ -4,6 +4,7 @@ const bcrypt = require("bcrypt");
 const Account = require("../models/Account");
 const User = require("../models/User");
 const Lead = require("../models/Lead");
+const { generateToken } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -142,7 +143,10 @@ router.post("/login", async (req, res) => {
     return res.status(403).json({ error: "Account is disabled" });
   }
 
+  const token = generateToken(user, account);
+
   res.json({
+    token,
     _id: user._id,
     account_id: account._id,
     first_name: user.first_name,

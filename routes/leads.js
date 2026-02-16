@@ -5,10 +5,9 @@ const router = express.Router();
 
 // get all leads (optionally filter by account_id/ghl, status, date range, search, and paginate)
 router.get("/", async (req, res) => {
-  const { account_id, ghl, status, start_date, end_date, search, page, limit } = req.query;
+  const { status, start_date, end_date, search, page, limit } = req.query;
   const filter = {};
-  if (ghl) filter.account_id = ghl;
-  else if (account_id) filter.account_id = account_id;
+  if (req.account.ghl) filter.account_id = req.account.ghl;
   if (search) filter.first_name = { $regex: search, $options: "i" };
   if (status) {
     const statuses = Array.isArray(status) ? status : status.split(",");
@@ -78,7 +77,6 @@ router.delete("/:id", async (req, res) => {
 router.post("/generate", async (req, res) => {
   try {
     const {
-      ghl,
       total = 100,
       link_sent = 0,
       booked = 0,
@@ -87,8 +85,9 @@ router.post("/generate", async (req, res) => {
       days_back = 30,
     } = req.body;
 
+    const ghl = req.account.ghl;
     if (!ghl) {
-      return res.status(400).json({ error: "Missing ghl (account_id)" });
+      return res.status(400).json({ error: "Account has no GHL location ID" });
     }
 
     if (booked > link_sent) {

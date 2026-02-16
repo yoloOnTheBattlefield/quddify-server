@@ -1,8 +1,6 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Task = require("../models/Task");
-const apiKeyAuth = require("../middleware/apiKeyAuth");
-
 const router = express.Router();
 
 // GET /api/health — no auth required
@@ -14,8 +12,8 @@ router.get("/health", (req, res) => {
   });
 });
 
-// GET /api/stats — requires auth, aggregates task counts
-router.get("/stats", apiKeyAuth, async (req, res) => {
+// GET /api/stats — requires auth (handled by global middleware)
+router.get("/stats", async (req, res) => {
   try {
     const accountId = req.account._id;
 

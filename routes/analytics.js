@@ -120,20 +120,17 @@ function getRadarBucketRange(startDate, endDate, grouping) {
 // GET /analytics
 router.get("/", async (req, res) => {
   try {
-    const { ghl, account_id, start_date, end_date, source } = req.query;
+    const { start_date, end_date, source } = req.query;
     const dataSource = source || "all";
 
-    // Build filter
+    // Build inbound filter using account's GHL location ID
     const filter = {};
-    if (ghl) filter.account_id = ghl;
-    else if (account_id) filter.account_id = account_id;
+    if (req.account.ghl) filter.account_id = req.account.ghl;
     if (start_date || end_date) {
       filter.date_created = {};
       if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
       if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
     }
-
-    console.log(req.query);
 
     // Fetch inbound leads (skip if source=outbound)
     const leads = dataSource !== "outbound" ? await Lead.find(filter).lean() : [];
@@ -141,29 +138,22 @@ router.get("/", async (req, res) => {
     // Fetch outbound leads (skip if source=inbound)
     let obLeads = [];
     if (dataSource !== "inbound") {
-      let campaignAccountId = account_id;
-      if (ghl && !campaignAccountId) {
-        const acct = await Account.findOne({ ghl }).select("_id").lean();
-        if (acct) campaignAccountId = acct._id;
-      }
-      if (campaignAccountId) {
-        const campaigns = await Campaign.find({ account_id: campaignAccountId }).select("_id").lean();
-        const campaignIds = campaigns.map((c) => c._id);
-        if (campaignIds.length > 0) {
-          const campaignLeads = await CampaignLead.find({
-            campaign_id: { $in: campaignIds },
-            status: "sent",
-          }).select("outbound_lead_id").lean();
-          const obIds = campaignLeads.map((cl) => cl.outbound_lead_id);
-          if (obIds.length > 0) {
-            const obFilter = { _id: { $in: obIds }, isMessaged: true };
-            if (start_date || end_date) {
-              obFilter.dmDate = {};
-              if (start_date) obFilter.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
-              if (end_date) obFilter.dmDate.$lte = new Date(`${end_date}T23:59:59.999Z`);
-            }
-            obLeads = await OutboundLead.find(obFilter).lean();
+      const campaigns = await Campaign.find({ account_id: req.account._id }).select("_id").lean();
+      const campaignIds = campaigns.map((c) => c._id);
+      if (campaignIds.length > 0) {
+        const campaignLeads = await CampaignLead.find({
+          campaign_id: { $in: campaignIds },
+          status: "sent",
+        }).select("outbound_lead_id").lean();
+        const obIds = campaignLeads.map((cl) => cl.outbound_lead_id);
+        if (obIds.length > 0) {
+          const obFilter = { _id: { $in: obIds }, isMessaged: true };
+          if (start_date || end_date) {
+            obFilter.dmDate = {};
+            if (start_date) obFilter.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
+            if (end_date) obFilter.dmDate.$lte = new Date(`${end_date}T23:59:59.999Z`);
           }
+          obLeads = await OutboundLead.find(obFilter).lean();
         }
       }
     }
@@ -546,7 +536,7 @@ router.get("/", async (req, res) => {
 router.get("/outbound", async (req, res) => {
   try {
     const { campaign_id, from, to } = req.query;
-    const outboundFilter = { isMessaged: true };
+    const outboundFilter = { account_id: req.account._id, isMessaged: true };
 
     if (from || to) {
       outboundFilter.dmDate = {};
@@ -712,7 +702,7 @@ router.get("/senders", async (req, res) => {
 // GET /analytics/campaigns — performance per campaign
 router.get("/campaigns", async (req, res) => {
   try {
-    const campaigns = await Campaign.find()
+    const campaigns = await Campaign.find({ account_id: req.account._id })
       .select("name status stats sender_ids messages createdAt")
       .sort({ createdAt: -1 })
       .lean();

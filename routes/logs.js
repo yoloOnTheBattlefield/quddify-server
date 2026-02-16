@@ -1,10 +1,6 @@
 const express = require("express");
 const ExtensionLog = require("../models/ExtensionLog");
-const apiKeyAuth = require("../middleware/apiKeyAuth");
-
 const router = express.Router();
-
-router.use(apiKeyAuth);
 
 // POST /api/logs — store single log event
 router.post("/", async (req, res) => {

@@ -217,10 +217,10 @@ async function processJob(jobId) {
             const followingKey = `${username}::${sourceAccount}`;
 
             await OutboundLead.findOneAndUpdate(
-              { followingKey },
+              { username, account_id: job.account_id },
               {
                 $set: {
-                  username,
+                  followingKey,
                   fullName: row["Full name"] || null,
                   profileLink: row["Profile link"] || null,
                   isVerified: toBoolean(row["Is verified"]),

@@ -5,14 +5,11 @@ const OutboundLead = require("../models/OutboundLead");
 const CampaignLead = require("../models/CampaignLead");
 const Campaign = require("../models/Campaign");
 const SenderAccount = require("../models/SenderAccount");
-const apiKeyAuth = require("../middleware/apiKeyAuth");
 const { emitToAccount } = require("../services/socketManager");
 
 const RESTRICTION_ERROR_TYPES = ["IG_RESTRICTED", "RATE_LIMITED", "ACTION_BLOCKED", "CHALLENGE_REQUIRED"];
 
 const router = express.Router();
-
-router.use(apiKeyAuth);
 
 // POST /api/tasks/ping — send a ping to the extension via websocket
 router.post("/ping", async (req, res) => {

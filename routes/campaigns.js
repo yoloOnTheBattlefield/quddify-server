@@ -4,11 +4,7 @@ const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
-const apiKeyAuth = require("../middleware/apiKeyAuth");
-
 const router = express.Router();
-
-router.use(apiKeyAuth);
 
 // GET /api/campaigns — list campaigns
 router.get("/", async (req, res) => {

@@ -15,11 +15,8 @@ router.post("/upload-xlsx", upload.array("files"), async (req, res) => {
       return res.status(400).json({ error: "No files uploaded" });
     }
 
-    const { promptId, account_id } = req.body;
-
-    if (!account_id) {
-      return res.status(400).json({ error: "account_id is required" });
-    }
+    const { promptId } = req.body;
+    const account_id = req.account._id;
 
     let promptLabel = null;
     if (promptId) {

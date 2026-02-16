@@ -17,7 +17,10 @@ const logRoutes = require("./routes/logs");
 const healthRoutes = require("./routes/health");
 const senderAccountRoutes = require("./routes/sender-accounts");
 const campaignRoutes = require("./routes/campaigns");
+const outboundAccountRoutes = require("./routes/outbound-accounts");
+const warmupRoutes = require("./routes/warmup");
 
+const { auth } = require("./middleware/auth");
 const socketManager = require("./services/socketManager");
 const jobQueue = require("./services/jobQueue");
 const jobWorker = require("./services/jobWorker");
@@ -96,7 +99,7 @@ const connectDB = async () => {
     );
     await Account.syncIndexes();
 
-    // Fix OutboundLead: drop old followingKey unique index, dedupe, sync username unique index
+    // Fix OutboundLead: drop old indexes, migrate account_id, sync new compound index
     const OutboundLead = require("./models/OutboundLead");
     try {
       await OutboundLead.collection.dropIndex("followingKey_1");
@@ -104,16 +107,56 @@ const connectDB = async () => {
     } catch (e) {
       // Already dropped — ignore
     }
+    try {
+      await OutboundLead.collection.dropIndex("username_1");
+      console.log("[startup] Dropped old username_1 index");
+    } catch (e) {
+      // Already dropped — ignore
+    }
 
-    // Remove duplicate usernames (keep newest, delete older ones)
+    // Backfill account_id for legacy outbound leads that don't have one
+    const leadsWithoutAccount = await OutboundLead.countDocuments({ account_id: { $exists: false } });
+    if (leadsWithoutAccount > 0) {
+      // Find account_id through CampaignLead → Campaign chain
+      const CampaignLead = require("./models/CampaignLead");
+      const Campaign = require("./models/Campaign");
+      const orphanLeads = await OutboundLead.find({ account_id: { $exists: false } }, { _id: 1 }).lean();
+      const orphanIds = orphanLeads.map((l) => l._id);
+      const clLinks = await CampaignLead.find({ outbound_lead_id: { $in: orphanIds } }, { outbound_lead_id: 1, campaign_id: 1 }).lean();
+      const campaignIds = [...new Set(clLinks.map((cl) => cl.campaign_id.toString()))];
+      const campaigns = await Campaign.find({ _id: { $in: campaignIds } }, { _id: 1, account_id: 1 }).lean();
+      const campaignAccountMap = {};
+      for (const c of campaigns) campaignAccountMap[c._id.toString()] = c.account_id;
+
+      const leadAccountMap = {};
+      for (const cl of clLinks) {
+        const acctId = campaignAccountMap[cl.campaign_id.toString()];
+        if (acctId) leadAccountMap[cl.outbound_lead_id.toString()] = acctId;
+      }
+
+      let backfilled = 0;
+      for (const [leadId, acctId] of Object.entries(leadAccountMap)) {
+        await OutboundLead.updateOne({ _id: leadId }, { $set: { account_id: acctId } });
+        backfilled++;
+      }
+
+      // Delete orphan leads that have no campaign association (can't determine account)
+      const stillOrphan = await OutboundLead.countDocuments({ account_id: { $exists: false } });
+      if (stillOrphan > 0) {
+        const delResult = await OutboundLead.deleteMany({ account_id: { $exists: false } });
+        console.log(`[startup] Removed ${delResult.deletedCount} orphan outbound lead(s) with no account`);
+      }
+      console.log(`[startup] Backfilled account_id on ${backfilled} outbound lead(s)`);
+    }
+
+    // Remove duplicate username+account_id combos (keep newest, delete older)
     const dupes = await OutboundLead.aggregate([
-      { $group: { _id: "$username", count: { $sum: 1 }, ids: { $push: "$_id" }, dates: { $push: "$createdAt" } } },
+      { $group: { _id: { username: "$username", account_id: "$account_id" }, count: { $sum: 1 }, ids: { $push: "$_id" }, dates: { $push: "$createdAt" } } },
       { $match: { count: { $gt: 1 } } },
     ]);
     if (dupes.length > 0) {
       const idsToDelete = [];
       for (const dupe of dupes) {
-        // Pair ids with dates, sort newest first, delete all but the first
         const pairs = dupe.ids.map((id, i) => ({ id, date: dupe.dates[i] || new Date(0) }));
         pairs.sort((a, b) => b.date - a.date);
         for (let i = 1; i < pairs.length; i++) {
@@ -146,11 +189,21 @@ app.get("/", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// routes
+// Public routes (no auth)
+app.post("/login", accountRoutes);
+app.post("/register", accountRoutes);
+app.post("/accounts/login", accountRoutes);
+app.post("/accounts/register", accountRoutes);
+app.use("/api/calendly", calendlyRoutes);
+app.get("/api/health", healthRoutes);
+
+// Auth middleware — everything below requires JWT or API key
+app.use(auth);
+
+// Protected routes
 app.use("/accounts", accountRoutes);
 app.use("/leads", leadRoutes);
 app.use("/analytics", analyticsRoutes);
-app.use("/api/calendly", calendlyRoutes);
 app.use("/api", uploadRoutes);
 app.use("/outbound-leads", outboundLeadRoutes);
 app.use("/prompts", promptRoutes);
@@ -160,9 +213,8 @@ app.use("/api/logs", logRoutes);
 app.use("/api", healthRoutes);
 app.use("/api/sender-accounts", senderAccountRoutes);
 app.use("/api/campaigns", campaignRoutes);
-
-// auth routes at root level
-app.use("/", accountRoutes);
+app.use("/api/outbound-accounts", outboundAccountRoutes);
+app.use("/api/warmup", warmupRoutes);
 
 // Connect to DB, run recovery, then start server
 connectDB()

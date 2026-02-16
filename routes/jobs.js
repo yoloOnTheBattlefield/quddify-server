@@ -15,10 +15,8 @@ router.post("/", upload.array("files"), async (req, res) => {
       return res.status(400).json({ error: "No files uploaded" });
     }
 
-    const { account_id, promptId } = req.body;
-    if (!account_id) {
-      return res.status(400).json({ error: "account_id is required" });
-    }
+    const { promptId } = req.body;
+    const account_id = req.account._id;
 
     // Resolve prompt label for display
     let promptLabel = null;
@@ -65,13 +63,11 @@ router.post("/", upload.array("files"), async (req, res) => {
   }
 });
 
-// GET /jobs?account_id= — list recent jobs for an account
+// GET /jobs — list recent jobs for an account
 router.get("/", async (req, res) => {
   try {
-    const { account_id, page, limit } = req.query;
-    if (!account_id) {
-      return res.status(400).json({ error: "account_id is required" });
-    }
+    const { page, limit } = req.query;
+    const account_id = req.account._id;
 
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = parseInt(limit, 10) || 20;

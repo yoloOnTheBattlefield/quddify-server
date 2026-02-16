@@ -2,11 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const SenderAccount = require("../models/SenderAccount");
 const Task = require("../models/Task");
-const apiKeyAuth = require("../middleware/apiKeyAuth");
-
 const router = express.Router();
-
-router.use(apiKeyAuth);
 
 // GET /api/sender-accounts — list senders with upcoming task info
 router.get("/", async (req, res) => {

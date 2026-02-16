@@ -2,6 +2,8 @@ const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
+const OutboundAccount = require("../models/OutboundAccount");
+const WarmupLog = require("../models/WarmupLog");
 const Task = require("../models/Task");
 const { emitToAccount } = require("./socketManager");
 
@@ -48,6 +50,31 @@ async function checkStaleSenders() {
   );
   if (stale.modifiedCount > 0) {
     console.log(`[scheduler] Marked ${stale.modifiedCount} stale sender(s) offline`);
+  }
+
+  // Auto-complete warmup for accounts past day 14
+  const msPerDay = 86400000;
+  const warmupCutoff = new Date(Date.now() - 14 * msPerDay);
+  const warmupToComplete = await OutboundAccount.find({
+    "warmup.enabled": true,
+    "warmup.startDate": { $lte: warmupCutoff },
+  }).lean();
+
+  if (warmupToComplete.length > 0) {
+    await OutboundAccount.updateMany(
+      { _id: { $in: warmupToComplete.map((a) => a._id) } },
+      { $set: { status: "ready", "warmup.enabled": false } },
+    );
+    // Create audit log entries
+    const logEntries = warmupToComplete.map((a) => ({
+      account_id: a.account_id,
+      outbound_account_id: a._id,
+      action: "warmup_completed",
+      details: { username: a.username },
+      performedBy: "system",
+    }));
+    await WarmupLog.insertMany(logEntries);
+    console.log(`[scheduler] Auto-completed warmup for ${warmupToComplete.length} account(s)`);
   }
 
   // Auto-unrestrict senders whose cooldown has expired
@@ -123,9 +150,50 @@ async function processTick() {
         const candidate = allSenders[senderIndex % allSenders.length];
 
         if (candidate.status === "online") {
-          // Check daily limit
+          // Check warmup cap (global across all campaigns)
           const todayStart = new Date();
           todayStart.setHours(0, 0, 0, 0);
+
+          const outboundAcct = await OutboundAccount.findOne({
+            account_id: campaign.account_id,
+            username: candidate.ig_username,
+            "warmup.enabled": true,
+          }).lean();
+
+          if (outboundAcct) {
+            const msPerDay = 86400000;
+            const warmupDay = Math.floor(
+              (Date.now() - new Date(outboundAcct.warmup.startDate).getTime()) / msPerDay,
+            ) + 1;
+            const scheduleEntry = (outboundAcct.warmup.schedule || []).find(
+              (s) => s.day === warmupDay,
+            );
+            const warmupCap = scheduleEntry ? scheduleEntry.cap : null;
+
+            if (warmupCap === 0) {
+              // Automation blocked (days 1-8)
+              senderIndex++;
+              attempts++;
+              continue;
+            }
+
+            if (warmupCap !== null) {
+              // Count total DMs today across ALL campaigns for this sender (global cap)
+              const totalSentToday = await CampaignLead.countDocuments({
+                sender_id: candidate._id,
+                status: { $in: ["sent", "queued"] },
+                updatedAt: { $gte: todayStart },
+              });
+
+              if (totalSentToday >= warmupCap) {
+                senderIndex++;
+                attempts++;
+                continue;
+              }
+            }
+          }
+
+          // Check daily limit
 
           const sentToday = await CampaignLead.countDocuments({
             campaign_id: campaign._id,

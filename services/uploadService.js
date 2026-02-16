@@ -70,7 +70,7 @@ function parseXlsx(buffer) {
   return rows;
 }
 
-async function processUpload(fileBuffer, filename, promptId) {
+async function processUpload(fileBuffer, filename, promptId, accountId) {
   // 1. Extract metadata from filename
   const { sourceAccount, scrapeDate } = parseFilename(filename);
 
@@ -153,7 +153,7 @@ async function processUpload(fileBuffer, filename, promptId) {
     const followingKey = `${username}::${sourceAccount}`;
 
     await OutboundLead.findOneAndUpdate(
-      { username },
+      { username, account_id: accountId },
       {
         $set: {
           followingKey,

@@ -2,8 +2,9 @@ const mongoose = require("mongoose");
 
 const OutboundLeadSchema = new mongoose.Schema(
   {
+    account_id: { type: mongoose.Schema.Types.ObjectId, ref: "Account", required: true },
     followingKey: { type: String, required: true },
-    username: { type: String, unique: true },
+    username: { type: String },
     fullName: { type: String, default: null },
     profileLink: { type: String, default: null },
     isVerified: { type: Boolean, default: null },
@@ -34,6 +35,8 @@ const OutboundLeadSchema = new mongoose.Schema(
   { collection: "outbound_leads", versionKey: false, timestamps: true },
 );
 
+OutboundLeadSchema.index({ username: 1, account_id: 1 }, { unique: true });
+OutboundLeadSchema.index({ account_id: 1 });
 OutboundLeadSchema.index({ promptId: 1 });
 
 module.exports = mongoose.model("OutboundLead", OutboundLeadSchema);

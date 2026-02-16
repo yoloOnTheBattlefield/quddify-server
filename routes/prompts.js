@@ -3,12 +3,10 @@ const Prompt = require("../models/Prompt");
 
 const router = express.Router();
 
-// GET /prompts?account_id=
+// GET /prompts
 router.get("/", async (req, res) => {
-  const { account_id, search, page, limit } = req.query;
-  const filter = {};
-
-  if (account_id) filter.account_id = account_id;
+  const { search, page, limit } = req.query;
+  const filter = { account_id: req.account._id };
   if (search) filter.label = { $regex: search, $options: "i" };
 
   const pageNum = parseInt(page, 10) || 1;
@@ -40,13 +38,15 @@ router.get("/:id", async (req, res) => {
 
 // POST /prompts
 router.post("/", async (req, res) => {
-  const { account_id, label, promptText, isDefault, filters } = req.body;
+  const { label, promptText, isDefault, filters } = req.body;
 
-  if (!account_id || !label || !promptText) {
+  if (!label || !promptText) {
     return res
       .status(400)
-      .json({ error: "account_id, label, and promptText are required" });
+      .json({ error: "label and promptText are required" });
   }
+
+  const account_id = req.account._id;
 
   if (isDefault) {
     await Prompt.updateMany(
