@@ -34,6 +34,9 @@ const app = express();
 const server = http.createServer(app);
 app.use(express.json());
 
+// Public tracking routes — registered before global CORS so any origin can call them
+app.use("/t", cors({ origin: true, credentials: false }), trackingPublicRoutes);
+
 const allowedOrigins = [
   "http://localhost:8080",
   "http://localhost:5173",
@@ -199,8 +202,6 @@ app.post("/accounts/login", accountRoutes);
 app.post("/accounts/register", accountRoutes);
 app.use("/api/calendly", calendlyRoutes);
 app.get("/api/health", healthRoutes);
-app.use("/t", cors({ origin: true, credentials: false }), trackingPublicRoutes);
-
 // Auth middleware — everything below requires JWT or API key
 app.use(auth);
 
