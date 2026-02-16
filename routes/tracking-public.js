@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Account = require("../models/Account");
+const Lead = require("../models/Lead");
 const TrackingEvent = require("../models/TrackingEvent");
 
 const router = express.Router();
@@ -160,6 +161,14 @@ router.post("/event", async (req, res) => {
       referrer: referrer || null,
       user_agent: req.headers["user-agent"] || null,
     });
+
+    // On conversion, set booked_at on the lead (lead_id = contact_id from utm_medium)
+    if (event_type === "conversion") {
+      await Lead.findOneAndUpdate(
+        { contact_id: lead_id, booked_at: null },
+        { $set: { booked_at: new Date() } },
+      );
+    }
 
     res.json({ ok: true });
   } catch (err) {
