@@ -46,14 +46,6 @@ router.get("/", async (req, res) => {
       total,
       totalPages: Math.ceil(total / limitNum),
     },
-    _debug: {
-      query_account_id: account_id || null,
-      user_role: req.user?.role,
-      user_role_type: typeof req.user?.role,
-      has_user: !!req.user,
-      account_ghl: req.account?.ghl,
-      applied_filter_account_id: filter.account_id || null,
-    },
   });
 });
 
