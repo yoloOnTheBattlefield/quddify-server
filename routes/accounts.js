@@ -163,10 +163,11 @@ router.post("/login", async (req, res) => {
 });
 
 // POST /accounts/team - Add team member to an account
+// Admins (role 0) can pass account_id in body to add to another account
 router.post("/team", async (req, res) => {
   try {
-    const { email, password, first_name, last_name, role, has_outbound } = req.body;
-    const accountRef = req.account._id;
+    const { email, password, first_name, last_name, role, has_outbound, account_id } = req.body;
+    const accountRef = (account_id && req.user?.role === 0) ? account_id : req.account._id;
 
     if (!email || !password) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -209,11 +210,18 @@ router.post("/team", async (req, res) => {
   }
 });
 
-// GET /accounts/team - Get all team members for the account
+// GET /accounts/team?account_id= - Get all team members for an account
+// Admins (role 0) can pass account_id to view another account's team
 router.get("/team", async (req, res) => {
   try {
+    let accountId = req.account._id;
+
+    if (req.query.account_id && req.user?.role === 0) {
+      accountId = req.query.account_id;
+    }
+
     const members = await User.find(
-      { account_id: req.account._id, role: { $ne: 1 } },
+      { account_id: accountId, role: { $ne: 1 } },
       { password: 0 },
     ).lean();
 

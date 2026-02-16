@@ -237,7 +237,6 @@ async function processJob(jobId) {
                   source: sourceAccount,
                   scrapeDate: toDate(scrapeDate),
                   ig: mapped.ig || null,
-                  qualified: true,
                   promptId: job.promptId || null,
                   promptLabel: job.promptLabel || null,
                   isMessaged: mapped.isMessaged,

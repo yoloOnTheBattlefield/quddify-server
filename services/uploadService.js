@@ -168,7 +168,6 @@ async function processUpload(fileBuffer, filename, promptId, accountId) {
           source: sourceAccount,
           scrapeDate: toDate(scrapeDate),
           ig: row["IG"] || null,
-          qualified: true,
           promptId: promptDoc ? promptDoc._id : null,
           promptLabel: promptDoc ? promptDoc.label : null,
           isMessaged: toBoolean(row["Messaged?"]),

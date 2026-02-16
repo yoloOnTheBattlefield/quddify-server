@@ -200,7 +200,6 @@ router.get("/", async (req, res) => {
     const obMessaged = obLeads.length;
     const obReplied = obLeads.filter((l) => l.replied).length;
     const obBooked = obLeads.filter((l) => l.booked).length;
-    const obQualified = obLeads.filter((l) => l.qualified).length;
     const obContracts = obLeads.filter((l) => l.contract_value > 0).length;
     const obContractValue = obLeads.reduce((sum, l) => sum + (l.contract_value || 0), 0);
     const obReplyRate = obMessaged > 0 ? round2((obReplied / obMessaged) * 100) : 0;
@@ -226,7 +225,6 @@ router.get("/", async (req, res) => {
       obMessaged,
       obReplied,
       obBooked,
-      obQualified,
       obContracts,
       obContractValue,
       obReplyRate,
@@ -550,7 +548,13 @@ router.get("/outbound", async (req, res) => {
       outboundFilter._id = { $in: campaignLeads.map((cl) => cl.outbound_lead_id) };
     }
 
-    const [messaged, replied, booked, contractAgg] = await Promise.all([
+    const totalFilter = { account_id: req.account._id };
+    if (campaign_id) {
+      totalFilter._id = outboundFilter._id;
+    }
+
+    const [total, messaged, replied, booked, contractAgg] = await Promise.all([
+      OutboundLead.countDocuments(totalFilter),
       OutboundLead.countDocuments(outboundFilter),
       OutboundLead.countDocuments({ ...outboundFilter, replied: true }),
       OutboundLead.countDocuments({ ...outboundFilter, booked: true }),
@@ -563,6 +567,7 @@ router.get("/outbound", async (req, res) => {
     const contractData = contractAgg[0] || { total: 0, count: 0 };
 
     res.json({
+      total,
       messaged,
       replied,
       booked,

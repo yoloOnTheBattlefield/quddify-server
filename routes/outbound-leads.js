@@ -68,7 +68,6 @@ async function processImportJob(jobId, rows, { promptDoc, campaign, accountId, c
               source,
               scrapeDate: mapped.scrapeDate,
               ig: mapped.ig || null,
-              qualified: toBoolean(row["Qualified"]) ?? false,
               promptId: promptDoc ? promptDoc._id : null,
               promptLabel: promptDoc ? promptDoc.label : null,
               isMessaged: wasMessaged ?? null,
@@ -150,11 +149,10 @@ async function processImportJob(jobId, rows, { promptDoc, campaign, accountId, c
 
 // GET /outbound-leads — list with filters, search, pagination
 router.get("/", async (req, res) => {
-  const { source, qualified, isMessaged, replied, booked, search, promptId, promptLabel, page, limit } = req.query;
+  const { source, isMessaged, replied, booked, search, promptId, promptLabel, page, limit } = req.query;
   const filter = { account_id: req.account._id };
 
   if (source) filter.source = source;
-  if (qualified !== undefined) filter.qualified = qualified === "true";
   if (isMessaged !== undefined) {
     filter.isMessaged = isMessaged === "true" ? true : { $ne: true };
   }
@@ -193,13 +191,23 @@ router.get("/", async (req, res) => {
   });
 });
 
+// GET /outbound-leads/sources — distinct source values
+router.get("/sources", async (req, res) => {
+  try {
+    const sources = await OutboundLead.distinct("source", { account_id: req.account._id });
+    res.json({ sources: sources.filter(Boolean).sort() });
+  } catch (err) {
+    console.error("Sources error:", err);
+    res.status(500).json({ error: "Failed to fetch sources" });
+  }
+});
+
 // GET /outbound-leads/stats — funnel counts
 router.get("/stats", async (req, res) => {
   try {
     const af = { account_id: req.account._id };
-    const [total, qualified, messaged, replied, booked, contractSum] = await Promise.all([
+    const [total, messaged, replied, booked, contractSum] = await Promise.all([
       OutboundLead.countDocuments(af),
-      OutboundLead.countDocuments({ ...af, qualified: true }),
       OutboundLead.countDocuments({ ...af, isMessaged: true }),
       OutboundLead.countDocuments({ ...af, replied: true }),
       OutboundLead.countDocuments({ ...af, booked: true }),
@@ -213,7 +221,6 @@ router.get("/stats", async (req, res) => {
 
     res.json({
       total,
-      qualified,
       messaged,
       replied,
       booked,
@@ -321,7 +328,6 @@ router.post("/bulk-delete", async (req, res) => {
       // Delete all leads matching the current filters
       deleteFilter = { account_id: accountId };
       if (filters.source) deleteFilter.source = filters.source;
-      if (filters.qualified !== undefined) deleteFilter.qualified = filters.qualified === "true";
       if (filters.replied !== undefined) deleteFilter.replied = filters.replied === "true";
       if (filters.booked !== undefined) deleteFilter.booked = filters.booked === "true";
       if (filters.promptLabel) deleteFilter.promptLabel = { $regex: filters.promptLabel, $options: "i" };

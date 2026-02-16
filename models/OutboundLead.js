@@ -16,7 +16,6 @@ const OutboundLeadSchema = new mongoose.Schema(
     source: { type: String, default: null },
     scrapeDate: { type: Date, default: null },
     ig: { type: String, default: null },
-    qualified: { type: Boolean, default: false },
     promptId: { type: mongoose.Schema.Types.ObjectId, ref: "Prompt", default: null },
     promptLabel: { type: String, default: null },
     isMessaged: { type: Boolean, default: null },
