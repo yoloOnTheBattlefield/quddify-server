@@ -12,6 +12,7 @@ const {
   DEFAULT_QUALIFICATION_PROMPT,
 } = require("./uploadService");
 const { toNumber, toDate, toBoolean } = require("../utils/normalize");
+const { applyColumnMapping, DEFAULT_COLUMN_MAPPING } = require("../utils/columnMapping");
 
 let io = null;
 
@@ -125,24 +126,27 @@ async function processJob(jobId) {
           existingOutboundLeads.map((f) => f.username),
         );
 
+        // Resolve column mapping
+        const columnMapping = job.columnMapping || DEFAULT_COLUMN_MAPPING;
+
         // Filter rows using prompt filters (or defaults)
         const filtered = rows.filter((row) => {
-          const followers = toNumber(row["Followers count"]);
-          const posts = toNumber(row["Posts count"]);
+          const mapped = applyColumnMapping(row, columnMapping);
+          const followers = mapped.followersCount;
+          const posts = mapped.postsCount;
+          // "Is private" is not a mappable field — read from raw row
           const isPrivate = String(row["Is private"] || "")
             .trim()
             .toUpperCase();
-          const isVerified = String(row["Is verified"] || "")
-            .trim()
-            .toUpperCase();
-          const username = String(row["Username"] || "").trim();
-          const bio = (row["Biography"] || "").trim();
+          const isVerified = mapped.isVerified;
+          const username = mapped.username || "";
+          const bio = mapped.bio || "";
 
           if (!username || existingUsernames.has(username)) return false;
           if (followers === null || followers < minFollowers) return false;
           if (posts === null || posts <= minPosts) return false;
           if (excludePrivate && isPrivate !== "NO") return false;
-          if (verifiedOnly && isVerified !== "YES") return false;
+          if (verifiedOnly && isVerified !== true) return false;
           if (bioRequired && !bio) return false;
 
           return true;
@@ -181,14 +185,15 @@ async function processJob(jobId) {
           }
 
           const row = filtered[rowIdx];
-          const bio = row["Biography"] || "";
+          const mapped = applyColumnMapping(row, columnMapping);
+          const bio = mapped.bio || "";
 
           let qualification;
           try {
             qualification = await qualifyBio(bio, promptText, openaiClient);
           } catch (err) {
             console.error(
-              `OpenAI error for ${row["Username"]}, skipping:`,
+              `OpenAI error for ${mapped.username || "unknown"}, skipping:`,
               err.message,
             );
             fileEntry.failedRows++;
@@ -213,7 +218,7 @@ async function processJob(jobId) {
           }
 
           if (qualification === "Qualified") {
-            const username = String(row["Username"] || "").trim();
+            const username = mapped.username || "";
             const followingKey = `${username}::${sourceAccount}`;
 
             await OutboundLead.findOneAndUpdate(
@@ -221,23 +226,23 @@ async function processJob(jobId) {
               {
                 $set: {
                   followingKey,
-                  fullName: row["Full name"] || null,
-                  profileLink: row["Profile link"] || null,
-                  isVerified: toBoolean(row["Is verified"]),
-                  followersCount: toNumber(row["Followers count"]),
-                  bio: row["Biography"] || null,
-                  postsCount: toNumber(row["Posts count"]),
-                  externalUrl: row["External url"] || null,
-                  email: row["Public email"] || row["Email"] || null,
+                  fullName: mapped.fullName || null,
+                  profileLink: mapped.profileLink || null,
+                  isVerified: mapped.isVerified,
+                  followersCount: mapped.followersCount,
+                  bio: mapped.bio || null,
+                  postsCount: mapped.postsCount,
+                  externalUrl: mapped.externalUrl || null,
+                  email: mapped.email || null,
                   source: sourceAccount,
                   scrapeDate: toDate(scrapeDate),
-                  ig: row["IG"] || null,
+                  ig: mapped.ig || null,
                   qualified: true,
                   promptId: job.promptId || null,
                   promptLabel: job.promptLabel || null,
-                  isMessaged: toBoolean(row["Messaged?"]),
-                  dmDate: toDate(row["DM Date"]),
-                  message: row["Message"] || null,
+                  isMessaged: mapped.isMessaged,
+                  dmDate: mapped.dmDate,
+                  message: mapped.message || null,
                   metadata: {
                     source: "nodejs",
                     executionId,

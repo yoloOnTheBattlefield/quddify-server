@@ -18,6 +18,16 @@ router.post("/", upload.array("files"), async (req, res) => {
     const { promptId } = req.body;
     const account_id = req.account._id;
 
+    // Parse column mapping if provided
+    let columnMapping = null;
+    if (req.body.columnMapping) {
+      try {
+        columnMapping = JSON.parse(req.body.columnMapping);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid columnMapping JSON" });
+      }
+    }
+
     // Resolve prompt label for display
     let promptLabel = null;
     if (promptId) {
@@ -41,6 +51,7 @@ router.post("/", upload.array("files"), async (req, res) => {
       promptId: promptId || null,
       promptLabel: promptLabel || "Default (hardcoded)",
       files: fileEntries,
+      columnMapping,
     });
 
     // Store file buffers in memory for the worker

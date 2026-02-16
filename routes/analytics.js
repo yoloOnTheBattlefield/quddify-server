@@ -578,23 +578,37 @@ router.get("/outbound", async (req, res) => {
   }
 });
 
-// GET /analytics/messages — performance per message variant
+// GET /analytics/messages — performance per message template
 router.get("/messages", async (req, res) => {
   try {
     const { campaign_id } = req.query;
-    const matchFilter = { status: "sent", message_used: { $ne: null } };
+    const matchFilter = { status: "sent" };
     if (campaign_id) matchFilter.campaign_id = new mongoose.Types.ObjectId(campaign_id);
 
+    // Group by campaign_id + template_index (the template identifier)
+    // Falls back to message_used for legacy leads without template_index
     const messageSends = await CampaignLead.aggregate([
       { $match: matchFilter },
       {
         $group: {
-          _id: "$message_used",
+          _id: {
+            campaign_id: "$campaign_id",
+            template_index: "$template_index",
+          },
           sent: { $sum: 1 },
           outbound_lead_ids: { $push: "$outbound_lead_id" },
+          sample_message: { $first: "$message_used" },
         },
       },
     ]);
+
+    // Look up campaign names and raw templates in bulk
+    const campaignIds = [...new Set(messageSends.map((m) => m._id.campaign_id?.toString()).filter(Boolean))];
+    const campaignDocs = await Campaign.find({ _id: { $in: campaignIds } }).lean();
+    const campaignMap = {};
+    for (const c of campaignDocs) {
+      campaignMap[c._id.toString()] = c;
+    }
 
     const results = await Promise.all(
       messageSends.map(async (msg) => {
@@ -608,15 +622,27 @@ router.get("/messages", async (req, res) => {
         ]);
 
         const contractData = contractAgg[0] || { total: 0, count: 0 };
+        const camp = campaignMap[msg._id.campaign_id?.toString()] || null;
+        const templateIndex = msg._id.template_index;
+
+        // Get raw template text from campaign.messages[template_index]
+        let template = null;
+        if (camp && templateIndex != null && camp.messages && camp.messages[templateIndex]) {
+          template = camp.messages[templateIndex];
+        }
 
         return {
-          message: msg._id,
+          campaign_id: msg._id.campaign_id || null,
+          campaign_name: camp ? camp.name : "Unknown",
+          template_index: templateIndex,
+          template: template || msg.sample_message || "(no template)",
           sent: msg.sent,
           replied,
           booked,
           contracts: contractData.count,
           contract_value: contractData.total,
           reply_rate: msg.sent > 0 ? round2((replied / msg.sent) * 100) : 0,
+          book_rate: replied > 0 ? round2((booked / replied) * 100) : 0,
         };
       }),
     );

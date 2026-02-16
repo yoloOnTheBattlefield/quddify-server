@@ -17,6 +17,7 @@ const logRoutes = require("./routes/logs");
 const healthRoutes = require("./routes/health");
 const senderAccountRoutes = require("./routes/sender-accounts");
 const campaignRoutes = require("./routes/campaigns");
+const manualCampaignRoutes = require("./routes/manual-campaigns");
 const outboundAccountRoutes = require("./routes/outbound-accounts");
 const warmupRoutes = require("./routes/warmup");
 
@@ -212,6 +213,7 @@ app.use("/api/tasks", taskRoutes);
 app.use("/api/logs", logRoutes);
 app.use("/api", healthRoutes);
 app.use("/api/sender-accounts", senderAccountRoutes);
+app.use("/api/manual-campaigns", manualCampaignRoutes);
 app.use("/api/campaigns", campaignRoutes);
 app.use("/api/outbound-accounts", outboundAccountRoutes);
 app.use("/api/warmup", warmupRoutes);

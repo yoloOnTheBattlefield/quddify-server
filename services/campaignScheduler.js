@@ -10,9 +10,12 @@ const { emitToAccount } = require("./socketManager");
 let tickInterval = null;
 
 function resolveTemplate(template, lead) {
+  const fullName = lead.fullName || lead.username || "";
+  const firstName = fullName.split(/\s+/)[0] || "";
   return template
     .replace(/\{\{username\}\}/g, lead.username || "")
-    .replace(/\{\{name\}\}/g, lead.fullName || lead.username || "")
+    .replace(/\{\{firstName\}\}/g, firstName)
+    .replace(/\{\{name\}\}/g, fullName)
     .replace(/\{\{bio\}\}/g, lead.bio || "");
 }
 
@@ -88,7 +91,7 @@ async function checkStaleSenders() {
   }
 }
 
-async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, sender_id, account_id, target, message }) {
+async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, sender_id, account_id, target, message, template_index }) {
   // Create the actual Task for the extension to pick up
   const task = await Task.create({
     account_id,
@@ -102,9 +105,9 @@ async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, send
     status: "pending",
   });
 
-  // Update CampaignLead with task_id and message
+  // Update CampaignLead with task_id, message, and template index
   await CampaignLead.findByIdAndUpdate(campaign_lead_id, {
-    $set: { task_id: task._id, message_used: message },
+    $set: { task_id: task._id, message_used: message, template_index },
   });
 
   // Notify extension via websocket
@@ -117,10 +120,35 @@ async function processTick() {
   // Check for stale senders first
   await checkStaleSenders();
 
+  // Stale lock cleanup for manual campaigns: reset queued leads older than 10 minutes
+  const staleThresholdManual = new Date(Date.now() - 10 * 60 * 1000);
+  const manualCampaigns = await Campaign.find({ mode: "manual", status: "active" }).lean();
+  for (const mc of manualCampaigns) {
+    const staleLeads = await CampaignLead.find({
+      campaign_id: mc._id,
+      status: "queued",
+      queued_at: { $lt: staleThresholdManual },
+    }).lean();
+
+    if (staleLeads.length > 0) {
+      await CampaignLead.updateMany(
+        { _id: { $in: staleLeads.map((l) => l._id) } },
+        { $set: { status: "pending", sender_id: null, queued_at: null } },
+      );
+      await Campaign.findByIdAndUpdate(mc._id, {
+        $inc: { "stats.queued": -staleLeads.length, "stats.pending": staleLeads.length },
+      });
+      console.log(`[scheduler] Reset ${staleLeads.length} stale queued lead(s) for manual campaign ${mc.name}`);
+    }
+  }
+
   const campaigns = await Campaign.find({ status: "active" });
 
   for (const campaign of campaigns) {
     try {
+      // Skip manual campaigns — they are driven by VA via HTTP endpoints
+      if (campaign.mode === "manual") continue;
+
       // Check time window
       if (!isWithinActiveHours(campaign.schedule)) continue;
 
@@ -295,6 +323,7 @@ async function processTick() {
         account_id: campaign.account_id.toString(),
         target: outboundLead.username,
         message,
+        template_index: messageIndex,
       });
 
       console.log(
@@ -327,4 +356,4 @@ function stop() {
   console.log("[scheduler] Campaign scheduler stopped");
 }
 
-module.exports = { start, stop };
+module.exports = { start, stop, resolveTemplate, isWithinActiveHours, calculateDelay };

@@ -165,7 +165,7 @@ router.post("/login", async (req, res) => {
 // POST /accounts/team - Add team member to an account
 router.post("/team", async (req, res) => {
   try {
-    const { email, password, first_name, last_name, role } = req.body;
+    const { email, password, first_name, last_name, role, has_outbound } = req.body;
     const accountRef = req.account._id;
 
     if (!email || !password) {
@@ -191,6 +191,7 @@ router.post("/team", async (req, res) => {
       first_name: first_name || null,
       last_name: last_name || null,
       role: role || 2,
+      has_outbound: has_outbound || false,
     });
 
     res.status(201).json({
@@ -200,6 +201,7 @@ router.post("/team", async (req, res) => {
       first_name: member.first_name,
       last_name: member.last_name,
       role: member.role,
+      has_outbound: member.has_outbound,
     });
   } catch (error) {
     console.error("Add team member error:", error);

@@ -18,14 +18,18 @@ function generateToken(user, account) {
 
 async function auth(req, res, next) {
   const authHeader = req.headers.authorization;
+  const apiKeyHeader = req.headers["x-api-key"];
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Missing or invalid Authorization header" });
+  // Support both "Authorization: Bearer <token>" and "x-api-key: <key>"
+  let token = null;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.slice(7);
+  } else if (apiKeyHeader) {
+    token = apiKeyHeader;
   }
 
-  const token = authHeader.slice(7);
   if (!token) {
-    return res.status(401).json({ error: "Token is required" });
+    return res.status(401).json({ error: "Missing or invalid Authorization header" });
   }
 
   try {

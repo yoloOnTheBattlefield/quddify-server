@@ -24,12 +24,14 @@ const CampaignLeadSchema = new mongoose.Schema(
     },
     sent_at: { type: Date, default: null },
     message_used: { type: String, default: null },
+    template_index: { type: Number, default: null },
     task_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Task",
       default: null,
     },
     error: { type: String, default: null },
+    queued_at: { type: Date, default: null },
   },
   { collection: "campaign_leads", versionKey: false, timestamps: true },
 );

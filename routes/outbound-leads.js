@@ -1,11 +1,152 @@
 const express = require("express");
 const multer = require("multer");
 const OutboundLead = require("../models/OutboundLead");
+const CampaignLead = require("../models/CampaignLead");
+const Campaign = require("../models/Campaign");
+const Prompt = require("../models/Prompt");
 const { parseXlsx } = require("../services/uploadService");
-const { toNumber, toDate, toBoolean } = require("../utils/normalize");
+const { toBoolean } = require("../utils/normalize");
+const { applyColumnMapping, DEFAULT_COLUMN_MAPPING } = require("../utils/columnMapping");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
+
+// In-memory import job progress store
+const importJobs = new Map();
+
+// Clean up old jobs every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  for (const [id, job] of importJobs) {
+    if (job.completedAt && job.completedAt < cutoff) {
+      importJobs.delete(id);
+    }
+  }
+}, 5 * 60 * 1000);
+
+async function processImportJob(jobId, rows, { promptDoc, campaign, accountId, columnMapping }) {
+  const job = importJobs.get(jobId);
+  if (!job) return;
+  const now = new Date();
+  const mapping = columnMapping || DEFAULT_COLUMN_MAPPING;
+
+  try {
+    job.step = "Importing leads...";
+    job.status = "importing";
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const mapped = applyColumnMapping(row, mapping);
+
+      const username = mapped.username || "";
+      if (!username) {
+        job.skipped++;
+        job.processed = i + 1;
+        continue;
+      }
+
+      const source = mapped.source || "import";
+      const followingKey = `${username}::${source}`;
+      const wasMessaged = mapped.isMessaged;
+      const messageText = mapped.message || null;
+      const dmDateVal = mapped.dmDate;
+
+      try {
+        const lead = await OutboundLead.findOneAndUpdate(
+          { username, account_id: accountId },
+          {
+            $set: {
+              followingKey,
+              fullName: mapped.fullName || null,
+              profileLink: mapped.profileLink || null,
+              isVerified: mapped.isVerified,
+              followersCount: mapped.followersCount,
+              bio: mapped.bio || null,
+              postsCount: mapped.postsCount,
+              externalUrl: mapped.externalUrl || null,
+              email: mapped.email || null,
+              source,
+              scrapeDate: mapped.scrapeDate,
+              ig: mapped.ig || null,
+              qualified: toBoolean(row["Qualified"]) ?? false,
+              promptId: promptDoc ? promptDoc._id : null,
+              promptLabel: promptDoc ? promptDoc.label : null,
+              isMessaged: wasMessaged ?? null,
+              dmDate: dmDateVal,
+              message: messageText,
+              metadata: {
+                source: "xlsx-import",
+                notion: row["Notion"] || null,
+                syncedAt: now,
+              },
+            },
+          },
+          { upsert: true, new: true },
+        );
+        job.imported++;
+
+        // Create CampaignLead for messaged leads
+        if (campaign && wasMessaged && lead) {
+          try {
+            await CampaignLead.findOneAndUpdate(
+              { campaign_id: campaign._id, outbound_lead_id: lead._id },
+              {
+                $setOnInsert: {
+                  status: "sent",
+                  sent_at: dmDateVal || now,
+                  message_used: messageText,
+                  sender_id: null,
+                  task_id: null,
+                  error: null,
+                },
+              },
+              { upsert: true },
+            );
+            job.campaignLeadsCreated++;
+          } catch (clErr) {
+            if (clErr.code !== 11000) {
+              console.error("CampaignLead create error:", clErr.message);
+            }
+          }
+        }
+      } catch (err) {
+        if (err.code === 11000) {
+          job.skipped++;
+        } else {
+          job.errors.push({ username, error: err.message });
+          job.skipped++;
+        }
+      }
+
+      job.processed = i + 1;
+
+      // Yield to event loop every 25 rows so status endpoint can respond
+      if ((i + 1) % 25 === 0) {
+        await new Promise((r) => setImmediate(r));
+      }
+    }
+
+    // Update campaign stats
+    if (campaign && job.campaignLeadsCreated > 0) {
+      job.step = "Updating campaign stats...";
+      await Campaign.findByIdAndUpdate(campaign._id, {
+        $inc: {
+          "stats.total": job.campaignLeadsCreated,
+          "stats.sent": job.campaignLeadsCreated,
+        },
+      });
+    }
+
+    job.status = "done";
+    job.step = "Done";
+    job.completedAt = Date.now();
+  } catch (err) {
+    console.error("Import job error:", err);
+    job.status = "error";
+    job.step = err.message || "Unknown error";
+    job.completedAt = Date.now();
+  }
+}
 
 // GET /outbound-leads — list with filters, search, pagination
 router.get("/", async (req, res) => {
@@ -85,81 +226,133 @@ router.get("/stats", async (req, res) => {
   }
 });
 
-// POST /outbound-leads/import-xlsx — import pre-processed leads from XLSX
+// POST /outbound-leads/import-xlsx — start import job, returns immediately
 router.post("/import-xlsx", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const rows = parseXlsx(req.file.buffer);
+    const { promptId, campaignId } = req.body;
     const accountId = req.account._id;
-    const now = new Date();
 
-    let imported = 0;
-    let skipped = 0;
-    const errors = [];
-
-    for (const row of rows) {
-      const username = String(row["Username"] || "").replace(/^@/, "").trim().toLowerCase();
-      if (!username) {
-        skipped++;
-        continue;
-      }
-
-      const source = String(row["Source"] || "import").trim();
-      const followingKey = `${username}::${source}`;
-
+    // Parse column mapping if provided
+    let columnMapping = null;
+    if (req.body.columnMapping) {
       try {
-        await OutboundLead.findOneAndUpdate(
-          { username, account_id: accountId },
-          {
-            $set: {
-              followingKey,
-              fullName: row["Full name"] || null,
-              profileLink: row["Profile link"] || null,
-              isVerified: toBoolean(row["Is verified"]),
-              followersCount: toNumber(row["Followers count"]),
-              bio: row["Biography"] || null,
-              postsCount: toNumber(row["Posts count"]),
-              externalUrl: row["External url"] || null,
-              email: row["Email"] || null,
-              source,
-              scrapeDate: toDate(row["Scrape Date"]),
-              ig: row["IG"] || null,
-              qualified: toBoolean(row["Qualified"]) ?? false,
-              isMessaged: toBoolean(row["Messaged?"]) ?? null,
-              dmDate: toDate(row["DM Date"]),
-              message: row["Message"] || null,
-              metadata: {
-                source: "xlsx-import",
-                notion: row["Notion"] || null,
-                syncedAt: now,
-              },
-            },
-          },
-          { upsert: true, new: true },
-        );
-        imported++;
-      } catch (err) {
-        if (err.code === 11000) {
-          skipped++;
-        } else {
-          errors.push({ username, error: err.message });
-          skipped++;
-        }
+        columnMapping = JSON.parse(req.body.columnMapping);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid columnMapping JSON" });
       }
     }
 
-    res.json({
+    // Resolve prompt if provided
+    let promptDoc = null;
+    if (promptId) {
+      promptDoc = await Prompt.findById(promptId).lean();
+      if (!promptDoc) {
+        return res.status(400).json({ error: "Prompt not found" });
+      }
+    }
+
+    // Resolve campaign if provided (for message analytics)
+    let campaign = null;
+    if (campaignId) {
+      campaign = await Campaign.findOne({ _id: campaignId, account_id: accountId }).lean();
+      if (!campaign) {
+        return res.status(400).json({ error: "Campaign not found" });
+      }
+    }
+
+    // Parse file synchronously (fast) — return total + jobId immediately
+    const rows = parseXlsx(req.file.buffer);
+    const jobId = `import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    importJobs.set(jobId, {
+      status: "importing",
+      step: "Parsing file...",
       total: rows.length,
-      imported,
-      skipped,
-      errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
+      processed: 0,
+      imported: 0,
+      skipped: 0,
+      campaignLeadsCreated: 0,
+      errors: [],
+      completedAt: null,
     });
+
+    // Return immediately so the frontend can start polling
+    res.status(202).json({ jobId, total: rows.length });
+
+    // Process in background
+    processImportJob(jobId, rows, { promptDoc, campaign, accountId, columnMapping });
   } catch (err) {
     console.error("Import XLSX error:", err);
     res.status(500).json({ error: "Failed to import XLSX" });
+  }
+});
+
+// GET /outbound-leads/import-xlsx/status/:jobId — poll import progress
+router.get("/import-xlsx/status/:jobId", (req, res) => {
+  const job = importJobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+  res.json({
+    status: job.status,
+    step: job.step,
+    total: job.total,
+    processed: job.processed,
+    imported: job.imported,
+    skipped: job.skipped,
+    campaignLeadsCreated: job.campaignLeadsCreated,
+    errors: job.errors.length > 0 ? job.errors.slice(0, 10) : undefined,
+  });
+});
+
+// POST /outbound-leads/bulk-delete — delete multiple leads by IDs or by filter
+router.post("/bulk-delete", async (req, res) => {
+  try {
+    const { ids, all, filters } = req.body;
+    const accountId = req.account._id;
+
+    let deleteFilter;
+
+    if (all && filters) {
+      // Delete all leads matching the current filters
+      deleteFilter = { account_id: accountId };
+      if (filters.source) deleteFilter.source = filters.source;
+      if (filters.qualified !== undefined) deleteFilter.qualified = filters.qualified === "true";
+      if (filters.replied !== undefined) deleteFilter.replied = filters.replied === "true";
+      if (filters.booked !== undefined) deleteFilter.booked = filters.booked === "true";
+      if (filters.promptLabel) deleteFilter.promptLabel = { $regex: filters.promptLabel, $options: "i" };
+      if (filters.isMessaged !== undefined) {
+        deleteFilter.isMessaged = filters.isMessaged === "true" ? true : { $ne: true };
+      }
+      if (filters.search) {
+        deleteFilter.$or = [
+          { username: { $regex: filters.search, $options: "i" } },
+          { fullName: { $regex: filters.search, $options: "i" } },
+        ];
+      }
+    } else if (ids && Array.isArray(ids) && ids.length > 0) {
+      deleteFilter = { _id: { $in: ids }, account_id: accountId };
+    } else {
+      return res.status(400).json({ error: "Provide ids array or all+filters" });
+    }
+
+    const result = await OutboundLead.deleteMany(deleteFilter);
+
+    // Also clean up any CampaignLead references
+    if (result.deletedCount > 0) {
+      if (ids) {
+        await CampaignLead.deleteMany({ outbound_lead_id: { $in: ids } });
+      }
+    }
+
+    res.json({ deleted: result.deletedCount });
+  } catch (err) {
+    console.error("Bulk delete error:", err);
+    res.status(500).json({ error: "Failed to delete leads" });
   }
 });
 

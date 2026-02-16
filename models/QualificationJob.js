@@ -50,6 +50,9 @@ const QualificationJobSchema = new mongoose.Schema(
     startedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
 
+    // Column mapping for custom headers
+    columnMapping: { type: mongoose.Schema.Types.Mixed, default: null },
+
     // Error / cancellation
     error: { type: String, default: null },
     cancelRequested: { type: Boolean, default: false },

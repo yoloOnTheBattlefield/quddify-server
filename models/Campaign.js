@@ -8,6 +8,11 @@ const CampaignSchema = new mongoose.Schema(
       required: true,
     },
     name: { type: String, required: true },
+    mode: {
+      type: String,
+      enum: ["auto", "manual"],
+      default: "auto",
+    },
     status: {
       type: String,
       enum: ["draft", "active", "paused", "completed"],

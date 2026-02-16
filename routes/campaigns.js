@@ -68,15 +68,20 @@ router.get("/:id", async (req, res) => {
 // POST /api/campaigns — create campaign (starts as draft)
 router.post("/", async (req, res) => {
   try {
-    const { name, messages, sender_ids, schedule, daily_limit_per_sender } = req.body;
+    const { name, mode, messages, sender_ids, schedule, daily_limit_per_sender } = req.body;
 
     if (!name) {
       return res.status(400).json({ error: "Campaign name is required" });
     }
 
+    if (mode && !["auto", "manual"].includes(mode)) {
+      return res.status(400).json({ error: "mode must be 'auto' or 'manual'" });
+    }
+
     const campaign = await Campaign.create({
       account_id: req.account._id,
       name,
+      mode: mode || "auto",
       messages: messages || [],
       sender_ids: sender_ids || [],
       schedule: schedule || {},
@@ -110,9 +115,14 @@ router.patch("/:id", async (req, res) => {
       return res.status(400).json({ error: "Pause the campaign before editing" });
     }
 
-    const { name, messages, sender_ids, schedule, daily_limit_per_sender } = req.body;
+    const { name, mode, messages, sender_ids, schedule, daily_limit_per_sender } = req.body;
+
+    if (mode !== undefined && !["auto", "manual"].includes(mode)) {
+      return res.status(400).json({ error: "mode must be 'auto' or 'manual'" });
+    }
 
     if (name !== undefined) campaign.name = name;
+    if (mode !== undefined) campaign.mode = mode;
     if (messages !== undefined) campaign.messages = messages;
     if (sender_ids !== undefined) campaign.sender_ids = sender_ids;
     if (schedule !== undefined) {
