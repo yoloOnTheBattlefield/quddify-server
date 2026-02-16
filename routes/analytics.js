@@ -120,12 +120,17 @@ function getRadarBucketRange(startDate, endDate, grouping) {
 // GET /analytics
 router.get("/", async (req, res) => {
   try {
-    const { start_date, end_date, source } = req.query;
+    const { start_date, end_date, source, account_id } = req.query;
     const dataSource = source || "all";
 
     // Build inbound filter using account's GHL location ID
+    // Admins (role 0) can filter by any account
     const filter = {};
-    if (req.account.ghl) filter.account_id = req.account.ghl;
+    if (account_id && req.user?.role === 0) {
+      filter.account_id = account_id;
+    } else if (req.account.ghl) {
+      filter.account_id = req.account.ghl;
+    }
     if (start_date || end_date) {
       filter.date_created = {};
       if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
@@ -138,7 +143,13 @@ router.get("/", async (req, res) => {
     // Fetch outbound leads (skip if source=inbound)
     let obLeads = [];
     if (dataSource !== "inbound") {
-      const campaigns = await Campaign.find({ account_id: req.account._id }).select("_id").lean();
+      // Resolve the account ObjectId for campaign lookup
+      let campaignAccountId = req.account._id;
+      if (account_id && req.user?.role === 0) {
+        const targetAccount = await Account.findOne({ ghl: account_id }).lean();
+        if (targetAccount) campaignAccountId = targetAccount._id;
+      }
+      const campaigns = await Campaign.find({ account_id: campaignAccountId }).select("_id").lean();
       const campaignIds = campaigns.map((c) => c._id);
       if (campaignIds.length > 0) {
         const campaignLeads = await CampaignLead.find({

@@ -5,9 +5,14 @@ const router = express.Router();
 
 // get all leads (optionally filter by account_id/ghl, status, date range, search, and paginate)
 router.get("/", async (req, res) => {
-  const { status, start_date, end_date, search, page, limit } = req.query;
+  const { status, start_date, end_date, search, page, limit, account_id } = req.query;
   const filter = {};
-  if (req.account.ghl) filter.account_id = req.account.ghl;
+  // Admins (role 0) can filter by any account; others see only their own
+  if (account_id && req.user?.role === 0) {
+    filter.account_id = account_id;
+  } else if (req.account.ghl) {
+    filter.account_id = req.account.ghl;
+  }
   if (search) filter.first_name = { $regex: search, $options: "i" };
   if (status) {
     const statuses = Array.isArray(status) ? status : status.split(",");
