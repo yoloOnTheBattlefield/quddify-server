@@ -251,8 +251,8 @@ app.use("/tracking", trackingRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on 0.0.0.0:${PORT}`);
 });
 
 // Connect to DB and run recovery in the background
