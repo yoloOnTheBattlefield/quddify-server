@@ -55,11 +55,17 @@ router.patch("/settings", async (req, res) => {
 });
 
 // GET /tracking/events — recent tracking events
+// Admins (role 0) can pass ?account_id= to query a specific client's events
 router.get("/events", async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 5, 50);
 
-    const events = await TrackingEvent.find({ account_id: req.account._id })
+    let targetAccountId = req.account._id;
+    if (req.query.account_id && req.user && req.user.role === 0) {
+      targetAccountId = req.query.account_id;
+    }
+
+    const events = await TrackingEvent.find({ account_id: targetAccountId })
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();
