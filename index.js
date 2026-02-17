@@ -249,7 +249,14 @@ app.use("/api/outbound-accounts", outboundAccountRoutes);
 app.use("/api/warmup", warmupRoutes);
 app.use("/tracking", trackingRoutes);
 
-// Connect to DB, run recovery, then start server
+// Start listening IMMEDIATELY so Railway health checks pass
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+// Connect to DB and run recovery in the background
+// (The DB middleware on each request will also call connectDB, so requests wait for it)
 connectDB()
   .then(async () => {
     await recoverStuckJobs();
@@ -266,13 +273,8 @@ connectDB()
 
     // Start campaign scheduler
     campaignScheduler.start();
-
-    const PORT = process.env.PORT || 3000;
-    server.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
+    console.log("Startup complete");
   })
   .catch((err) => {
-    console.error("Failed to start server:", err);
-    process.exit(1);
+    console.error("Failed to initialize:", err);
   });
