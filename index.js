@@ -218,6 +218,7 @@ app.post("/accounts/login", accountRoutes);
 app.post("/accounts/register", accountRoutes);
 app.use("/api/calendly", calendlyRoutes);
 app.get("/api/health", healthRoutes);
+app.get("/api/debug", healthRoutes);
 // Auth middleware — everything below requires JWT or API key
 app.use(auth);
 

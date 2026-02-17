@@ -12,6 +12,20 @@ router.get("/health", (req, res) => {
   });
 });
 
+// GET /api/debug — no auth required, for extension connectivity testing
+router.get("/debug", (req, res) => {
+  const origin = req.headers.origin || "none";
+  const ua = req.headers["user-agent"] || "none";
+  res.json({
+    status: "ok",
+    origin,
+    userAgent: ua.substring(0, 100),
+    timestamp: new Date().toISOString(),
+    socketio: !!req.app.get("io"),
+    cors: "allowed",
+  });
+});
+
 // GET /api/stats — requires auth (handled by global middleware)
 router.get("/stats", async (req, res) => {
   try {
