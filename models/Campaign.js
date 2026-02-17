@@ -19,10 +19,10 @@ const CampaignSchema = new mongoose.Schema(
       default: "draft",
     },
     messages: [{ type: String }],
-    sender_ids: [
+    outbound_account_ids: [
       {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "SenderAccount",
+        ref: "OutboundAccount",
       },
     ],
     schedule: {

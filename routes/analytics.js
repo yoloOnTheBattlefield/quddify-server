@@ -143,30 +143,19 @@ router.get("/", async (req, res) => {
     // Fetch outbound leads (skip if source=inbound)
     let obLeads = [];
     if (dataSource !== "inbound") {
-      // Resolve the account ObjectId for campaign lookup
-      let campaignAccountId = req.account._id;
+      // Resolve the account ObjectId for outbound lookup
+      let obAccountId = req.account._id;
       if (account_id && req.user?.role === 0) {
         const targetAccount = await Account.findOne({ ghl: account_id }).lean();
-        if (targetAccount) campaignAccountId = targetAccount._id;
+        if (targetAccount) obAccountId = targetAccount._id;
       }
-      const campaigns = await Campaign.find({ account_id: campaignAccountId }).select("_id").lean();
-      const campaignIds = campaigns.map((c) => c._id);
-      if (campaignIds.length > 0) {
-        const campaignLeads = await CampaignLead.find({
-          campaign_id: { $in: campaignIds },
-          status: "sent",
-        }).select("outbound_lead_id").lean();
-        const obIds = campaignLeads.map((cl) => cl.outbound_lead_id);
-        if (obIds.length > 0) {
-          const obFilter = { _id: { $in: obIds }, isMessaged: true };
-          if (start_date || end_date) {
-            obFilter.dmDate = {};
-            if (start_date) obFilter.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
-            if (end_date) obFilter.dmDate.$lte = new Date(`${end_date}T23:59:59.999Z`);
-          }
-          obLeads = await OutboundLead.find(obFilter).lean();
-        }
+      const obFilter = { account_id: obAccountId, isMessaged: true };
+      if (start_date || end_date) {
+        obFilter.dmDate = {};
+        if (start_date) obFilter.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
+        if (end_date) obFilter.dmDate.$lte = new Date(`${end_date}T23:59:59.999Z`);
       }
+      obLeads = await OutboundLead.find(obFilter).lean();
     }
 
     // Determine date range for daily metrics
@@ -192,6 +181,9 @@ router.get("/", async (req, res) => {
     const linkSentCount = leads.filter((l) => l.link_sent_at).length;
     const linkSentRate =
       totalContacts > 0 ? round2((linkSentCount / totalContacts) * 100) : 0;
+    const linkClickedCount = leads.filter((l) => l.link_clicked_at).length;
+    const linkClickedRate =
+      linkSentCount > 0 ? round2((linkClickedCount / linkSentCount) * 100) : 0;
     const bookedCount = leads.filter((l) => l.booked_at).length;
     const bookingRate =
       linkSentCount > 0 ? round2((bookedCount / linkSentCount) * 100) : 0;
@@ -226,6 +218,8 @@ router.get("/", async (req, res) => {
       totalContacts,
       linkSentCount,
       linkSentRate,
+      linkClickedCount,
+      linkClickedRate,
       bookedCount,
       bookingRate,
       ghostedCount,
@@ -745,7 +739,7 @@ router.get("/senders", async (req, res) => {
 router.get("/campaigns", async (req, res) => {
   try {
     const campaigns = await Campaign.find({ account_id: req.account._id })
-      .select("name status stats sender_ids messages createdAt")
+      .select("name status stats outbound_account_ids messages createdAt")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -772,7 +766,7 @@ router.get("/campaigns", async (req, res) => {
           name: c.name,
           status: c.status,
           stats: c.stats,
-          sender_count: c.sender_ids.length,
+          sender_count: c.outbound_account_ids.length,
           message_count: c.messages.length,
           replied,
           booked,

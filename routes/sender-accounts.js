@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const SenderAccount = require("../models/SenderAccount");
+const OutboundAccount = require("../models/OutboundAccount");
 const Task = require("../models/Task");
 const router = express.Router();
 
@@ -43,10 +44,30 @@ router.get("/", async (req, res) => {
       }
     }
 
-    const enriched = senders.map((s) => ({
-      ...s,
-      upcomingTask: taskBySender[s._id.toString()] || null,
-    }));
+    // Attach outbound account info for linked senders
+    const outboundIds = senders
+      .map((s) => s.outbound_account_id)
+      .filter(Boolean);
+    const outbounds = outboundIds.length
+      ? await OutboundAccount.find(
+          { _id: { $in: outboundIds } },
+          { _id: 1, username: 1, status: 1 },
+        ).lean()
+      : [];
+    const outboundMap = {};
+    for (const ob of outbounds) {
+      outboundMap[ob._id.toString()] = ob;
+    }
+
+    const enriched = senders.map((s) => {
+      const obId = s.outbound_account_id?.toString();
+      return {
+        ...s,
+        upcomingTask: taskBySender[s._id.toString()] || null,
+        outbound_account: obId ? outboundMap[obId] || null : null,
+        link_status: obId ? "linked" : "not_linked",
+      };
+    });
 
     res.json({
       senders: enriched,

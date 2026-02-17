@@ -3,7 +3,6 @@ const mongoose = require("mongoose");
 const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
-const SenderAccount = require("../models/SenderAccount");
 const router = express.Router();
 
 // GET /api/campaigns — list campaigns
@@ -68,7 +67,7 @@ router.get("/:id", async (req, res) => {
 // POST /api/campaigns — create campaign (starts as draft)
 router.post("/", async (req, res) => {
   try {
-    const { name, mode, messages, sender_ids, schedule, daily_limit_per_sender } = req.body;
+    const { name, mode, messages, outbound_account_ids, schedule, daily_limit_per_sender } = req.body;
 
     if (!name) {
       return res.status(400).json({ error: "Campaign name is required" });
@@ -83,7 +82,7 @@ router.post("/", async (req, res) => {
       name,
       mode: mode || "auto",
       messages: messages || [],
-      sender_ids: sender_ids || [],
+      outbound_account_ids: outbound_account_ids || [],
       schedule: schedule || {},
       daily_limit_per_sender: daily_limit_per_sender || 50,
     });
@@ -115,7 +114,7 @@ router.patch("/:id", async (req, res) => {
       return res.status(400).json({ error: "Pause the campaign before editing" });
     }
 
-    const { name, mode, messages, sender_ids, schedule, daily_limit_per_sender } = req.body;
+    const { name, mode, messages, outbound_account_ids, schedule, daily_limit_per_sender } = req.body;
 
     if (mode !== undefined && !["auto", "manual"].includes(mode)) {
       return res.status(400).json({ error: "mode must be 'auto' or 'manual'" });
@@ -124,7 +123,7 @@ router.patch("/:id", async (req, res) => {
     if (name !== undefined) campaign.name = name;
     if (mode !== undefined) campaign.mode = mode;
     if (messages !== undefined) campaign.messages = messages;
-    if (sender_ids !== undefined) campaign.sender_ids = sender_ids;
+    if (outbound_account_ids !== undefined) campaign.outbound_account_ids = outbound_account_ids;
     if (schedule !== undefined) {
       Object.assign(campaign.schedule, schedule);
     }
@@ -199,9 +198,9 @@ router.post("/:id/start", async (req, res) => {
       return res.status(400).json({ error: "Campaign must have at least one message template" });
     }
 
-    // Validate campaign has senders
-    if (!campaign.sender_ids || campaign.sender_ids.length === 0) {
-      return res.status(400).json({ error: "Campaign must have at least one sender assigned" });
+    // Validate campaign has outbound accounts
+    if (!campaign.outbound_account_ids || campaign.outbound_account_ids.length === 0) {
+      return res.status(400).json({ error: "Campaign must have at least one outbound account assigned" });
     }
 
     // Validate campaign has leads

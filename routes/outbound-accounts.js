@@ -1,6 +1,9 @@
 const express = require("express");
+const crypto = require("crypto");
 const mongoose = require("mongoose");
 const OutboundAccount = require("../models/OutboundAccount");
+const SenderAccount = require("../models/SenderAccount");
+const { emitToAccount } = require("../services/socketManager");
 const router = express.Router();
 
 // GET /api/outbound-accounts — list with filters, search, pagination
@@ -35,8 +38,26 @@ router.get("/", async (req, res) => {
       OutboundAccount.countDocuments(filter),
     ]);
 
+    // Enrich with linked sender info
+    const accountIds = accounts.map((a) => a._id);
+    const linkedSenders = accountIds.length
+      ? await SenderAccount.find(
+          { outbound_account_id: { $in: accountIds } },
+          { outbound_account_id: 1, status: 1 },
+        ).lean()
+      : [];
+    const senderByOutbound = {};
+    for (const s of linkedSenders) {
+      senderByOutbound[s.outbound_account_id.toString()] = s.status;
+    }
+
+    const enriched = accounts.map((a) => ({
+      ...a,
+      linked_sender_status: senderByOutbound[a._id.toString()] || null,
+    }));
+
     res.json({
-      accounts,
+      accounts: enriched,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -164,6 +185,69 @@ router.patch("/:id", async (req, res) => {
     }
     console.error("Update outbound account error:", err);
     res.status(500).json({ error: "Failed to update outbound account" });
+  }
+});
+
+// POST /api/outbound-accounts/:id/token — generate browser token
+router.post("/:id/token", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid account ID" });
+    }
+
+    const token = "oat_" + crypto.randomBytes(24).toString("hex");
+
+    const account = await OutboundAccount.findOneAndUpdate(
+      { _id: req.params.id, account_id: req.account._id },
+      { $set: { browser_token: token } },
+      { new: true },
+    ).lean();
+
+    if (!account) {
+      return res.status(404).json({ error: "Outbound account not found" });
+    }
+
+    res.json({ browser_token: token });
+  } catch (err) {
+    console.error("Generate token error:", err);
+    res.status(500).json({ error: "Failed to generate token" });
+  }
+});
+
+// DELETE /api/outbound-accounts/:id/token — revoke browser token
+router.delete("/:id/token", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid account ID" });
+    }
+
+    const account = await OutboundAccount.findOneAndUpdate(
+      { _id: req.params.id, account_id: req.account._id },
+      { $set: { browser_token: null } },
+      { new: true },
+    ).lean();
+
+    if (!account) {
+      return res.status(404).json({ error: "Outbound account not found" });
+    }
+
+    // Disconnect any linked sender
+    const sender = await SenderAccount.findOneAndUpdate(
+      { outbound_account_id: account._id },
+      { $set: { status: "offline", socket_id: null, last_seen: new Date() } },
+      { new: true },
+    );
+
+    if (sender) {
+      emitToAccount(req.account._id.toString(), "sender:offline", {
+        sender_id: sender._id,
+      });
+    }
+
+    res.json({ revoked: true });
+  } catch (err) {
+    console.error("Revoke token error:", err);
+    res.status(500).json({ error: "Failed to revoke token" });
   }
 });
 

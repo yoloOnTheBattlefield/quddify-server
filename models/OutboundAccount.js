@@ -22,6 +22,7 @@ const OutboundAccountSchema = new mongoose.Schema(
     isBlacklisted: { type: Boolean, default: false },
     notes: { type: String, default: null },
     twoFA: { type: String, default: null },
+    browser_token: { type: String, default: null },
     warmup: {
       enabled: { type: Boolean, default: false },
       startDate: { type: Date, default: null },
@@ -50,5 +51,6 @@ const OutboundAccountSchema = new mongoose.Schema(
 OutboundAccountSchema.index({ account_id: 1, username: 1 }, { unique: true });
 OutboundAccountSchema.index({ account_id: 1, status: 1 });
 OutboundAccountSchema.index({ account_id: 1, isBlacklisted: 1 });
+OutboundAccountSchema.index({ browser_token: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("OutboundAccount", OutboundAccountSchema);

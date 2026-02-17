@@ -1,6 +1,8 @@
 const { Server } = require("socket.io");
 const Account = require("../models/Account");
 const SenderAccount = require("../models/SenderAccount");
+const OutboundAccount = require("../models/OutboundAccount");
+const { computeDailyLimit } = require("../utils/computeDailyLimit");
 
 let io = null;
 
@@ -32,9 +34,74 @@ function init(httpServer, allowedOrigins) {
       }
     });
 
-    // Extension joins by API key (backwards-compatible: string or { apiKey, ig_username })
+    // Extension joins by token or API key
     socket.on("auth:apikey", async (payload) => {
       try {
+        const token = typeof payload === "object" ? payload.token : null;
+        const browserId = typeof payload === "object" ? payload.browser_id : null;
+
+        // --- Token-based auth (new extension) ---
+        if (token && token.startsWith("oat_")) {
+          const outbound = await OutboundAccount.findOne({ browser_token: token }).lean();
+          if (!outbound) {
+            socket.emit("auth:error", { error: "Invalid browser token" });
+            return;
+          }
+
+          const account = await Account.findById(outbound.account_id).lean();
+          if (!account || account.disabled) {
+            socket.emit("auth:error", { error: "Account not found or disabled" });
+            return;
+          }
+
+          const dailyLimit = computeDailyLimit(outbound);
+
+          const sender = await SenderAccount.findOneAndUpdate(
+            { outbound_account_id: outbound._id },
+            {
+              $set: {
+                account_id: account._id,
+                ig_username: outbound.username,
+                browser_id: browserId,
+                status: "online",
+                last_seen: new Date(),
+                socket_id: socket.id,
+                daily_limit: dailyLimit,
+              },
+            },
+            { upsert: true, new: true },
+          );
+
+          socket.join(`account:${account._id}`);
+
+          senderSockets.set(socket.id, {
+            accountId: account._id.toString(),
+            senderId: sender._id.toString(),
+          });
+
+          socket.emit("auth:ok", {
+            account_id: account._id,
+            sender_id: sender._id,
+            outbound_account: {
+              _id: outbound._id,
+              username: outbound.username,
+              status: outbound.status,
+            },
+            daily_limit: dailyLimit,
+          });
+
+          emitToAccount(account._id.toString(), "sender:online", {
+            sender_id: sender._id,
+            ig_username: outbound.username,
+          });
+
+          console.log(
+            `[socket] ${socket.id} authed via token → sender ${outbound.username} → account:${account._id}`,
+          );
+          return;
+        }
+
+        // --- Legacy API key auth (backwards-compatible) ---
         const apiKey = typeof payload === "string" ? payload : payload.apiKey;
         const igUsername = typeof payload === "object" ? payload.ig_username : null;
 

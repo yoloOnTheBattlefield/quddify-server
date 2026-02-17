@@ -3,6 +3,9 @@ const mongoose = require("mongoose");
 const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
+const SenderAccount = require("../models/SenderAccount");
+const OutboundAccount = require("../models/OutboundAccount");
+const { computeDailyLimit } = require("../utils/computeDailyLimit");
 const {
   resolveTemplate,
   isWithinActiveHours,
@@ -21,6 +24,12 @@ router.get("/next", async (req, res) => {
       return res.status(400).json({ error: "Valid sender_id is required" });
     }
 
+    // Look up sender early — needed for outbound account resolution
+    const sender = await SenderAccount.findById(sender_id).lean();
+    if (!sender) {
+      return res.json({ status: "idle", reason: "Sender account not found" });
+    }
+
     let campaign;
 
     if (campaign_id) {
@@ -34,12 +43,15 @@ router.get("/next", async (req, res) => {
         status: "active",
       });
     } else {
-      // Auto-detect: find active manual campaign that includes this sender
+      // Auto-detect: resolve sender → outbound account → campaign
+      if (!sender.outbound_account_id) {
+        return res.json({ status: "idle", reason: "Sender not linked to an outbound account" });
+      }
       campaign = await Campaign.findOne({
         account_id: req.account._id,
         mode: "manual",
         status: "active",
-        sender_ids: sender_id,
+        outbound_account_ids: sender.outbound_account_id,
       });
     }
 
@@ -62,18 +74,33 @@ router.get("/next", async (req, res) => {
         });
       }
 
-      // Check daily limit for this sender
+      // Check outbound account daily cap (if sender is linked)
+      let dailyLimit = campaign.daily_limit_per_sender || 50;
+
+      if (sender.outbound_account_id) {
+        const outbound = await OutboundAccount.findById(sender.outbound_account_id).lean();
+        const outboundCap = computeDailyLimit(outbound);
+        if (outboundCap === 0) {
+          return res.json({
+            status: "idle",
+            reason: "Outbound account not ready for sending",
+            outbound_status: outbound?.status,
+          });
+        }
+        // Use the lower of campaign limit and outbound cap
+        dailyLimit = Math.min(dailyLimit, outboundCap);
+      }
+
+      // Check daily limit for this sender (across all campaigns)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
 
       const sentToday = await CampaignLead.countDocuments({
-        campaign_id: campaign._id,
         sender_id,
         status: "sent",
         sent_at: { $gte: todayStart },
       });
 
-      const dailyLimit = campaign.daily_limit_per_sender || 50;
       if (sentToday >= dailyLimit) {
         return res.json({
           status: "idle",

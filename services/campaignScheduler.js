@@ -152,9 +152,9 @@ async function processTick() {
       // Check time window
       if (!isWithinActiveHours(campaign.schedule)) continue;
 
-      // Get ALL senders assigned to this campaign (for round-robin order)
+      // Get ALL senders linked to this campaign's outbound accounts (for round-robin order)
       const allSenders = await SenderAccount.find({
-        _id: { $in: campaign.sender_ids },
+        outbound_account_id: { $in: campaign.outbound_account_ids },
       }).lean();
 
       if (allSenders.length === 0) continue;
@@ -182,13 +182,11 @@ async function processTick() {
           const todayStart = new Date();
           todayStart.setHours(0, 0, 0, 0);
 
-          const outboundAcct = await OutboundAccount.findOne({
-            account_id: campaign.account_id,
-            username: candidate.ig_username,
-            "warmup.enabled": true,
-          }).lean();
+          const outboundAcct = candidate.outbound_account_id
+            ? await OutboundAccount.findById(candidate.outbound_account_id).lean()
+            : null;
 
-          if (outboundAcct) {
+          if (outboundAcct?.warmup?.enabled) {
             const msPerDay = 86400000;
             const warmupDay = Math.floor(
               (Date.now() - new Date(outboundAcct.warmup.startDate).getTime()) / msPerDay,

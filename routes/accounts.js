@@ -245,6 +245,10 @@ router.delete("/team/:id", async (req, res) => {
       return res.status(400).json({ error: "Cannot delete account owner" });
     }
 
+    if (req.user && req.params.id === req.user._id.toString()) {
+      return res.status(400).json({ error: "Cannot delete your own account" });
+    }
+
     await User.findByIdAndDelete(req.params.id);
     res.json({ deleted: true });
   } catch (error) {
@@ -256,12 +260,13 @@ router.delete("/team/:id", async (req, res) => {
 // PATCH /accounts/:id - Update user profile and account info
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, ghl, calendly, openai_token } = req.body;
+    const { first_name, last_name, email, has_outbound, ghl, calendly, openai_token } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
     if (last_name !== undefined) userUpdates.last_name = last_name;
     if (email !== undefined) userUpdates.email = email;
+    if (has_outbound !== undefined) userUpdates.has_outbound = has_outbound;
 
     const accountUpdates = {};
     if (ghl !== undefined) accountUpdates.ghl = ghl;

@@ -13,6 +13,7 @@ const LeadSchema = new mongoose.Schema(
     date_created: { type: String, default: null }, // when the lead entered the system
     ghosted_at: { type: Date, default: null },
     link_sent_at: { type: Date, default: null }, // link was sent
+    link_clicked_at: { type: Date, default: null }, // lead clicked the link and visited the site
     booked_at: { type: Date, default: null }, // booking has been made
     follow_up_at: { type: Date, default: null }, // follow up before sending the link
     low_ticket: { type: Date, default: null },

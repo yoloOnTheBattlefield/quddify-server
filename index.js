@@ -174,6 +174,22 @@ const connectDB = async () => {
     }
 
     await OutboundLead.syncIndexes();
+
+    // SenderAccount: drop old indexes, replace with partial filter indexes
+    const SenderAccount = require("./models/SenderAccount");
+    for (const idx of ["account_id_1_ig_username_1", "account_id_1_browser_id_1"]) {
+      try {
+        await SenderAccount.collection.dropIndex(idx);
+        console.log(`[startup] Dropped old ${idx} index on sender_accounts`);
+      } catch (e) {
+        // Already dropped or doesn't exist — ignore
+      }
+    }
+    await SenderAccount.syncIndexes();
+
+    // OutboundAccount: ensure browser_token index exists
+    const OutboundAccountModel = require("./models/OutboundAccount");
+    await OutboundAccountModel.syncIndexes();
   }
 
   return cachedConnection;
