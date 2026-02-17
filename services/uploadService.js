@@ -5,7 +5,11 @@ const IgAccount = require("../models/IgAccount");
 const Prompt = require("../models/Prompt");
 const { toNumber, toDate, toBoolean } = require("../utils/normalize");
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI });
+let _openai = null;
+function getOpenAI() {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI || "missing" });
+  return _openai;
+}
 
 const FILENAME_REGEX =
   /^(?:follower|following)-of-([A-Za-z0-9._-]+)-(\d{8})\.xlsx$/;
@@ -31,7 +35,7 @@ Return \`Qualified\` if the bio clearly or strongly implies they help others for
 async function qualifyBio(bio, promptText, openaiClient) {
   if (!bio || bio.trim() === "") return "Unqualified";
 
-  const client = openaiClient || openai;
+  const client = openaiClient || getOpenAI();
   const response = await client.chat.completions.create({
     model: "gpt-4.1-mini",
     messages: [

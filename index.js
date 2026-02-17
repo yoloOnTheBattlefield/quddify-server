@@ -1,4 +1,13 @@
 require("dotenv").config();
+
+// Catch unhandled errors so the process doesn't silently die
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught Exception:", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[FATAL] Unhandled Rejection:", err);
+});
+
 const express = require("express");
 const http = require("http");
 const mongoose = require("mongoose");
@@ -195,6 +204,11 @@ const connectDB = async () => {
   return cachedConnection;
 };
 
+// Health check BEFORE DB middleware — Railway health checks must always respond fast
+app.get("/", (req, res) => {
+  res.json({ status: "ok" });
+});
+
 // Middleware to ensure DB connection before any route
 app.use(async (req, res, next) => {
   try {
@@ -204,11 +218,6 @@ app.use(async (req, res, next) => {
     console.error("MongoDB connection error:", err);
     res.status(500).json({ error: "Database connection failed" });
   }
-});
-
-// health check
-app.get("/", (req, res) => {
-  res.json({ status: "ok" });
 });
 
 // Public routes (no auth)
