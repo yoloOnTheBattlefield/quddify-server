@@ -76,6 +76,9 @@ function getMonday(dateStr) {
 }
 
 // Helper: Determine grouping based on range span
+// Minimum valid date — anything before this is treated as corrupt data
+const MIN_VALID_DATE = "2020-01-01";
+
 function getRadarGrouping(rangeStart, rangeEnd) {
   const days = daysBetween(rangeStart, rangeEnd);
   if (days <= 14) return "day";
@@ -124,11 +127,13 @@ router.get("/", async (req, res) => {
     const dataSource = source || "all";
 
     // Build inbound filter using account's GHL location ID
-    // Admins (role 0) can filter by any account
+    // Admins (role 0): no account_id = all accounts; with account_id = that account
+    // Non-admins: always filter by their own account
+    const isAdmin = req.user?.role === 0;
     const filter = {};
-    if (account_id && req.user?.role === 0) {
+    if (isAdmin && account_id) {
       filter.account_id = account_id;
-    } else if (req.account.ghl) {
+    } else if (!isAdmin && req.account.ghl) {
       filter.account_id = req.account.ghl;
     }
     if (start_date || end_date) {
@@ -143,13 +148,18 @@ router.get("/", async (req, res) => {
     // Fetch outbound leads (skip if source=inbound)
     let obLeads = [];
     if (dataSource !== "inbound") {
-      // Resolve the account ObjectId for outbound lookup
-      let obAccountId = req.account._id;
-      if (account_id && req.user?.role === 0) {
+      const obFilter = { isMessaged: true };
+
+      if (isAdmin && account_id) {
+        // Admin filtering by specific account — resolve GHL to ObjectId
         const targetAccount = await Account.findOne({ ghl: account_id }).lean();
-        if (targetAccount) obAccountId = targetAccount._id;
+        if (targetAccount) obFilter.account_id = targetAccount._id;
+      } else if (!isAdmin) {
+        // Non-admin — always filter by own account
+        obFilter.account_id = req.account._id;
       }
-      const obFilter = { account_id: obAccountId, isMessaged: true };
+      // Admin with no account_id — no account filter = all outbound leads
+
       if (start_date || end_date) {
         obFilter.dmDate = {};
         if (start_date) obFilter.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
@@ -164,7 +174,7 @@ router.get("/", async (req, res) => {
     if (!rangeStart || !rangeEnd) {
       const inboundDates = leads.map((l) => toDateString(l.date_created)).filter(Boolean);
       const outboundDates = obLeads.map((l) => toDateString(l.dmDate)).filter(Boolean);
-      const allDates = [...inboundDates, ...outboundDates];
+      const allDates = [...inboundDates, ...outboundDates].filter((d) => d >= MIN_VALID_DATE);
       if (allDates.length > 0) {
         allDates.sort();
         rangeStart = rangeStart || allDates[0];
@@ -466,8 +476,19 @@ router.get("/", async (req, res) => {
     });
 
     // 8. RADAR — leads & link_sent grouped dynamically (day/week/month)
-    const grouping = getRadarGrouping(rangeStart, rangeEnd);
-    const radarBuckets = getRadarBucketRange(rangeStart, rangeEnd, grouping);
+    // For large ranges (> 12 months), cap to last 12 months so radar stays readable
+    let radarStart = rangeStart < MIN_VALID_DATE ? MIN_VALID_DATE : rangeStart;
+    const radarEnd = rangeEnd;
+    const radarDays = daysBetween(radarStart, radarEnd);
+    if (radarDays > 365) {
+      const twelveMonthsAgo = new Date(radarEnd + "T00:00:00Z");
+      twelveMonthsAgo.setUTCMonth(twelveMonthsAgo.getUTCMonth() - 12);
+      twelveMonthsAgo.setUTCDate(1);
+      radarStart = twelveMonthsAgo.toISOString().slice(0, 10);
+    }
+
+    const grouping = getRadarGrouping(radarStart, radarEnd);
+    const radarBuckets = getRadarBucketRange(radarStart, radarEnd, grouping);
 
     // Initialize all buckets with zeros
     const radarMap = {};
@@ -479,6 +500,7 @@ router.get("/", async (req, res) => {
       const created = lead.date_created;
       if (!created) continue;
       const dateStr = String(created).slice(0, 10);
+      if (dateStr < radarStart || dateStr > radarEnd) continue;
       const key = getRadarBucketKey(dateStr, grouping);
       if (!radarMap[key]) radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0, ob_messaged: 0, ob_replied: 0, ob_booked: 0 };
       radarMap[key].leads++;
@@ -493,7 +515,7 @@ router.get("/", async (req, res) => {
       const dmDate = lead.dmDate;
       if (!dmDate) continue;
       const dateStr = toDateString(dmDate);
-      if (!dateStr) continue;
+      if (!dateStr || dateStr < radarStart || dateStr > radarEnd) continue;
       const key = getRadarBucketKey(dateStr, grouping);
       if (!radarMap[key]) radarMap[key] = { leads: 0, link_sent: 0, booked: 0, ghosted: 0, follow_up: 0, ob_messaged: 0, ob_replied: 0, ob_booked: 0 };
       radarMap[key].ob_messaged++;
