@@ -1,6 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const Account = require("../models/Account");
 const User = require("../models/User");
 const Lead = require("../models/Lead");
