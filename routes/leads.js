@@ -7,9 +7,12 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   const { status, start_date, end_date, search, page, limit, account_id } = req.query;
   const filter = {};
-  // Admins (role 0) can filter by any account; others see only their own
+  // Admins (role 0) can filter by any account or see all; others see only their own
   if (account_id && req.user?.role === 0) {
-    filter.account_id = account_id;
+    if (account_id !== "all") {
+      filter.account_id = account_id;
+    }
+    // account_id === "all" → no filter = all accounts
   } else if (req.account.ghl) {
     filter.account_id = req.account.ghl;
   }
