@@ -5,7 +5,7 @@ const router = express.Router();
 
 // get all leads (optionally filter by account_id/ghl, status, date range, search, and paginate)
 router.get("/", async (req, res) => {
-  const { status, start_date, end_date, search, page, limit, account_id } = req.query;
+  const { status, start_date, end_date, search, page, limit, account_id, sort_by, sort_order } = req.query;
   const filter = {};
   // Admins (role 0) can filter by any account or see all; others see only their own
   if (account_id && req.user?.role === 0) {
@@ -31,13 +31,18 @@ router.get("/", async (req, res) => {
     if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
   }
 
+  // Sorting
+  const allowedSortFields = ["date_created", "link_sent_at", "booked_at"];
+  const sortField = allowedSortFields.includes(sort_by) ? sort_by : "date_created";
+  const sortDir = sort_order === "asc" ? 1 : -1;
+
   // Pagination
   const pageNum = parseInt(page, 10) || 1;
   const limitNum = parseInt(limit, 10) || 20;
   const skip = (pageNum - 1) * limitNum;
 
   const [leads, total] = await Promise.all([
-    Lead.find(filter).sort({ date_created: -1 }).skip(skip).limit(limitNum).lean(),
+    Lead.find(filter).sort({ [sortField]: sortDir }).skip(skip).limit(limitNum).lean(),
     Lead.countDocuments(filter),
   ]);
 
