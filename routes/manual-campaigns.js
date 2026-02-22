@@ -156,7 +156,7 @@ router.get("/next", async (req, res) => {
         $set: { status: "skipped", error: "Outbound lead not found" },
       });
       await Campaign.findByIdAndUpdate(campaign._id, {
-        $inc: { "stats.queued": -1, "stats.skipped": 1, "stats.pending": -1 },
+        $inc: { "stats.skipped": 1, "stats.pending": -1 },
       });
       return res.json({ status: "skipped", reason: "Lead not found" });
     }
@@ -167,7 +167,7 @@ router.get("/next", async (req, res) => {
         $set: { status: "skipped", error: "Lead already messaged" },
       });
       await Campaign.findByIdAndUpdate(campaign._id, {
-        $inc: { "stats.queued": -1, "stats.skipped": 1, "stats.pending": -1 },
+        $inc: { "stats.skipped": 1, "stats.pending": -1 },
       });
       return res.json({ status: "skipped", reason: "Already messaged" });
     }
@@ -177,11 +177,11 @@ router.get("/next", async (req, res) => {
     const template = campaign.messages[messageIndex];
     const message = resolveTemplate(template, outboundLead);
 
-    // Update campaign tracking
-    campaign.last_message_index = (messageIndex + 1) % campaign.messages.length;
-    campaign.stats.pending -= 1;
-    campaign.stats.queued += 1;
-    await campaign.save();
+    // Update campaign tracking (atomic $inc to avoid race conditions)
+    await Campaign.findByIdAndUpdate(campaign._id, {
+      $inc: { "stats.pending": -1, "stats.queued": 1 },
+      $set: { last_message_index: (messageIndex + 1) % campaign.messages.length },
+    });
 
     // Store the message and template index on the campaign lead
     await CampaignLead.findByIdAndUpdate(campaignLead._id, {
@@ -242,24 +242,22 @@ router.post("/confirm", async (req, res) => {
       $set: { isMessaged: true },
     });
 
-    // Update campaign stats + last_sent_at
-    const campaign = await Campaign.findById(campaignLead.campaign_id);
-    if (campaign) {
-      campaign.stats.queued -= 1;
-      campaign.stats.sent += 1;
-      campaign.last_sent_at = new Date();
-      await campaign.save();
+    // Update campaign stats + last_sent_at (atomic)
+    await Campaign.findByIdAndUpdate(campaignLead.campaign_id, {
+      $inc: { "stats.queued": -1, "stats.sent": 1 },
+      $set: { last_sent_at: new Date() },
+    });
 
-      // Auto-complete check
-      const remaining = await CampaignLead.countDocuments({
-        campaign_id: campaign._id,
-        status: { $in: ["pending", "queued"] },
+    // Auto-complete check
+    const remaining = await CampaignLead.countDocuments({
+      campaign_id: campaignLead.campaign_id,
+      status: { $in: ["pending", "queued"] },
+    });
+
+    if (remaining === 0) {
+      await Campaign.findByIdAndUpdate(campaignLead.campaign_id, {
+        $set: { status: "completed" },
       });
-
-      if (remaining === 0) {
-        campaign.status = "completed";
-        await campaign.save();
-      }
     }
 
     res.json({ success: true });
@@ -292,23 +290,21 @@ router.post("/skip", async (req, res) => {
     campaignLead.error = reason || "Skipped by VA";
     await campaignLead.save();
 
-    // Update campaign stats
-    const campaign = await Campaign.findById(campaignLead.campaign_id);
-    if (campaign) {
-      campaign.stats.queued -= 1;
-      campaign.stats.skipped += 1;
-      await campaign.save();
+    // Update campaign stats (atomic)
+    await Campaign.findByIdAndUpdate(campaignLead.campaign_id, {
+      $inc: { "stats.queued": -1, "stats.skipped": 1 },
+    });
 
-      // Auto-complete check
-      const remaining = await CampaignLead.countDocuments({
-        campaign_id: campaign._id,
-        status: { $in: ["pending", "queued"] },
+    // Auto-complete check
+    const remaining = await CampaignLead.countDocuments({
+      campaign_id: campaignLead.campaign_id,
+      status: { $in: ["pending", "queued"] },
+    });
+
+    if (remaining === 0) {
+      await Campaign.findByIdAndUpdate(campaignLead.campaign_id, {
+        $set: { status: "completed" },
       });
-
-      if (remaining === 0) {
-        campaign.status = "completed";
-        await campaign.save();
-      }
     }
 
     res.json({ success: true });

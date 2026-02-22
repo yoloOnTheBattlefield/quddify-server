@@ -23,6 +23,7 @@ const SenderAccountSchema = new mongoose.Schema(
     },
     restricted_until: { type: Date, default: null },
     restriction_reason: { type: String, default: null },
+    test_mode: { type: Boolean, default: false },
     last_seen: { type: Date, default: null },
     socket_id: { type: String, default: null },
   },

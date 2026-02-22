@@ -159,6 +159,12 @@ router.post("/login", async (req, res) => {
     ghl_lead_booked_webhook: account.ghl_lead_booked_webhook,
     openai_token: account.openai_token,
     api_key: account.api_key,
+    ig_session_set: !!(account.ig_session?.session_id) || (account.ig_sessions && account.ig_sessions.length > 0),
+    ig_username: account.ig_session?.ig_username || null,
+    ig_sessions: (account.ig_sessions || []).map((s) => ({
+      ig_username: s.ig_username,
+      has_cookies: !!(s.session_id && s.csrf_token && s.ds_user_id),
+    })),
   });
 });
 
@@ -257,10 +263,136 @@ router.delete("/team/:id", async (req, res) => {
   }
 });
 
+// GET /accounts/ig-sessions - List IG session profiles for current account
+router.get("/ig-sessions", async (req, res) => {
+  try {
+    const account = await Account.findById(req.account._id).lean();
+    if (!account) return res.status(404).json({ error: "Account not found" });
+
+    // Return ig_sessions array, plus legacy ig_session if it has cookies and isn't already in the array
+    const sessions = (account.ig_sessions || []).map((s) => ({
+      ig_username: s.ig_username,
+      has_cookies: !!(s.session_id && s.csrf_token && s.ds_user_id),
+      added_at: s.added_at,
+    }));
+
+    // Include legacy ig_session if it exists and isn't already in ig_sessions
+    const legacy = account.ig_session;
+    if (legacy && legacy.session_id && legacy.ig_username) {
+      const alreadyInArray = sessions.some(
+        (s) => s.ig_username === legacy.ig_username,
+      );
+      if (!alreadyInArray) {
+        sessions.unshift({
+          ig_username: legacy.ig_username,
+          has_cookies: !!(legacy.session_id && legacy.csrf_token && legacy.ds_user_id),
+          added_at: null,
+        });
+      }
+    }
+
+    res.json({ ig_sessions: sessions });
+  } catch (error) {
+    console.error("Get IG sessions error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /accounts/ig-sessions - Add or update an IG session profile
+router.post("/ig-sessions", async (req, res) => {
+  try {
+    const { ig_username, cookies } = req.body;
+
+    if (!ig_username) {
+      return res.status(400).json({ error: "ig_username is required" });
+    }
+    if (!cookies || !Array.isArray(cookies)) {
+      return res.status(400).json({ error: "cookies must be a JSON array" });
+    }
+
+    const username = ig_username.replace(/^@/, "").trim();
+    const find = (name) => {
+      const c = cookies.find((c) => c.name === name);
+      return c ? c.value : null;
+    };
+    const session_id = find("sessionid");
+    const csrf_token = find("csrftoken");
+    const ds_user_id = find("ds_user_id");
+
+    if (!session_id) {
+      return res.status(400).json({ error: "sessionid cookie not found in array" });
+    }
+
+    const account = await Account.findById(req.account._id);
+    if (!account) return res.status(404).json({ error: "Account not found" });
+
+    if (!account.ig_sessions) account.ig_sessions = [];
+
+    // Update if username already exists, otherwise push
+    const existingIdx = account.ig_sessions.findIndex(
+      (s) => s.ig_username === username,
+    );
+    const entry = { ig_username: username, session_id, csrf_token, ds_user_id, added_at: new Date() };
+
+    if (existingIdx >= 0) {
+      account.ig_sessions[existingIdx] = entry;
+    } else {
+      account.ig_sessions.push(entry);
+    }
+
+    await account.save();
+
+    res.json({
+      success: true,
+      ig_session: { ig_username: username, has_cookies: true, added_at: entry.added_at },
+    });
+  } catch (error) {
+    console.error("Add IG session error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /accounts/ig-sessions/:username - Remove an IG session profile
+router.delete("/ig-sessions/:username", async (req, res) => {
+  try {
+    const username = req.params.username.replace(/^@/, "").trim();
+
+    const account = await Account.findById(req.account._id);
+    if (!account) return res.status(404).json({ error: "Account not found" });
+
+    if (!account.ig_sessions || account.ig_sessions.length === 0) {
+      return res.status(404).json({ error: "No IG sessions found" });
+    }
+
+    const before = account.ig_sessions.length;
+    account.ig_sessions = account.ig_sessions.filter(
+      (s) => s.ig_username !== username,
+    );
+
+    if (account.ig_sessions.length === before) {
+      return res.status(404).json({ error: "Session not found for this username" });
+    }
+
+    account.markModified("ig_sessions");
+
+    // Also clear legacy ig_session if it matches
+    if (account.ig_session && account.ig_session.ig_username === username) {
+      account.ig_session = { ig_username: null, session_id: null, csrf_token: null, ds_user_id: null };
+      account.markModified("ig_session");
+    }
+
+    await account.save();
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Delete IG session error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // PATCH /accounts/:id - Update user profile and account info
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, has_outbound, ghl, calendly, openai_token } = req.body;
+    const { first_name, last_name, email, has_outbound, ghl, calendly, openai_token, apify_token, ig_session, ig_username, ig_proxy } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
@@ -272,6 +404,28 @@ router.patch("/:id", async (req, res) => {
     if (ghl !== undefined) accountUpdates.ghl = ghl;
     if (calendly !== undefined) accountUpdates.calendly = calendly;
     if (openai_token !== undefined) accountUpdates.openai_token = openai_token;
+    if (apify_token !== undefined) accountUpdates.apify_token = apify_token;
+    if (ig_proxy !== undefined) accountUpdates.ig_proxy = ig_proxy || null;
+    if (ig_session !== undefined) {
+      // Accept either { session_id, csrf_token, ds_user_id } or a raw cookie array export
+      if (Array.isArray(ig_session)) {
+        const find = (name) => {
+          const c = ig_session.find((c) => c.name === name);
+          return c ? c.value : null;
+        };
+        accountUpdates.ig_session = {
+          ig_username: ig_username || null,
+          session_id: find("sessionid"),
+          csrf_token: find("csrftoken"),
+          ds_user_id: find("ds_user_id"),
+        };
+      } else {
+        if (ig_username !== undefined) ig_session.ig_username = ig_username;
+        accountUpdates.ig_session = ig_session;
+      }
+    } else if (ig_username !== undefined) {
+      accountUpdates["ig_session.ig_username"] = ig_username;
+    }
 
     if (Object.keys(userUpdates).length === 0 && Object.keys(accountUpdates).length === 0) {
       return res.status(400).json({ error: "No fields to update" });
@@ -313,7 +467,14 @@ router.patch("/:id", async (req, res) => {
       calendly: updatedAccount.calendly,
       ghl_lead_booked_webhook: updatedAccount.ghl_lead_booked_webhook,
       openai_token: updatedAccount.openai_token,
+      apify_token: updatedAccount.apify_token,
       api_key: updatedAccount.api_key,
+      ig_session_set: !!(updatedAccount.ig_session?.session_id) || (updatedAccount.ig_sessions && updatedAccount.ig_sessions.length > 0),
+      ig_username: updatedAccount.ig_session?.ig_username || null,
+      ig_sessions: (updatedAccount.ig_sessions || []).map((s) => ({
+        ig_username: s.ig_username,
+        has_cookies: !!(s.session_id && s.csrf_token && s.ds_user_id),
+      })),
     });
   } catch (error) {
     console.error("Account update error:", error);

@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
+const SenderAccount = require("../models/SenderAccount");
+const { isWithinActiveHours, calculateDelay } = require("../services/campaignScheduler");
 const router = express.Router();
 
 // GET /api/campaigns — list campaigns
@@ -38,6 +40,99 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("List campaigns error:", err);
     res.status(500).json({ error: "Failed to list campaigns" });
+  }
+});
+
+// GET /api/campaigns/:id/next-send — estimate next send time
+router.get("/:id/next-send", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    if (campaign.status !== "active") {
+      return res.json({
+        status: campaign.status,
+        next_send_at: null,
+        delay_seconds: null,
+        last_sent_at: campaign.last_sent_at || null,
+        reason: `Campaign is ${campaign.status}`,
+      });
+    }
+
+    // Check active hours
+    const withinHours = isWithinActiveHours(campaign.schedule);
+
+    // Count senders linked to this campaign
+    const senders = await SenderAccount.find({
+      outbound_account_id: { $in: campaign.outbound_account_ids },
+    }).lean();
+
+    const onlineSenders = senders.filter((s) => s.status === "online");
+    const isTestMode = onlineSenders.some((s) => s.test_mode);
+
+    if (senders.length === 0) {
+      return res.json({
+        status: "active",
+        next_send_at: null,
+        delay_seconds: null,
+        last_sent_at: campaign.last_sent_at || null,
+        within_active_hours: withinHours,
+        online_senders: 0,
+        total_senders: 0,
+        reason: "No sender accounts linked",
+      });
+    }
+
+    // Use base delay without jitter so the estimate is stable across polls
+    const activeHours =
+      (campaign.schedule.active_hours_end || 21) - (campaign.schedule.active_hours_start || 9);
+    const totalDailyMessages =
+      (campaign.daily_limit_per_sender || 50) * Math.max(senders.length, 1);
+    const delaySec = isTestMode ? 30 : Math.max(Math.round((activeHours * 3600) / totalDailyMessages), 30);
+
+    let nextSendAt = null;
+    let reason = null;
+
+    if (!isTestMode && !withinHours) {
+      reason = "Outside active hours";
+    } else if (onlineSenders.length === 0) {
+      reason = "No senders online";
+    } else if (campaign.stats.pending === 0) {
+      reason = "No pending leads";
+    } else if (campaign.last_sent_at) {
+      const elapsed = (Date.now() - new Date(campaign.last_sent_at).getTime()) / 1000;
+      const remaining = isTestMode ? 0 : Math.max(0, delaySec - elapsed);
+      nextSendAt = new Date(Date.now() + remaining * 1000).toISOString();
+    } else {
+      // Never sent — next tick will send
+      nextSendAt = new Date().toISOString();
+    }
+
+    res.json({
+      status: "active",
+      next_send_at: nextSendAt,
+      delay_seconds: delaySec,
+      last_sent_at: campaign.last_sent_at || null,
+      within_active_hours: isTestMode || withinHours,
+      online_senders: onlineSenders.length,
+      total_senders: senders.length,
+      pending_leads: campaign.stats.pending,
+      reason,
+      test_mode: isTestMode,
+    });
+  } catch (err) {
+    console.error("Next send estimate error:", err);
+    res.status(500).json({ error: "Failed to compute next send estimate" });
   }
 });
 
@@ -276,6 +371,117 @@ router.get("/:id/stats", async (req, res) => {
   }
 });
 
+// POST /api/campaigns/:id/recalc-stats — recompute stats from actual CampaignLead statuses
+router.post("/:id/recalc-stats", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const counts = await CampaignLead.aggregate([
+      { $match: { campaign_id: campaign._id } },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]);
+
+    const stats = { total: 0, pending: 0, queued: 0, sent: 0, failed: 0, skipped: 0 };
+    for (const c of counts) {
+      if (stats.hasOwnProperty(c._id)) stats[c._id] = c.count;
+      stats.total += c.count;
+    }
+
+    campaign.stats = stats;
+    await campaign.save();
+
+    res.json(stats);
+  } catch (err) {
+    console.error("Campaign recalc-stats error:", err);
+    res.status(500).json({ error: "Failed to recalculate stats" });
+  }
+});
+
+// POST /api/campaigns/:id/leads/retry — retry failed/skipped leads
+router.post("/:id/leads/retry", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const { lead_ids } = req.body;
+
+    if (!Array.isArray(lead_ids) || lead_ids.length === 0) {
+      return res.status(400).json({ error: "lead_ids array is required" });
+    }
+
+    // Count how many are failed vs skipped before updating
+    const counts = await CampaignLead.aggregate([
+      {
+        $match: {
+          _id: { $in: lead_ids.map((id) => new mongoose.Types.ObjectId(id)) },
+          campaign_id: campaign._id,
+          status: { $in: ["failed", "skipped"] },
+        },
+      },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]);
+
+    const failedCount = counts.find((c) => c._id === "failed")?.count || 0;
+    const skippedCount = counts.find((c) => c._id === "skipped")?.count || 0;
+    const totalRetried = failedCount + skippedCount;
+
+    if (totalRetried === 0) {
+      return res.json({ retried: 0 });
+    }
+
+    // Reset leads to pending
+    await CampaignLead.updateMany(
+      {
+        _id: { $in: lead_ids },
+        campaign_id: campaign._id,
+        status: { $in: ["failed", "skipped"] },
+      },
+      {
+        $set: { status: "pending", sender_id: null, queued_at: null, task_id: null, error: null, message_used: null, template_index: null },
+      },
+    );
+
+    // Adjust stats accurately
+    const statsInc = { "stats.pending": totalRetried };
+    if (failedCount > 0) statsInc["stats.failed"] = -failedCount;
+    if (skippedCount > 0) statsInc["stats.skipped"] = -skippedCount;
+    const update = { $inc: statsInc };
+
+    // If campaign was completed, move it back to paused so user can re-activate
+    if (campaign.status === "completed") {
+      update.$set = { status: "paused" };
+    }
+
+    await Campaign.findByIdAndUpdate(campaign._id, update);
+
+    res.json({ retried: totalRetried, statusChanged: campaign.status === "completed" ? "paused" : null });
+  } catch (err) {
+    console.error("Retry campaign leads error:", err);
+    res.status(500).json({ error: "Failed to retry leads" });
+  }
+});
+
 // POST /api/campaigns/:id/leads — add outbound lead IDs to campaign
 router.post("/:id/leads", async (req, res) => {
   try {
@@ -318,10 +524,12 @@ router.post("/:id/leads", async (req, res) => {
       }
     }
 
-    // Update campaign stats
-    await Campaign.findByIdAndUpdate(campaign._id, {
-      $inc: { "stats.total": inserted, "stats.pending": inserted },
-    });
+    // Update campaign stats + move completed → paused so user can re-activate
+    const update = { $inc: { "stats.total": inserted, "stats.pending": inserted } };
+    if (inserted > 0 && campaign.status === "completed") {
+      update.$set = { status: "paused" };
+    }
+    await Campaign.findByIdAndUpdate(campaign._id, update);
 
     res.status(201).json({ added: inserted, duplicates_skipped: lead_ids.length - inserted });
   } catch (err) {
@@ -414,6 +622,87 @@ router.get("/:id/leads", async (req, res) => {
   } catch (err) {
     console.error("List campaign leads error:", err);
     res.status(500).json({ error: "Failed to list leads" });
+  }
+});
+
+// POST /api/campaigns/:id/duplicate — duplicate a campaign with optional lead copy
+router.post("/:id/duplicate", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const source = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!source) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // lead_filter: "none" | "all" | "pending" | "failed" | "skipped" | "sent"
+    const { lead_filter = "none" } = req.body;
+    const validFilters = ["none", "all", "pending", "failed", "skipped", "sent"];
+    if (!validFilters.includes(lead_filter)) {
+      return res.status(400).json({ error: `Invalid lead_filter. Must be one of: ${validFilters.join(", ")}` });
+    }
+
+    // Create the new campaign (draft, reset tracking fields)
+    const newCampaign = await Campaign.create({
+      account_id: req.account._id,
+      name: `${source.name} (Copy)`,
+      mode: source.mode,
+      status: "draft",
+      messages: source.messages,
+      outbound_account_ids: source.outbound_account_ids,
+      schedule: source.schedule,
+      daily_limit_per_sender: source.daily_limit_per_sender,
+      stats: { total: 0, pending: 0, queued: 0, sent: 0, failed: 0, skipped: 0 },
+    });
+
+    let leadsCopied = 0;
+
+    if (lead_filter !== "none") {
+      const leadQuery = { campaign_id: source._id };
+      if (lead_filter !== "all") {
+        leadQuery.status = lead_filter;
+      }
+
+      const sourceLeads = await CampaignLead.find(leadQuery).lean();
+
+      if (sourceLeads.length > 0) {
+        const docs = sourceLeads.map((l) => ({
+          campaign_id: newCampaign._id,
+          outbound_lead_id: l.outbound_lead_id,
+          status: "pending",
+        }));
+
+        try {
+          const result = await CampaignLead.insertMany(docs, { ordered: false });
+          leadsCopied = result.length;
+        } catch (err) {
+          if (err.code === 11000 || err.insertedDocs) {
+            leadsCopied = err.insertedDocs?.length || 0;
+          } else {
+            throw err;
+          }
+        }
+
+        // Update stats on new campaign
+        await Campaign.findByIdAndUpdate(newCampaign._id, {
+          $set: { "stats.total": leadsCopied, "stats.pending": leadsCopied },
+        });
+      }
+    }
+
+    res.status(201).json({
+      campaign: { ...newCampaign.toObject(), stats: { total: leadsCopied, pending: leadsCopied, queued: 0, sent: 0, failed: 0, skipped: 0 } },
+      leads_copied: leadsCopied,
+    });
+  } catch (err) {
+    console.error("Duplicate campaign error:", err);
+    res.status(500).json({ error: "Failed to duplicate campaign" });
   }
 });
 

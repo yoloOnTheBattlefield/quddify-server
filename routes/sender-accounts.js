@@ -125,7 +125,7 @@ router.post("/", async (req, res) => {
 // POST /api/sender-accounts/heartbeat — extension pings every 15s
 router.post("/heartbeat", async (req, res) => {
   try {
-    const { sender_id } = req.body;
+    const { sender_id, test_mode } = req.body;
 
     if (!sender_id || !mongoose.Types.ObjectId.isValid(sender_id)) {
       return res.status(400).json({ error: "Valid sender_id is required" });
@@ -133,7 +133,7 @@ router.post("/heartbeat", async (req, res) => {
 
     const sender = await SenderAccount.findOneAndUpdate(
       { _id: sender_id, account_id: req.account._id },
-      { $set: { status: "online", last_seen: new Date() } },
+      { $set: { status: "online", last_seen: new Date(), test_mode: !!test_mode } },
       { new: true },
     ).lean();
 

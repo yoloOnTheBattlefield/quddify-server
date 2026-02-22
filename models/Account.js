@@ -11,6 +11,23 @@ const AccountSchema = new mongoose.Schema(
     api_key: { type: String, unique: true, sparse: true },
     tracking_enabled: { type: Boolean, default: false },
     tracking_conversion_rules: [{ type: String }],
+    ig_session: {
+      ig_username: { type: String, default: null },
+      session_id: { type: String, default: null },
+      csrf_token: { type: String, default: null },
+      ds_user_id: { type: String, default: null },
+    },
+    ig_sessions: [
+      {
+        ig_username: { type: String, required: true },
+        session_id: { type: String },
+        csrf_token: { type: String },
+        ds_user_id: { type: String },
+        added_at: { type: Date, default: Date.now },
+      },
+    ],
+    ig_proxy: { type: String, default: null },
+    apify_token: { type: String, default: null },
   },
   { collection: "accounts", versionKey: false },
 );

@@ -23,8 +23,13 @@ const OutboundLeadSchema = new mongoose.Schema(
     message: { type: String, default: null },
     ig_thread_id: { type: String, default: null },
     replied: { type: Boolean, default: false },
+    replied_at: { type: Date, default: null },
     booked: { type: Boolean, default: false },
     contract_value: { type: Number, default: null },
+    qualified: { type: Boolean, default: null },
+    unqualified_reason: { type: String, default: null },
+    ai_processed: { type: Boolean, default: false },
+    source_seeds: [{ type: String }],
     metadata: {
       source: { type: String },
       executionId: { type: String },

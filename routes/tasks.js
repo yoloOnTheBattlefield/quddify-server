@@ -4,10 +4,7 @@ const Task = require("../models/Task");
 const OutboundLead = require("../models/OutboundLead");
 const CampaignLead = require("../models/CampaignLead");
 const Campaign = require("../models/Campaign");
-const SenderAccount = require("../models/SenderAccount");
 const { emitToAccount } = require("../services/socketManager");
-
-const RESTRICTION_ERROR_TYPES = ["IG_RESTRICTED", "RATE_LIMITED", "ACTION_BLOCKED", "CHALLENGE_REQUIRED"];
 
 const router = express.Router();
 
@@ -162,26 +159,6 @@ router.post("/:taskId/failed", async (req, res) => {
       });
     }
 
-    // If IG restriction detected, mark sender as restricted for 24 hours
-    if (task.sender_id && RESTRICTION_ERROR_TYPES.includes(errorType)) {
-      const restrictedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      await SenderAccount.findByIdAndUpdate(task.sender_id, {
-        $set: {
-          status: "restricted",
-          restricted_until: restrictedUntil,
-          restriction_reason: errorMsg || errorType,
-        },
-      });
-
-      emitToAccount(req.account._id.toString(), "sender:restricted", {
-        sender_id: task.sender_id,
-        restricted_until: restrictedUntil,
-        reason: errorMsg || errorType,
-      });
-
-      console.log(`[tasks] Sender ${task.sender_id} restricted until ${restrictedUntil} (${errorType})`);
-    }
-
     emitToAccount(req.account._id.toString(), "task:failed", {
       _id: task._id,
       target: task.target,
@@ -270,6 +247,48 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("List tasks error:", err);
     res.status(500).json({ error: "Failed to list tasks" });
+  }
+});
+
+// POST /api/tasks/reset-stuck — reset all stuck tasks + their campaign leads
+router.post("/reset-stuck", async (req, res) => {
+  try {
+    const stuckTasks = await Task.find({
+      account_id: req.account._id,
+      status: { $in: ["pending", "in_progress"] },
+    }).lean();
+
+    if (stuckTasks.length === 0) {
+      return res.json({ reset: 0, message: "No stuck tasks found" });
+    }
+
+    let resetCount = 0;
+
+    for (const task of stuckTasks) {
+      await Task.findByIdAndUpdate(task._id, {
+        $set: { status: "failed", error: "Manually reset", failedAt: new Date() },
+      });
+
+      if (task.campaign_lead_id) {
+        const resetResult = await CampaignLead.findOneAndUpdate(
+          { _id: task.campaign_lead_id, status: "queued" },
+          { $set: { status: "pending", sender_id: null, queued_at: null, task_id: null } },
+        );
+
+        if (resetResult && task.campaign_id) {
+          await Campaign.findByIdAndUpdate(task.campaign_id, {
+            $inc: { "stats.queued": -1, "stats.pending": 1 },
+          });
+        }
+      }
+
+      resetCount++;
+    }
+
+    res.json({ reset: resetCount, message: `Reset ${resetCount} stuck task(s)` });
+  } catch (err) {
+    console.error("Reset stuck tasks error:", err);
+    res.status(500).json({ error: "Failed to reset stuck tasks" });
   }
 });
 

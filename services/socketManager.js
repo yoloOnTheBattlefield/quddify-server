@@ -197,9 +197,20 @@ function init(httpServer, allowedOrigins) {
 }
 
 function emitToAccount(accountId, event, data) {
-  if (io) {
-    io.to(`account:${accountId}`).emit(event, data);
+  if (!io) return false;
+
+  const room = `account:${accountId}`;
+  const sockets = io.sockets.adapter.rooms.get(room);
+  const memberCount = sockets ? sockets.size : 0;
+
+  io.to(room).emit(event, data);
+
+  if (memberCount === 0) {
+    console.warn(`[socket] emitToAccount: no sockets in room ${room} for event ${event}`);
+    return false;
   }
+
+  return true;
 }
 
 function emitToSender(senderId, event, data) {

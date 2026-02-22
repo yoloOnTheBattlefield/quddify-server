@@ -80,15 +80,6 @@ async function checkStaleSenders() {
     console.log(`[scheduler] Auto-completed warmup for ${warmupToComplete.length} account(s)`);
   }
 
-  // Auto-unrestrict senders whose cooldown has expired
-  const now = new Date();
-  const unrestricted = await SenderAccount.updateMany(
-    { status: "restricted", restricted_until: { $lte: now } },
-    { $set: { status: "offline", restricted_until: null, restriction_reason: null } },
-  );
-  if (unrestricted.modifiedCount > 0) {
-    console.log(`[scheduler] Unrestricted ${unrestricted.modifiedCount} sender(s) after cooldown`);
-  }
 }
 
 async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, sender_id, account_id, target, message, template_index }) {
@@ -111,9 +102,14 @@ async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, send
   });
 
   // Notify extension via websocket
-  emitToAccount(account_id, "task:new", task);
+  const delivered = emitToAccount(account_id, "task:new", task);
 
-  console.log(`[scheduler] Task created for ${target} → sender ${sender_id}`);
+  if (!delivered) {
+    // No sockets in room — fail the task so stale cleanup can retry the lead
+    console.warn(`[scheduler] No connected sockets for account ${account_id} — task ${task._id} will be retried by stale cleanup`);
+  }
+
+  console.log(`[scheduler] Task created for ${target} → sender ${sender_id} (delivered: ${delivered})`);
 }
 
 async function processTick() {
@@ -124,33 +120,72 @@ async function processTick() {
   const staleThresholdManual = new Date(Date.now() - 10 * 60 * 1000);
   const manualCampaigns = await Campaign.find({ mode: "manual", status: "active" }).lean();
   for (const mc of manualCampaigns) {
-    const staleLeads = await CampaignLead.find({
-      campaign_id: mc._id,
-      status: "queued",
-      queued_at: { $lt: staleThresholdManual },
-    }).lean();
-
-    if (staleLeads.length > 0) {
-      await CampaignLead.updateMany(
-        { _id: { $in: staleLeads.map((l) => l._id) } },
-        { $set: { status: "pending", sender_id: null, queued_at: null } },
-      );
+    // Atomic: only reset leads still in "queued" status (avoids race with confirm/skip)
+    const result = await CampaignLead.updateMany(
+      { campaign_id: mc._id, status: "queued", queued_at: { $lt: staleThresholdManual } },
+      { $set: { status: "pending", sender_id: null, queued_at: null } },
+    );
+    if (result.modifiedCount > 0) {
       await Campaign.findByIdAndUpdate(mc._id, {
-        $inc: { "stats.queued": -staleLeads.length, "stats.pending": staleLeads.length },
+        $inc: { "stats.queued": -result.modifiedCount, "stats.pending": result.modifiedCount },
       });
-      console.log(`[scheduler] Reset ${staleLeads.length} stale queued lead(s) for manual campaign ${mc.name}`);
+      console.log(`[scheduler] Reset ${result.modifiedCount} stale queued lead(s) for manual campaign ${mc.name}`);
     }
   }
 
-  const campaigns = await Campaign.find({ status: "active" });
+  // Stale lock cleanup for auto campaigns: reset queued leads older than 5 minutes
+  const staleThresholdAuto = new Date(Date.now() - 5 * 60 * 1000);
+  const autoCampaigns = await Campaign.find({ mode: { $ne: "manual" }, status: "active" }).lean();
+  for (const ac of autoCampaigns) {
+    const result = await CampaignLead.updateMany(
+      { campaign_id: ac._id, status: "queued", queued_at: { $lt: staleThresholdAuto } },
+      { $set: { status: "pending", sender_id: null, queued_at: null } },
+    );
+    if (result.modifiedCount > 0) {
+      await Campaign.findByIdAndUpdate(ac._id, {
+        $inc: { "stats.queued": -result.modifiedCount, "stats.pending": result.modifiedCount },
+      });
+      console.log(`[scheduler] Reset ${result.modifiedCount} stale queued lead(s) for auto campaign ${ac.name}`);
+    }
+  }
+
+  // Stale task cleanup: auto-fail tasks stuck in pending/in_progress for over 2 minutes
+  const staleTaskThreshold = new Date(Date.now() - 2 * 60 * 1000);
+  const staleTasks = await Task.find({
+    status: { $in: ["pending", "in_progress"] },
+    createdAt: { $lt: staleTaskThreshold },
+  }).lean();
+
+  for (const staleTask of staleTasks) {
+    await Task.findByIdAndUpdate(staleTask._id, {
+      $set: {
+        status: "failed",
+        error: "Task timed out — extension did not pick up or complete in time",
+        failedAt: new Date(),
+      },
+    });
+
+    // Reset the associated campaign lead back to pending — only if still queued
+    if (staleTask.campaign_lead_id) {
+      const resetResult = await CampaignLead.findOneAndUpdate(
+        { _id: staleTask.campaign_lead_id, status: "queued" },
+        { $set: { status: "pending", sender_id: null, queued_at: null, task_id: null } },
+      );
+
+      if (resetResult && staleTask.campaign_id) {
+        await Campaign.findByIdAndUpdate(staleTask.campaign_id, {
+          $inc: { "stats.queued": -1, "stats.pending": 1 },
+        });
+      }
+    }
+
+    console.log(`[scheduler] Auto-failed stale task ${staleTask._id} (created ${staleTask.createdAt})`);
+  }
+
+  const campaigns = await Campaign.find({ status: "active", mode: { $ne: "manual" } });
 
   for (const campaign of campaigns) {
     try {
-      // Skip manual campaigns — they are driven by VA via HTTP endpoints
-      if (campaign.mode === "manual") continue;
-
-      // Check time window
-      if (!isWithinActiveHours(campaign.schedule)) continue;
 
       // Get ALL senders linked to this campaign's outbound accounts (for round-robin order)
       const allSenders = await SenderAccount.find({
@@ -159,11 +194,17 @@ async function processTick() {
 
       if (allSenders.length === 0) continue;
 
+      // Test mode: any online sender with test_mode skips all pacing/limit checks
+      const isTestMode = allSenders.some((s) => s.status === "online" && s.test_mode);
+
+      // Check time window (skip in test mode)
+      if (!isTestMode && !isWithinActiveHours(campaign.schedule)) continue;
+
       // Calculate how long to wait between sends
       const delaySec = calculateDelay(campaign, allSenders.length);
 
-      // Check if enough time has passed since last send
-      if (campaign.last_sent_at) {
+      // Check if enough time has passed since last send (skip in test mode)
+      if (!isTestMode && campaign.last_sent_at) {
         const elapsed = (Date.now() - campaign.last_sent_at.getTime()) / 1000;
         if (elapsed < delaySec * 0.8) continue; // not yet time (0.8 to account for tick drift)
       }
@@ -178,59 +219,9 @@ async function processTick() {
         const candidate = allSenders[senderIndex % allSenders.length];
 
         if (candidate.status === "online") {
-          // Check warmup cap (global across all campaigns)
-          const todayStart = new Date();
-          todayStart.setHours(0, 0, 0, 0);
-
-          const outboundAcct = candidate.outbound_account_id
-            ? await OutboundAccount.findById(candidate.outbound_account_id).lean()
-            : null;
-
-          if (outboundAcct?.warmup?.enabled) {
-            const msPerDay = 86400000;
-            const warmupDay = Math.floor(
-              (Date.now() - new Date(outboundAcct.warmup.startDate).getTime()) / msPerDay,
-            ) + 1;
-            const scheduleEntry = (outboundAcct.warmup.schedule || []).find(
-              (s) => s.day === warmupDay,
-            );
-            const warmupCap = scheduleEntry ? scheduleEntry.cap : null;
-
-            if (warmupCap === 0) {
-              // Automation blocked (days 1-8)
-              senderIndex++;
-              attempts++;
-              continue;
-            }
-
-            if (warmupCap !== null) {
-              // Count total DMs today across ALL campaigns for this sender (global cap)
-              const totalSentToday = await CampaignLead.countDocuments({
-                sender_id: candidate._id,
-                status: { $in: ["sent", "queued"] },
-                updatedAt: { $gte: todayStart },
-              });
-
-              if (totalSentToday >= warmupCap) {
-                senderIndex++;
-                attempts++;
-                continue;
-              }
-            }
-          }
-
-          // Check daily limit
-
-          const sentToday = await CampaignLead.countDocuments({
-            campaign_id: campaign._id,
-            sender_id: candidate._id,
-            status: { $in: ["sent", "queued"] },
-            updatedAt: { $gte: todayStart },
-          });
-
-          const dailyLimit = campaign.daily_limit_per_sender || candidate.daily_limit || 50;
-          if (sentToday < dailyLimit) {
-            // Check sender doesn't already have a pending task
+          // In test mode, skip warmup/daily limit checks
+          if (isTestMode) {
+            // Only check no pending task exists
             const existingTask = await Task.findOne({
               sender_id: candidate._id,
               campaign_id: campaign._id,
@@ -240,6 +231,67 @@ async function processTick() {
             if (!existingTask) {
               sender = candidate;
               break;
+            }
+          } else {
+            // Check warmup cap (global across all campaigns)
+            const todayStart = new Date();
+            todayStart.setHours(0, 0, 0, 0);
+
+            const outboundAcct = candidate.outbound_account_id
+              ? await OutboundAccount.findById(candidate.outbound_account_id).lean()
+              : null;
+
+            if (outboundAcct?.warmup?.enabled) {
+              const msPerDay = 86400000;
+              const warmupDay = Math.floor(
+                (Date.now() - new Date(outboundAcct.warmup.startDate).getTime()) / msPerDay,
+              ) + 1;
+              const scheduleEntry = (outboundAcct.warmup.schedule || []).find(
+                (s) => s.day === warmupDay,
+              );
+              const warmupCap = scheduleEntry ? scheduleEntry.cap : null;
+
+              if (warmupCap === 0) {
+                senderIndex++;
+                attempts++;
+                continue;
+              }
+
+              if (warmupCap !== null) {
+                const totalSentToday = await CampaignLead.countDocuments({
+                  sender_id: candidate._id,
+                  status: { $in: ["sent", "queued"] },
+                  updatedAt: { $gte: todayStart },
+                });
+
+                if (totalSentToday >= warmupCap) {
+                  senderIndex++;
+                  attempts++;
+                  continue;
+                }
+              }
+            }
+
+            // Check daily limit
+            const sentToday = await CampaignLead.countDocuments({
+              campaign_id: campaign._id,
+              sender_id: candidate._id,
+              status: { $in: ["sent", "queued"] },
+              updatedAt: { $gte: todayStart },
+            });
+
+            const dailyLimit = campaign.daily_limit_per_sender || candidate.daily_limit || 50;
+            if (sentToday < dailyLimit) {
+              const existingTask = await Task.findOne({
+                sender_id: candidate._id,
+                campaign_id: campaign._id,
+                status: { $in: ["pending", "in_progress"] },
+              }).lean();
+
+              if (!existingTask) {
+                sender = candidate;
+                break;
+              }
             }
           }
         }
@@ -253,7 +305,7 @@ async function processTick() {
       // Pick next pending lead (atomic)
       const campaignLead = await CampaignLead.findOneAndUpdate(
         { campaign_id: campaign._id, status: "pending" },
-        { $set: { status: "queued", sender_id: sender._id } },
+        { $set: { status: "queued", sender_id: sender._id, queued_at: new Date() } },
         { sort: { createdAt: 1 }, new: true },
       );
 
@@ -279,7 +331,7 @@ async function processTick() {
           $set: { status: "skipped", error: "Outbound lead not found" },
         });
         await Campaign.findByIdAndUpdate(campaign._id, {
-          $inc: { "stats.queued": -1, "stats.skipped": 1, "stats.pending": -1 },
+          $inc: { "stats.skipped": 1, "stats.pending": -1 },
         });
         continue;
       }
@@ -290,7 +342,7 @@ async function processTick() {
           $set: { status: "skipped", error: "Lead already messaged" },
         });
         await Campaign.findByIdAndUpdate(campaign._id, {
-          $inc: { "stats.queued": -1, "stats.skipped": 1, "stats.pending": -1 },
+          $inc: { "stats.skipped": 1, "stats.pending": -1 },
         });
         continue;
       }
@@ -304,13 +356,15 @@ async function processTick() {
       const nextSenderIndex = (senderIndex + 1) % allSenders.length;
       const nextMessageIndex = (messageIndex + 1) % campaign.messages.length;
 
-      // Update campaign tracking
-      campaign.last_sent_at = new Date();
-      campaign.last_sender_index = nextSenderIndex;
-      campaign.last_message_index = nextMessageIndex;
-      campaign.stats.pending -= 1;
-      campaign.stats.queued += 1;
-      await campaign.save();
+      // Update campaign tracking (atomic to avoid race with task completion)
+      await Campaign.findByIdAndUpdate(campaign._id, {
+        $inc: { "stats.pending": -1, "stats.queued": 1 },
+        $set: {
+          last_sent_at: new Date(),
+          last_sender_index: nextSenderIndex,
+          last_message_index: nextMessageIndex,
+        },
+      });
 
       // Process DM directly (no Redis queue needed)
       await processDM({
@@ -324,8 +378,20 @@ async function processTick() {
         template_index: messageIndex,
       });
 
+      // Tell the extension when the next task will come
+      const pendingRemaining = await CampaignLead.countDocuments({
+        campaign_id: campaign._id,
+        status: "pending",
+      });
+      const etaSeconds = isTestMode ? 30 : delaySec;
+      emitToAccount(campaign.account_id.toString(), "campaign:eta", {
+        nextInSeconds: etaSeconds,
+        pendingLeads: pendingRemaining,
+        campaignName: campaign.name,
+      });
+
       console.log(
-        `[scheduler] Queued DM to ${outboundLead.username} via ${sender.ig_username} (next in ~${delaySec}s)`,
+        `[scheduler] Queued DM to ${outboundLead.username} via ${sender.ig_username} (next in ~${etaSeconds}s, ${pendingRemaining} remaining)${isTestMode ? " [TEST MODE]" : ""}`,
       );
     } catch (err) {
       console.error(`[scheduler] Error processing campaign ${campaign._id}:`, err);

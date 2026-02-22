@@ -149,8 +149,20 @@ async function processImportJob(jobId, rows, { promptDoc, campaign, accountId, c
 
 // GET /outbound-leads — list with filters, search, pagination
 router.get("/", async (req, res) => {
-  const { source, isMessaged, replied, booked, search, promptId, promptLabel, page, limit } = req.query;
+  const { source, isMessaged, replied, booked, search, promptId, promptLabel, qualified, page, limit } = req.query;
   const filter = { account_id: req.account._id };
+
+  // By default hide unqualified leads (low followers / AI rejected)
+  if (qualified === "true") {
+    filter.qualified = true;
+  } else if (qualified === "false") {
+    filter.qualified = false;
+  } else if (qualified === "all") {
+    // show everything, no filter
+  } else {
+    // Default: exclude explicitly unqualified leads
+    filter.qualified = { $ne: false };
+  }
 
   if (source) filter.source = source;
   if (isMessaged !== undefined) {
