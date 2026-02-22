@@ -1,19 +1,30 @@
 const jwt = require("jsonwebtoken");
 const Account = require("../models/Account");
 const OutboundAccount = require("../models/OutboundAccount");
+const AccountUser = require("../models/AccountUser");
 
 const JWT_SECRET = process.env.JWT_SECRET || "quddify-jwt-secret-change-in-production";
 
-function generateToken(user, account) {
+function generateToken(user, account, accountUser) {
   return jwt.sign(
     {
       userId: user._id,
       accountId: account._id,
       ghl: account.ghl,
-      role: user.role,
+      role: accountUser.role,
+      has_outbound: accountUser.has_outbound,
+      has_research: accountUser.has_research,
     },
     JWT_SECRET,
     { expiresIn: "7d" },
+  );
+}
+
+function generateSelectionToken(user) {
+  return jwt.sign(
+    { userId: user._id, purpose: "account_selection" },
+    JWT_SECRET,
+    { expiresIn: "5m" },
   );
 }
 
@@ -62,8 +73,19 @@ async function auth(req, res, next) {
     if (account.disabled && decoded.role !== 0) {
       return res.status(403).json({ error: "Account is disabled" });
     }
+
+    // Verify user still has membership in this account
+    const membership = await AccountUser.findOne({
+      user_id: decoded.userId,
+      account_id: decoded.accountId,
+    }).lean();
+    if (!membership) {
+      return res.status(403).json({ error: "No longer a member of this account" });
+    }
+
     req.account = account;
     req.user = decoded;
+    req.membership = membership;
     next();
   } catch (err) {
     if (err.name === "JsonWebTokenError" || err.name === "TokenExpiredError") {
@@ -74,4 +96,4 @@ async function auth(req, res, next) {
   }
 }
 
-module.exports = { auth, generateToken };
+module.exports = { auth, generateToken, generateSelectionToken, JWT_SECRET };

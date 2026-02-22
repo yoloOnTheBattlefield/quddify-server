@@ -1,60 +1,71 @@
 const express = require("express");
 const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const Account = require("../models/Account");
 const User = require("../models/User");
+const AccountUser = require("../models/AccountUser");
 const Lead = require("../models/Lead");
-const { generateToken } = require("../middleware/auth");
+const { generateToken, generateSelectionToken, JWT_SECRET } = require("../middleware/auth");
 
 const router = express.Router();
 
-// get all accounts
+// ---------- helpers ----------
+
+function buildLoginResponse(user, account, accountUser) {
+  const token = generateToken(user, account, accountUser);
+  return {
+    token,
+    _id: user._id,
+    account_id: account._id,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    email: user.email,
+    role: accountUser.role,
+    has_outbound: accountUser.has_outbound,
+    has_research: accountUser.has_research,
+    ghl: account.ghl,
+    calendly: account.calendly,
+    ghl_lead_booked_webhook: account.ghl_lead_booked_webhook,
+    openai_token: account.openai_token,
+    api_key: account.api_key,
+    ig_session_set: !!(account.ig_session?.session_id) || (account.ig_sessions && account.ig_sessions.length > 0),
+    ig_username: account.ig_session?.ig_username || null,
+    ig_sessions: (account.ig_sessions || []).map((s) => ({
+      ig_username: s.ig_username,
+      has_cookies: !!(s.session_id && s.csrf_token && s.ds_user_id),
+    })),
+  };
+}
+
+function accountName(account) {
+  return account.name || "Unnamed Account";
+}
+
+// ---------- get all accounts (admin) ----------
+
 router.get("/", async (req, res) => {
-  const [accounts, owners] = await Promise.all([
-    Account.find().lean(),
-    User.find({ role: { $lte: 1 } }, { password: 0 }).lean(),
-  ]);
+  const accounts = await Account.find().lean();
 
-  const ownerMap = {};
-  owners.forEach((owner) => {
-    ownerMap[owner.account_id.toString()] = owner;
-  });
-
-  const result = accounts.map((account) => {
-    const owner = ownerMap[account._id.toString()];
-    return {
-      ...account,
-      name: owner
-        ? `${owner.first_name || ""} ${owner.last_name || ""}`.trim() || owner.email
-        : "Unknown",
-      email: owner?.email || null,
-    };
-  });
+  const result = accounts.map((account) => ({
+    ...account,
+    name: accountName(account),
+  }));
 
   res.json(result);
 });
 
-// GET /accounts/analytics - per-account lead stats
+// ---------- GET /accounts/analytics ----------
+
 router.get("/analytics", async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
+    const accounts = await Account.find().lean();
 
-    const [accounts, owners] = await Promise.all([
-      Account.find().lean(),
-      User.find({ role: { $lte: 1 } }, { password: 0 }).lean(),
-    ]);
-
-    const ownerMap = {};
-    owners.forEach((owner) => {
-      ownerMap[owner.account_id.toString()] = owner;
-    });
-
-    // Build date filter for leads
     const dateFilter = {};
     if (start_date || end_date) {
       dateFilter.date_created = {};
-      if (start_date)
-        dateFilter.date_created.$gte = `${start_date}T00:00:00.000Z`;
+      if (start_date) dateFilter.date_created.$gte = `${start_date}T00:00:00.000Z`;
       if (end_date) dateFilter.date_created.$lte = `${end_date}T23:59:59.999Z`;
     }
 
@@ -62,14 +73,11 @@ router.get("/analytics", async (req, res) => {
       accounts.map(async (account) => {
         const filter = { account_id: account.ghl, ...dateFilter };
         const leads = await Lead.find(filter).lean();
-        const owner = ownerMap[account._id.toString()];
 
         return {
           account_id: account._id,
           ghl: account.ghl,
-          name: owner
-            ? `${owner.first_name || ""} ${owner.last_name || ""}`.trim() || owner.email
-            : "Unknown",
+          name: accountName(account),
           totalLeads: leads.length,
           link_sent: leads.filter((l) => l.link_sent_at).length,
           booked: leads.filter((l) => l.booked_at).length,
@@ -87,7 +95,8 @@ router.get("/analytics", async (req, res) => {
   }
 });
 
-// register
+// ---------- register ----------
+
 router.post("/register", async (req, res) => {
   const { email, password, first_name, last_name, ghl } = req.body;
 
@@ -101,13 +110,16 @@ router.post("/register", async (req, res) => {
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
+  const displayName = `${first_name || ""} ${last_name || ""}`.trim() || email;
 
   const account = await Account.create({
+    name: displayName,
     ghl: ghl || null,
   });
 
+  let user;
   try {
-    await User.create({
+    user = await User.create({
       account_id: account._id,
       email,
       password: hashedPassword,
@@ -120,63 +132,233 @@ router.post("/register", async (req, res) => {
     throw error;
   }
 
+  await AccountUser.create({
+    user_id: user._id,
+    account_id: account._id,
+    role: 1,
+    has_outbound: false,
+    has_research: true,
+    is_default: true,
+  });
+
   res.json({ success: true });
 });
 
-// login
+// ---------- login (multi-account aware) ----------
+
 router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-  const user = await User.findOne({ email });
-  if (!user) {
-    return res.status(401).json({ error: "Invalid credentials" });
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Fetch all account memberships
+    const memberships = await AccountUser.find({ user_id: user._id }).lean();
+
+    if (memberships.length === 0) {
+      return res.status(403).json({ error: "No account access. Contact your admin." });
+    }
+
+    // Single account → auto-select
+    if (memberships.length === 1) {
+      const m = memberships[0];
+      const account = await Account.findById(m.account_id).lean();
+      if (!account) return res.status(404).json({ error: "Account not found" });
+      if (account.disabled && m.role !== 0) {
+        return res.status(403).json({ error: "Account is disabled" });
+      }
+      return res.json({
+        ...buildLoginResponse(user, account, m),
+        accounts: [{ account_id: m.account_id, name: accountName(account), ghl: account.ghl, role: m.role, has_outbound: m.has_outbound, has_research: m.has_research, is_default: m.is_default }],
+      });
+    }
+
+    // Multiple accounts → return selection list
+    const accountIds = memberships.map((m) => m.account_id);
+    const accounts = await Account.find({ _id: { $in: accountIds } }).lean();
+    const accountMap = {};
+    accounts.forEach((a) => { accountMap[a._id.toString()] = a; });
+
+    const selectionToken = generateSelectionToken(user);
+
+    res.json({
+      needs_account_selection: true,
+      selection_token: selectionToken,
+      user: {
+        _id: user._id,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        email: user.email,
+      },
+      accounts: memberships.map((m) => {
+        const acc = accountMap[m.account_id.toString()];
+        return {
+          account_id: m.account_id,
+          name: acc ? accountName(acc) : "Unknown",
+          ghl: acc?.ghl || null,
+          role: m.role,
+          has_outbound: m.has_outbound,
+          has_research: m.has_research,
+          is_default: m.is_default,
+          disabled: acc?.disabled || false,
+        };
+      }),
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
-
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) {
-    return res.status(401).json({ error: "Invalid credentials" });
-  }
-
-  const account = await Account.findById(user.account_id).lean();
-
-  if (account.disabled && user.role !== 0) {
-    return res.status(403).json({ error: "Account is disabled" });
-  }
-
-  const token = generateToken(user, account);
-
-  res.json({
-    token,
-    _id: user._id,
-    account_id: account._id,
-    first_name: user.first_name,
-    last_name: user.last_name,
-    email: user.email,
-    role: user.role,
-    has_outbound: user.has_outbound,
-    ghl: account.ghl,
-    calendly: account.calendly,
-    ghl_lead_booked_webhook: account.ghl_lead_booked_webhook,
-    openai_token: account.openai_token,
-    api_key: account.api_key,
-    ig_session_set: !!(account.ig_session?.session_id) || (account.ig_sessions && account.ig_sessions.length > 0),
-    ig_username: account.ig_session?.ig_username || null,
-    ig_sessions: (account.ig_sessions || []).map((s) => ({
-      ig_username: s.ig_username,
-      has_cookies: !!(s.session_id && s.csrf_token && s.ds_user_id),
-    })),
-  });
 });
 
-// POST /accounts/team - Add team member to an account
-// Admins (role 0) can pass account_id in body to add to another account
+// ---------- POST /accounts/select-account (PUBLIC — no auth middleware) ----------
+
+router.post("/select-account", async (req, res) => {
+  try {
+    const { selection_token, account_id } = req.body;
+
+    if (!selection_token || !account_id) {
+      return res.status(400).json({ error: "selection_token and account_id are required" });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(selection_token, JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ error: "Invalid or expired selection token" });
+    }
+
+    if (decoded.purpose !== "account_selection") {
+      return res.status(401).json({ error: "Invalid token purpose" });
+    }
+
+    const user = await User.findById(decoded.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const accountUser = await AccountUser.findOne({
+      user_id: decoded.userId,
+      account_id,
+    }).lean();
+    if (!accountUser) {
+      return res.status(403).json({ error: "Not a member of this account" });
+    }
+
+    const account = await Account.findById(account_id).lean();
+    if (!account) return res.status(404).json({ error: "Account not found" });
+    if (account.disabled && accountUser.role !== 0) {
+      return res.status(403).json({ error: "Account is disabled" });
+    }
+
+    // Include all accounts for the switcher
+    const allMemberships = await AccountUser.find({ user_id: decoded.userId }).lean();
+    const allAccountIds = allMemberships.map((m) => m.account_id);
+    const allAccounts = await Account.find({ _id: { $in: allAccountIds } }).lean();
+    const accMap = {};
+    allAccounts.forEach((a) => { accMap[a._id.toString()] = a; });
+
+    res.json({
+      ...buildLoginResponse(user, account, accountUser),
+      accounts: allMemberships.map((m) => {
+        const acc = accMap[m.account_id.toString()];
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: m.has_outbound, has_research: m.has_research, is_default: m.is_default };
+      }),
+    });
+  } catch (error) {
+    console.error("Select account error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ---------- POST /accounts/switch-account (PROTECTED) ----------
+
+router.post("/switch-account", async (req, res) => {
+  try {
+    const { account_id } = req.body;
+    if (!account_id) return res.status(400).json({ error: "account_id is required" });
+
+    const accountUser = await AccountUser.findOne({
+      user_id: req.user.userId,
+      account_id,
+    }).lean();
+    if (!accountUser) {
+      return res.status(403).json({ error: "Not a member of this account" });
+    }
+
+    const user = await User.findById(req.user.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const account = await Account.findById(account_id).lean();
+    if (!account) return res.status(404).json({ error: "Account not found" });
+    if (account.disabled && accountUser.role !== 0) {
+      return res.status(403).json({ error: "Account is disabled" });
+    }
+
+    // Include all accounts for the switcher
+    const allMemberships = await AccountUser.find({ user_id: req.user.userId }).lean();
+    const allAccountIds = allMemberships.map((m) => m.account_id);
+    const allAccounts = await Account.find({ _id: { $in: allAccountIds } }).lean();
+    const accMap = {};
+    allAccounts.forEach((a) => { accMap[a._id.toString()] = a; });
+
+    res.json({
+      ...buildLoginResponse(user, account, accountUser),
+      accounts: allMemberships.map((m) => {
+        const acc = accMap[m.account_id.toString()];
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: m.has_outbound, has_research: m.has_research, is_default: m.is_default };
+      }),
+    });
+  } catch (error) {
+    console.error("Switch account error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ---------- GET /accounts/my-accounts (PROTECTED) ----------
+
+router.get("/my-accounts", async (req, res) => {
+  try {
+    const memberships = await AccountUser.find({ user_id: req.user.userId }).lean();
+    const accountIds = memberships.map((m) => m.account_id);
+    const accounts = await Account.find({ _id: { $in: accountIds } }).lean();
+    const accountMap = {};
+    accounts.forEach((a) => { accountMap[a._id.toString()] = a; });
+
+    res.json({
+      accounts: memberships.map((m) => {
+        const acc = accountMap[m.account_id.toString()];
+        return {
+          account_id: m.account_id,
+          name: acc ? accountName(acc) : "Unknown",
+          ghl: acc?.ghl || null,
+          role: m.role,
+          has_outbound: m.has_outbound,
+          has_research: m.has_research,
+          is_default: m.is_default,
+        };
+      }),
+    });
+  } catch (error) {
+    console.error("My accounts error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ---------- POST /accounts/team ----------
+
 router.post("/team", async (req, res) => {
   try {
     const { email, password, first_name, last_name, role, has_outbound, account_id } = req.body;
     const accountRef = (account_id && req.user?.role === 0) ? account_id : req.account._id;
 
-    if (!email || !password) {
-      return res.status(400).json({ error: "Missing required fields" });
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
     }
 
     const account = await Account.findById(accountRef);
@@ -184,31 +366,53 @@ router.post("/team", async (req, res) => {
       return res.status(404).json({ error: "Account not found" });
     }
 
-    const exists = await User.findOne({ email });
-    if (exists) {
-      return res.status(400).json({ error: "Email already in use" });
+    let user = await User.findOne({ email });
+
+    if (user) {
+      // Existing user — just link to this account
+      const existingMembership = await AccountUser.findOne({
+        user_id: user._id,
+        account_id: accountRef,
+      });
+      if (existingMembership) {
+        return res.status(400).json({ error: "User is already a member of this account" });
+      }
+    } else {
+      // New user — must have password
+      if (!password) {
+        return res.status(400).json({ error: "Password is required for new users" });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      user = await User.create({
+        account_id: accountRef,
+        email,
+        password: hashedPassword,
+        first_name: first_name || null,
+        last_name: last_name || null,
+        role: role || 2,
+        has_outbound: has_outbound || false,
+      });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const member = await User.create({
+    const membership = await AccountUser.create({
+      user_id: user._id,
       account_id: accountRef,
-      email,
-      password: hashedPassword,
-      first_name: first_name || null,
-      last_name: last_name || null,
       role: role || 2,
       has_outbound: has_outbound || false,
+      has_research: true,
+      is_default: false,
     });
 
     res.status(201).json({
-      _id: member._id,
-      account_id: member.account_id,
-      email: member.email,
-      first_name: member.first_name,
-      last_name: member.last_name,
-      role: member.role,
-      has_outbound: member.has_outbound,
+      _id: membership._id,
+      user_id: user._id,
+      account_id: accountRef,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      role: membership.role,
+      has_outbound: membership.has_outbound,
     });
   } catch (error) {
     console.error("Add team member error:", error);
@@ -216,8 +420,8 @@ router.post("/team", async (req, res) => {
   }
 });
 
-// GET /accounts/team?account_id= - Get all team members for an account
-// Admins (role 0) can pass account_id to view another account's team
+// ---------- GET /accounts/team ----------
+
 router.get("/team", async (req, res) => {
   try {
     let accountId = req.account._id;
@@ -226,10 +430,24 @@ router.get("/team", async (req, res) => {
       accountId = req.query.account_id;
     }
 
-    const members = await User.find(
-      { account_id: accountId, role: { $ne: 1 } },
-      { password: 0 },
-    ).lean();
+    const memberships = await AccountUser.find({ account_id: accountId })
+      .populate("user_id", "-password")
+      .lean();
+
+    // Filter out owner (role 1) for non-admin callers, same as before
+    const members = memberships
+      .filter((m) => m.role !== 1)
+      .map((m) => ({
+        _id: m._id,
+        user_id: m.user_id?._id,
+        account_id: m.account_id,
+        email: m.user_id?.email,
+        first_name: m.user_id?.first_name,
+        last_name: m.user_id?.last_name,
+        role: m.role,
+        has_outbound: m.has_outbound,
+        has_research: m.has_research,
+      }));
 
     res.json(members);
   } catch (error) {
@@ -238,24 +456,32 @@ router.get("/team", async (req, res) => {
   }
 });
 
-// DELETE /accounts/team/:id - Remove a team member
+// ---------- DELETE /accounts/team/:id ----------
+
 router.delete("/team/:id", async (req, res) => {
   try {
-    const member = await User.findById(req.params.id);
+    const membership = await AccountUser.findById(req.params.id);
 
-    if (!member) {
+    if (!membership) {
       return res.status(404).json({ error: "Member not found" });
     }
 
-    if (member.role === 1) {
-      return res.status(400).json({ error: "Cannot delete account owner" });
+    if (membership.role === 1) {
+      return res.status(400).json({ error: "Cannot remove account owner" });
     }
 
-    if (req.user && req.params.id === req.user._id.toString()) {
-      return res.status(400).json({ error: "Cannot delete your own account" });
+    if (req.user && membership.user_id.toString() === req.user.userId.toString()) {
+      return res.status(400).json({ error: "Cannot remove yourself" });
     }
 
-    await User.findByIdAndDelete(req.params.id);
+    await AccountUser.findByIdAndDelete(req.params.id);
+
+    // If user has no remaining memberships, optionally clean up
+    const remaining = await AccountUser.countDocuments({ user_id: membership.user_id });
+    if (remaining === 0) {
+      await User.findByIdAndDelete(membership.user_id);
+    }
+
     res.json({ deleted: true });
   } catch (error) {
     console.error("Delete team member error:", error);
@@ -263,20 +489,19 @@ router.delete("/team/:id", async (req, res) => {
   }
 });
 
-// GET /accounts/ig-sessions - List IG session profiles for current account
+// ---------- IG Sessions (unchanged — account-scoped) ----------
+
 router.get("/ig-sessions", async (req, res) => {
   try {
     const account = await Account.findById(req.account._id).lean();
     if (!account) return res.status(404).json({ error: "Account not found" });
 
-    // Return ig_sessions array, plus legacy ig_session if it has cookies and isn't already in the array
     const sessions = (account.ig_sessions || []).map((s) => ({
       ig_username: s.ig_username,
       has_cookies: !!(s.session_id && s.csrf_token && s.ds_user_id),
       added_at: s.added_at,
     }));
 
-    // Include legacy ig_session if it exists and isn't already in ig_sessions
     const legacy = account.ig_session;
     if (legacy && legacy.session_id && legacy.ig_username) {
       const alreadyInArray = sessions.some(
@@ -298,7 +523,6 @@ router.get("/ig-sessions", async (req, res) => {
   }
 });
 
-// POST /accounts/ig-sessions - Add or update an IG session profile
 router.post("/ig-sessions", async (req, res) => {
   try {
     const { ig_username, cookies } = req.body;
@@ -328,7 +552,6 @@ router.post("/ig-sessions", async (req, res) => {
 
     if (!account.ig_sessions) account.ig_sessions = [];
 
-    // Update if username already exists, otherwise push
     const existingIdx = account.ig_sessions.findIndex(
       (s) => s.ig_username === username,
     );
@@ -352,7 +575,6 @@ router.post("/ig-sessions", async (req, res) => {
   }
 });
 
-// DELETE /accounts/ig-sessions/:username - Remove an IG session profile
 router.delete("/ig-sessions/:username", async (req, res) => {
   try {
     const username = req.params.username.replace(/^@/, "").trim();
@@ -375,7 +597,6 @@ router.delete("/ig-sessions/:username", async (req, res) => {
 
     account.markModified("ig_sessions");
 
-    // Also clear legacy ig_session if it matches
     if (account.ig_session && account.ig_session.ig_username === username) {
       account.ig_session = { ig_username: null, session_id: null, csrf_token: null, ds_user_id: null };
       account.markModified("ig_session");
@@ -389,16 +610,16 @@ router.delete("/ig-sessions/:username", async (req, res) => {
   }
 });
 
-// PATCH /accounts/:id - Update user profile and account info
+// ---------- PATCH /accounts/:id ----------
+
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, has_outbound, ghl, calendly, openai_token, apify_token, ig_session, ig_username, ig_proxy } = req.body;
+    const { first_name, last_name, email, has_outbound, has_research, ghl, calendly, openai_token, apify_token, ig_session, ig_username, ig_proxy } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
     if (last_name !== undefined) userUpdates.last_name = last_name;
     if (email !== undefined) userUpdates.email = email;
-    if (has_outbound !== undefined) userUpdates.has_outbound = has_outbound;
 
     const accountUpdates = {};
     if (ghl !== undefined) accountUpdates.ghl = ghl;
@@ -407,7 +628,6 @@ router.patch("/:id", async (req, res) => {
     if (apify_token !== undefined) accountUpdates.apify_token = apify_token;
     if (ig_proxy !== undefined) accountUpdates.ig_proxy = ig_proxy || null;
     if (ig_session !== undefined) {
-      // Accept either { session_id, csrf_token, ds_user_id } or a raw cookie array export
       if (Array.isArray(ig_session)) {
         const find = (name) => {
           const c = ig_session.find((c) => c.name === name);
@@ -427,7 +647,12 @@ router.patch("/:id", async (req, res) => {
       accountUpdates["ig_session.ig_username"] = ig_username;
     }
 
-    if (Object.keys(userUpdates).length === 0 && Object.keys(accountUpdates).length === 0) {
+    // Membership-level updates (go to AccountUser, not User)
+    const membershipUpdates = {};
+    if (has_outbound !== undefined) membershipUpdates.has_outbound = has_outbound;
+    if (has_research !== undefined) membershipUpdates.has_research = has_research;
+
+    if (Object.keys(userUpdates).length === 0 && Object.keys(accountUpdates).length === 0 && Object.keys(membershipUpdates).length === 0) {
       return res.status(400).json({ error: "No fields to update" });
     }
 
@@ -436,7 +661,6 @@ router.patch("/:id", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // If email is being changed, check it's not already taken
     if (userUpdates.email) {
       const exists = await User.findOne({ email: userUpdates.email, _id: { $ne: req.params.id } });
       if (exists) {
@@ -444,16 +668,30 @@ router.patch("/:id", async (req, res) => {
       }
     }
 
+    // Resolve which account to update — use active account from JWT
+    const activeAccountId = req.account._id;
+
     if (Object.keys(userUpdates).length > 0) {
       await User.findByIdAndUpdate(req.params.id, userUpdates);
     }
 
     if (Object.keys(accountUpdates).length > 0) {
-      await Account.findByIdAndUpdate(user.account_id, accountUpdates);
+      await Account.findByIdAndUpdate(activeAccountId, accountUpdates);
+    }
+
+    if (Object.keys(membershipUpdates).length > 0) {
+      await AccountUser.findOneAndUpdate(
+        { user_id: req.params.id, account_id: activeAccountId },
+        membershipUpdates,
+      );
     }
 
     const updatedUser = await User.findById(req.params.id, { password: 0 }).lean();
-    const updatedAccount = await Account.findById(user.account_id).lean();
+    const updatedAccount = await Account.findById(activeAccountId).lean();
+    const updatedMembership = await AccountUser.findOne({
+      user_id: req.params.id,
+      account_id: activeAccountId,
+    }).lean();
 
     res.json({
       _id: updatedUser._id,
@@ -461,8 +699,9 @@ router.patch("/:id", async (req, res) => {
       first_name: updatedUser.first_name,
       last_name: updatedUser.last_name,
       email: updatedUser.email,
-      role: updatedUser.role,
-      has_outbound: updatedUser.has_outbound,
+      role: updatedMembership?.role ?? updatedUser.role,
+      has_outbound: updatedMembership?.has_outbound ?? updatedUser.has_outbound,
+      has_research: updatedMembership?.has_research ?? true,
       ghl: updatedAccount.ghl,
       calendly: updatedAccount.calendly,
       ghl_lead_booked_webhook: updatedAccount.ghl_lead_booked_webhook,
@@ -482,7 +721,8 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
-// POST /accounts/:id/password - Change password
+// ---------- POST /accounts/:id/password ----------
+
 router.post("/:id/password", async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
@@ -511,29 +751,20 @@ router.post("/:id/password", async (req, res) => {
   }
 });
 
-// GET /accounts/ghl-webhook?_id=<account_id> - Get account info with webhook
+// ---------- GHL webhook endpoints (public, unchanged) ----------
+
 router.get("/ghl-webhook", async (req, res) => {
   try {
     const { _id } = req.query;
-
-    if (!_id) {
-      return res.status(400).json({ message: "Missing _id" });
-    }
+    if (!_id) return res.status(400).json({ message: "Missing _id" });
 
     const account = await Account.findById(_id).lean();
-
-    if (!account) {
-      return res.status(404).json({ message: "Account not found" });
-    }
-
-    const owner = await User.findOne({ account_id: account._id, role: { $lte: 1 } }, { password: 0 }).lean();
+    if (!account) return res.status(404).json({ message: "Account not found" });
 
     res.json({
       account_id: account._id,
       ghl: account.ghl,
-      name: owner
-        ? `${owner.first_name || ""} ${owner.last_name || ""}`.trim() || owner.email
-        : "Unknown",
+      name: accountName(account),
       ghl_lead_booked_webhook: account.ghl_lead_booked_webhook || undefined,
     });
   } catch (error) {
@@ -542,7 +773,6 @@ router.get("/ghl-webhook", async (req, res) => {
   }
 });
 
-// POST /accounts/ghl-webhook - Set GHL webhook for an account
 router.post("/ghl-webhook", async (req, res) => {
   try {
     const { ghl_lead_booked_webhook, _id } = req.body;
@@ -550,7 +780,6 @@ router.post("/ghl-webhook", async (req, res) => {
     if (!ghl_lead_booked_webhook) {
       return res.status(400).json({ message: "Missing ghl_lead_booked_webhook" });
     }
-
     if (!ghl_lead_booked_webhook.startsWith("http")) {
       return res.status(400).json({ message: "Invalid URL, must start with http" });
     }
@@ -560,10 +789,7 @@ router.post("/ghl-webhook", async (req, res) => {
       { ghl_lead_booked_webhook },
       { new: true },
     );
-
-    if (!account) {
-      return res.status(404).json({ message: "Account not found" });
-    }
+    if (!account) return res.status(404).json({ message: "Account not found" });
 
     res.json({ message: "Webhook saved successfully" });
   } catch (error) {
@@ -572,13 +798,12 @@ router.post("/ghl-webhook", async (req, res) => {
   }
 });
 
-// PATCH /accounts/:id/disable - Toggle disabled status on an account
+// ---------- PATCH /accounts/:id/disable ----------
+
 router.patch("/:id/disable", async (req, res) => {
   try {
     const account = await Account.findById(req.params.id);
-    if (!account) {
-      return res.status(404).json({ error: "Account not found" });
-    }
+    if (!account) return res.status(404).json({ error: "Account not found" });
 
     account.disabled = !account.disabled;
     await account.save();
@@ -590,18 +815,13 @@ router.patch("/:id/disable", async (req, res) => {
   }
 });
 
-// POST /accounts/:id/api-key - Generate or regenerate API key
+// ---------- POST /accounts/:id/api-key ----------
+
 router.post("/:id/api-key", async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const account = await Account.findById(user.account_id);
-    if (!account) {
-      return res.status(404).json({ error: "Account not found" });
-    }
+    // :id is the user id; resolve account from active JWT context
+    const account = await Account.findById(req.account._id);
+    if (!account) return res.status(404).json({ error: "Account not found" });
 
     const apiKey = `qd_${crypto.randomUUID().replace(/-/g, "")}`;
     account.api_key = apiKey;

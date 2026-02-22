@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const AccountSchema = new mongoose.Schema(
   {
+    name: { type: String, default: null },
     ghl: { type: String, default: null },
     calendly: { type: String, default: null },
     calendly_token: { type: String, default: null },

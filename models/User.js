@@ -5,7 +5,7 @@ const UserSchema = new mongoose.Schema(
     account_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Account",
-      required: true,
+      default: null,
     },
     first_name: { type: String, default: null },
     last_name: { type: String, default: null },
