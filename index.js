@@ -33,6 +33,7 @@ const trackingPublicRoutes = require("./routes/tracking-public");
 const trackingRoutes = require("./routes/tracking");
 const deepScrapeRoutes = require("./routes/deep-scrape");
 const apifyTokenRoutes = require("./routes/apify-tokens");
+const adminRoutes = require("./routes/admin");
 const replyCheckRoutes = require("./routes/reply-checks");
 
 const { auth } = require("./middleware/auth");
@@ -163,6 +164,7 @@ app.use("/api/outbound-accounts", outboundAccountRoutes);
 app.use("/api/warmup", warmupRoutes);
 app.use("/api/deep-scrape", deepScrapeRoutes);
 app.use("/api/apify-tokens", apifyTokenRoutes);
+app.use("/api/admin", adminRoutes);
 app.use("/api/reply-checks", replyCheckRoutes);
 app.use("/tracking", trackingRoutes);
 
