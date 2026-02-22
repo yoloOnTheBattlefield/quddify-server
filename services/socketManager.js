@@ -49,7 +49,7 @@ function init(httpServer, allowedOrigins) {
           }
 
           const account = await Account.findById(outbound.account_id).lean();
-          if (!account || account.disabled) {
+          if (!account || account.disabled || account.deleted) {
             socket.emit("auth:error", { error: "Account not found or disabled" });
             return;
           }
@@ -106,7 +106,7 @@ function init(httpServer, allowedOrigins) {
         const igUsername = typeof payload === "object" ? payload.ig_username : null;
 
         const account = await Account.findOne({ api_key: apiKey }).lean();
-        if (!account || account.disabled) {
+        if (!account || account.disabled || account.deleted) {
           socket.emit("auth:error", { error: "Invalid API key" });
           return;
         }

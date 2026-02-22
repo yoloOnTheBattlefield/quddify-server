@@ -29,6 +29,8 @@ const AccountSchema = new mongoose.Schema(
     ],
     ig_proxy: { type: String, default: null },
     apify_token: { type: String, default: null },
+    deleted: { type: Boolean, default: false },
+    deleted_at: { type: Date, default: null },
   },
   { collection: "accounts", versionKey: false },
 );

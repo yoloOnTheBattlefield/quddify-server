@@ -469,6 +469,68 @@ router.post("/:id/resume-comments", async (req, res) => {
   }
 });
 
+// PATCH /api/deep-scrape/:id — edit job config (targets, settings)
+router.patch("/:id", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid job ID" });
+    }
+
+    const job = await DeepScrapeJob.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    });
+
+    if (!job) return res.status(404).json({ error: "Job not found" });
+
+    const activeStatuses = [
+      "scraping_reels",
+      "scraping_comments",
+      "scraping_profiles",
+      "qualifying",
+    ];
+    if (activeStatuses.includes(job.status)) {
+      return res
+        .status(400)
+        .json({ error: "Cannot edit an actively running job. Pause or cancel it first." });
+    }
+
+    const { seed_usernames, name, reel_limit, comment_limit, min_followers, is_recurring, repeat_interval_days } = req.body;
+
+    if (seed_usernames !== undefined) {
+      if (!Array.isArray(seed_usernames) || seed_usernames.length === 0) {
+        return res.status(400).json({ error: "seed_usernames must be a non-empty array" });
+      }
+      const cleaned = seed_usernames
+        .map((u) => u.replace(/^@/, "").trim())
+        .filter(Boolean);
+      if (cleaned.length === 0) {
+        return res.status(400).json({ error: "No valid usernames provided" });
+      }
+      job.seed_usernames = cleaned;
+    }
+
+    if (name !== undefined) job.name = name?.trim() || null;
+    if (reel_limit !== undefined) job.reel_limit = reel_limit;
+    if (comment_limit !== undefined) job.comment_limit = comment_limit;
+    if (min_followers !== undefined) job.min_followers = min_followers;
+    if (is_recurring !== undefined) job.is_recurring = is_recurring;
+    if (repeat_interval_days !== undefined) job.repeat_interval_days = repeat_interval_days;
+
+    await job.save();
+
+    // Return without large checkpoint arrays
+    const updated = await DeepScrapeJob.findById(job._id)
+      .select("-reel_urls -reel_seeds -commenter_usernames -commenter_seed_map")
+      .lean();
+
+    res.json(updated);
+  } catch (err) {
+    console.error("Edit deep scrape job error:", err);
+    res.status(500).json({ error: "Failed to update job" });
+  }
+});
+
 // DELETE /api/deep-scrape/:id
 router.delete("/:id", async (req, res) => {
   try {

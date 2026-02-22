@@ -23,6 +23,9 @@ async function apiKeyAuth(req, res, next) {
     if (account.disabled) {
       return res.status(403).json({ error: "Account is disabled" });
     }
+    if (account.deleted) {
+      return res.status(403).json({ error: "Account has been deleted" });
+    }
 
     req.account = account;
     next();

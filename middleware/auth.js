@@ -50,6 +50,7 @@ async function auth(req, res, next) {
       const account = await Account.findOne({ api_key: token }).lean();
       if (!account) return res.status(401).json({ error: "Invalid API key" });
       if (account.disabled) return res.status(403).json({ error: "Account is disabled" });
+      if (account.deleted) return res.status(403).json({ error: "Account has been deleted" });
       req.account = account;
       return next();
     }
@@ -61,6 +62,7 @@ async function auth(req, res, next) {
       const account = await Account.findById(outboundAccount.account_id).lean();
       if (!account) return res.status(401).json({ error: "Account not found" });
       if (account.disabled) return res.status(403).json({ error: "Account is disabled" });
+      if (account.deleted) return res.status(403).json({ error: "Account has been deleted" });
       req.account = account;
       req.outboundAccount = outboundAccount;
       return next();
@@ -72,6 +74,9 @@ async function auth(req, res, next) {
     if (!account) return res.status(401).json({ error: "Account not found" });
     if (account.disabled && decoded.role !== 0) {
       return res.status(403).json({ error: "Account is disabled" });
+    }
+    if (account.deleted && decoded.role !== 0) {
+      return res.status(403).json({ error: "Account has been deleted" });
     }
 
     // Verify user still has membership in this account

@@ -164,7 +164,18 @@ router.get("/", async (req, res) => {
     filter.qualified = { $ne: false };
   }
 
-  if (source) filter.source = source;
+  if (source) {
+    // Match against source_seeds array (clean values) or legacy source field
+    const cleanSource = source.replace(/^@+/, "");
+    const sourceCondition = {
+      $or: [
+        { source_seeds: cleanSource },
+        { source: cleanSource },
+      ],
+    };
+    filter.$and = filter.$and || [];
+    filter.$and.push(sourceCondition);
+  }
   if (isMessaged !== undefined) {
     filter.isMessaged = isMessaged === "true" ? true : { $ne: true };
   }
@@ -173,10 +184,14 @@ router.get("/", async (req, res) => {
   if (promptId) filter.promptId = promptId;
   if (promptLabel) filter.promptLabel = { $regex: promptLabel, $options: "i" };
   if (search) {
-    filter.$or = [
-      { username: { $regex: search, $options: "i" } },
-      { fullName: { $regex: search, $options: "i" } },
-    ];
+    const searchCondition = {
+      $or: [
+        { username: { $regex: search, $options: "i" } },
+        { fullName: { $regex: search, $options: "i" } },
+      ],
+    };
+    filter.$and = filter.$and || [];
+    filter.$and.push(searchCondition);
   }
 
   const pageNum = parseInt(page, 10) || 1;
@@ -206,8 +221,20 @@ router.get("/", async (req, res) => {
 // GET /outbound-leads/sources — distinct source values
 router.get("/sources", async (req, res) => {
   try {
+    // Use source_seeds (clean individual usernames) for reliable distinct values
+    const seeds = await OutboundLead.distinct("source_seeds", { account_id: req.account._id });
     const sources = await OutboundLead.distinct("source", { account_id: req.account._id });
-    res.json({ sources: sources.filter(Boolean).sort() });
+    // Merge both fields: source_seeds has clean values, source may have values from file uploads
+    const merged = new Set([...seeds.filter(Boolean), ...sources.filter(Boolean)]);
+    // Normalize: strip leading @, split comma-separated values, deduplicate
+    const normalized = new Set();
+    for (const val of merged) {
+      for (const part of val.split(",")) {
+        const clean = part.trim().replace(/^@+/, "");
+        if (clean) normalized.add(clean);
+      }
+    }
+    res.json({ sources: [...normalized].sort() });
   } catch (err) {
     console.error("Sources error:", err);
     res.status(500).json({ error: "Failed to fetch sources" });

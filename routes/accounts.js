@@ -45,7 +45,7 @@ function accountName(account) {
 // ---------- get all accounts (admin) ----------
 
 router.get("/", async (req, res) => {
-  const accounts = await Account.find().lean();
+  const accounts = await Account.find({ deleted: { $ne: true } }).lean();
 
   const result = accounts.map((account) => ({
     ...account,
@@ -59,8 +59,9 @@ router.get("/", async (req, res) => {
 
 router.get("/analytics", async (req, res) => {
   try {
-    const { start_date, end_date } = req.query;
-    const accounts = await Account.find().lean();
+    const { start_date, end_date, show_deleted } = req.query;
+    const accountFilter = show_deleted === "true" ? {} : { deleted: { $ne: true } };
+    const accounts = await Account.find(accountFilter).lean();
 
     const dateFilter = {};
     if (start_date || end_date) {
@@ -78,6 +79,7 @@ router.get("/analytics", async (req, res) => {
           account_id: account._id,
           ghl: account.ghl,
           name: accountName(account),
+          deleted: !!account.deleted,
           totalLeads: leads.length,
           link_sent: leads.filter((l) => l.link_sent_at).length,
           booked: leads.filter((l) => l.booked_at).length,
@@ -183,7 +185,7 @@ router.post("/login", async (req, res) => {
 
     // Multiple accounts → return selection list
     const accountIds = memberships.map((m) => m.account_id);
-    const accounts = await Account.find({ _id: { $in: accountIds } }).lean();
+    const accounts = await Account.find({ _id: { $in: accountIds }, deleted: { $ne: true } }).lean();
     const accountMap = {};
     accounts.forEach((a) => { accountMap[a._id.toString()] = a; });
 
@@ -259,7 +261,7 @@ router.post("/select-account", async (req, res) => {
     // Include all accounts for the switcher
     const allMemberships = await AccountUser.find({ user_id: decoded.userId }).lean();
     const allAccountIds = allMemberships.map((m) => m.account_id);
-    const allAccounts = await Account.find({ _id: { $in: allAccountIds } }).lean();
+    const allAccounts = await Account.find({ _id: { $in: allAccountIds }, deleted: { $ne: true } }).lean();
     const accMap = {};
     allAccounts.forEach((a) => { accMap[a._id.toString()] = a; });
 
@@ -303,7 +305,7 @@ router.post("/switch-account", async (req, res) => {
     // Include all accounts for the switcher
     const allMemberships = await AccountUser.find({ user_id: req.user.userId }).lean();
     const allAccountIds = allMemberships.map((m) => m.account_id);
-    const allAccounts = await Account.find({ _id: { $in: allAccountIds } }).lean();
+    const allAccounts = await Account.find({ _id: { $in: allAccountIds }, deleted: { $ne: true } }).lean();
     const accMap = {};
     allAccounts.forEach((a) => { accMap[a._id.toString()] = a; });
 
@@ -326,7 +328,7 @@ router.get("/my-accounts", async (req, res) => {
   try {
     const memberships = await AccountUser.find({ user_id: req.user.userId }).lean();
     const accountIds = memberships.map((m) => m.account_id);
-    const accounts = await Account.find({ _id: { $in: accountIds } }).lean();
+    const accounts = await Account.find({ _id: { $in: accountIds }, deleted: { $ne: true } }).lean();
     const accountMap = {};
     accounts.forEach((a) => { accountMap[a._id.toString()] = a; });
 
@@ -830,6 +832,50 @@ router.post("/:id/api-key", async (req, res) => {
     res.json({ api_key: apiKey });
   } catch (error) {
     console.error("Generate API key error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ---------- PATCH /accounts/:id/delete (soft delete) ----------
+
+router.patch("/:id/delete", async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== 0) {
+      return res.status(403).json({ error: "Only super admins can delete accounts" });
+    }
+
+    const account = await Account.findById(req.params.id);
+    if (!account) return res.status(404).json({ error: "Account not found" });
+
+    account.deleted = true;
+    account.deleted_at = new Date();
+    await account.save();
+
+    res.json({ account_id: account._id, deleted: true });
+  } catch (error) {
+    console.error("Soft delete error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ---------- PATCH /accounts/:id/restore ----------
+
+router.patch("/:id/restore", async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== 0) {
+      return res.status(403).json({ error: "Only super admins can restore accounts" });
+    }
+
+    const account = await Account.findById(req.params.id);
+    if (!account) return res.status(404).json({ error: "Account not found" });
+
+    account.deleted = false;
+    account.deleted_at = null;
+    await account.save();
+
+    res.json({ account_id: account._id, deleted: false });
+  } catch (error) {
+    console.error("Restore account error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

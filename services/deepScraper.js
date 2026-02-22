@@ -729,7 +729,9 @@ async function upsertLead(job, username, data, seeds) {
   // seeds = specific seed(s) this commenter was found on
   // Fallback to all job seeds for backwards compat
   const leadSeeds = seeds && seeds.length > 0 ? seeds : job.seed_usernames;
-  const sourceStr = leadSeeds.map((u) => "@" + u.replace(/^@/, "")).join(", ");
+  const cleanSeeds = leadSeeds.map((u) => u.replace(/^@/, ""));
+  // Store source as the first clean seed username (no @, no comma-separation)
+  const source = cleanSeeds[0];
 
   const update = {
     $set: {
@@ -741,19 +743,19 @@ async function upsertLead(job, username, data, seeds) {
       bio: data.bio || null,
       postsCount: data.postsCount || 0,
       externalUrl: data.externalUrl || null,
-      source: sourceStr,
+      source,
       scrapeDate: new Date(),
       qualified: data.qualified,
       unqualified_reason: data.unqualified_reason || null,
       ai_processed: data.ai_processed || false,
       metadata: {
-        source: sourceStr,
+        source,
         executionId: `deep-scrape-${job._id}`,
         syncedAt: new Date(),
       },
     },
     $addToSet: {
-      source_seeds: { $each: leadSeeds.map((u) => u.replace(/^@/, "")) },
+      source_seeds: { $each: cleanSeeds },
     },
   };
 
