@@ -382,20 +382,30 @@ async function processTick() {
         template_index: messageIndex,
       });
 
-      // Tell the extension when the next task will come
+      // Tell each sender when their next task will come (staggered per round-robin position)
       const pendingRemaining = await CampaignLead.countDocuments({
         campaign_id: campaign._id,
         status: "pending",
       });
-      const etaSeconds = isTestMode ? 30 : delaySec;
-      emitToAccount(campaign.account_id.toString(), "campaign:eta", {
-        nextInSeconds: etaSeconds,
-        pendingLeads: pendingRemaining,
-        campaignName: campaign.name,
-      });
+      const baseEta = isTestMode ? 30 : delaySec;
+
+      // Emit per-sender ETAs based on round-robin position
+      for (let i = 0; i < onlineSenders.length; i++) {
+        const rrIndex = (nextSenderIndex + i) % allSenders.length;
+        const targetSender = allSenders[rrIndex];
+        if (targetSender.status !== "online") continue;
+
+        // Position 0 = next sender in round-robin, position 1 = sender after that, etc.
+        const senderEta = baseEta * (i + 1);
+        emitToSender(targetSender._id.toString(), "campaign:eta", {
+          nextInSeconds: senderEta,
+          pendingLeads: pendingRemaining,
+          campaignName: campaign.name,
+        });
+      }
 
       console.log(
-        `[scheduler] Queued DM to ${outboundLead.username} via ${sender.ig_username} (next in ~${etaSeconds}s, ${pendingRemaining} remaining)${isTestMode ? " [TEST MODE]" : ""}`,
+        `[scheduler] Queued DM to ${outboundLead.username} via ${sender.ig_username} (next in ~${baseEta}s, ${pendingRemaining} remaining)${isTestMode ? " [TEST MODE]" : ""}`,
       );
     } catch (err) {
       console.error(`[scheduler] Error processing campaign ${campaign._id}:`, err);
