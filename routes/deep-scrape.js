@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const DeepScrapeJob = require("../models/DeepScrapeJob");
+const ApifyToken = require("../models/ApifyToken");
 const OutboundLead = require("../models/OutboundLead");
 const ResearchPost = require("../models/ResearchPost");
 const ResearchComment = require("../models/ResearchComment");
@@ -34,11 +35,15 @@ router.post("/start", async (req, res) => {
         .json({ error: "seed_usernames is required (array of usernames)" });
     }
 
-    // Validate Apify token
-    if (!req.account.apify_token) {
+    // Validate Apify token (multi-token or legacy)
+    const hasTokens = await ApifyToken.countDocuments({
+      account_id: req.account._id,
+      status: "active",
+    });
+    if (!hasTokens && !req.account.apify_token) {
       return res.status(400).json({
         error:
-          "Apify token not configured. Set it in Integrations before starting a deep scrape.",
+          "No Apify tokens configured. Add tokens in Integrations before starting a deep scrape.",
       });
     }
 
@@ -359,9 +364,13 @@ router.post("/:id/resume", async (req, res) => {
         .json({ error: `Cannot resume job with status: ${job.status}` });
     }
 
-    if (!req.account.apify_token) {
+    const hasTokens = await ApifyToken.countDocuments({
+      account_id: req.account._id,
+      status: "active",
+    });
+    if (!hasTokens && !req.account.apify_token) {
       return res.status(400).json({
-        error: "Apify token not configured. Set it in Integrations first.",
+        error: "No Apify tokens available. Add or reset tokens in Integrations first.",
       });
     }
 
@@ -436,9 +445,13 @@ router.post("/:id/resume-comments", async (req, res) => {
         .json({ error: `Cannot resume comments for job with status: ${job.status}` });
     }
 
-    if (!req.account.apify_token) {
+    const hasTokens = await ApifyToken.countDocuments({
+      account_id: req.account._id,
+      status: "active",
+    });
+    if (!hasTokens && !req.account.apify_token) {
       return res.status(400).json({
-        error: "Apify token not configured. Set it in Integrations first.",
+        error: "No Apify tokens available. Add or reset tokens in Integrations first.",
       });
     }
 

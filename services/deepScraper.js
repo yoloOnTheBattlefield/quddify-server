@@ -1,5 +1,6 @@
 const OpenAI = require("openai");
 const DeepScrapeJob = require("../models/DeepScrapeJob");
+const ApifyToken = require("../models/ApifyToken");
 const ResearchPost = require("../models/ResearchPost");
 const ResearchComment = require("../models/ResearchComment");
 const OutboundLead = require("../models/OutboundLead");
@@ -21,6 +22,14 @@ const activeJobs = new Map(); // jobId -> { cancelled, paused, skipComments }
 
 const APIFY_MEMORY_MB = 4096; // 4GB — uses more of the available compute for faster runs
 
+// Custom error for 403 hard limit so callers can detect and rotate tokens
+class ApifyLimitError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ApifyLimitError";
+  }
+}
+
 async function startApifyRun(actorId, input, token) {
   const res = await fetch(`${APIFY_BASE}/acts/${actorId}/runs?memory=${APIFY_MEMORY_MB}`, {
     method: "POST",
@@ -32,10 +41,83 @@ async function startApifyRun(actorId, input, token) {
   });
   if (!res.ok) {
     const text = await res.text();
+    // Detect 403 hard limit / actor-disabled errors
+    if (res.status === 403) {
+      throw new ApifyLimitError(`Apify 403: ${text}`);
+    }
     throw new Error(`Apify start failed (${res.status}): ${text}`);
   }
   const data = await res.json();
   return data.data; // { id, defaultDatasetId, status, ... }
+}
+
+// ─── Token rotation ─────────────────────────────────────────────────────
+//
+// Picks the first active ApifyToken for an account. Falls back to account.apify_token
+// for backward compatibility. Returns { tokenValue, tokenDocId } or null.
+
+async function pickApifyToken(accountId, legacyToken) {
+  // Try multi-token system first
+  const tokens = await ApifyToken.find({
+    account_id: accountId,
+    status: "active",
+  })
+    .sort({ last_used_at: 1 }) // least recently used first
+    .lean();
+
+  if (tokens.length > 0) {
+    const picked = tokens[0];
+    await ApifyToken.updateOne(
+      { _id: picked._id },
+      { $set: { last_used_at: new Date() }, $inc: { usage_count: 1 } },
+    );
+    return { tokenValue: picked.token, tokenDocId: picked._id.toString() };
+  }
+
+  // Fallback to legacy single token on Account
+  if (legacyToken) {
+    return { tokenValue: legacyToken, tokenDocId: null };
+  }
+
+  return null;
+}
+
+async function markTokenLimitReached(tokenDocId, errorMsg) {
+  if (!tokenDocId) return; // legacy token — nothing to mark
+  await ApifyToken.updateOne(
+    { _id: tokenDocId },
+    { $set: { status: "limit_reached", last_error: errorMsg } },
+  );
+}
+
+// Try to start an Apify run with token rotation. If 403, mark token and try next.
+// Returns { run, tokenValue, tokenDocId } or throws if all tokens exhausted.
+async function startApifyRunWithRotation(actorId, input, accountId, legacyToken, jobId, accountIdStr) {
+  const MAX_ROTATIONS = 10; // safety cap
+  for (let attempt = 0; attempt < MAX_ROTATIONS; attempt++) {
+    const picked = await pickApifyToken(accountId, legacyToken);
+    if (!picked) {
+      throw new ApifyLimitError("No active Apify tokens available");
+    }
+
+    try {
+      const run = await startApifyRun(actorId, input, picked.tokenValue);
+      return { run, tokenValue: picked.tokenValue, tokenDocId: picked.tokenDocId };
+    } catch (err) {
+      if (err instanceof ApifyLimitError) {
+        console.log(`[deep-scraper] Token ${picked.tokenDocId || "legacy"} hit 403 limit: ${err.message}`);
+        if (picked.tokenDocId) {
+          await markTokenLimitReached(picked.tokenDocId, err.message);
+          emitLog(accountIdStr, jobId, `Apify token "${picked.tokenDocId}" hit limit — rotating to next token`, "warn");
+          continue; // try next token
+        }
+        // Legacy token hit 403 — no rotation possible
+        throw err;
+      }
+      throw err; // non-403 error — don't rotate
+    }
+  }
+  throw new ApifyLimitError("All Apify tokens exhausted after rotation attempts");
 }
 
 async function pollApifyRun(runId, token) {
@@ -158,16 +240,24 @@ async function processJob(jobId) {
 
   const accountId = job.account_id.toString();
   const account = await Account.findById(job.account_id).lean();
-  const apifyToken = account?.apify_token;
+  const legacyToken = account?.apify_token;
 
-  if (!apifyToken) {
+  // Check if any token is available (multi-token or legacy)
+  const hasMultiTokens = await ApifyToken.countDocuments({
+    account_id: job.account_id,
+    status: "active",
+  });
+  if (!hasMultiTokens && !legacyToken) {
     job.status = "failed";
-    job.error = "Apify token not configured. Set it in Integrations.";
+    job.error = "No Apify tokens configured. Add tokens in Integrations.";
     job.completed_at = new Date();
     await job.save();
     emitStatus(accountId, jobId, "failed", { error: job.error });
     return;
   }
+
+  // currentToken tracks the token being used for waitForApifyRun polling
+  let currentToken = null;
 
   const handle = { cancelled: false, paused: false, skipComments: false };
   activeJobs.set(jobId, handle);
@@ -205,25 +295,29 @@ async function processJob(jobId) {
         emitStatus(accountId, jobId, "scraping_reels");
         emitLog(accountId, jobId, `Scraping reels for @${seed}`);
 
-        const run = await startApifyRun(
+        const { run, tokenValue: reelToken } = await startApifyRunWithRotation(
           REEL_SCRAPER,
           { username: [seed], resultsLimit: job.reel_limit },
-          apifyToken,
+          job.account_id,
+          legacyToken,
+          jobId,
+          accountId,
         );
+        currentToken = reelToken;
 
         job.current_apify_run_id = run.id;
         await job.save();
 
         emitLog(accountId, jobId, `Apify reel scraper started for @${seed} (${APIFY_MEMORY_MB}MB)`);
 
-        const completedRun = await waitForApifyRun(run.id, apifyToken, jobId, handle);
+        const completedRun = await waitForApifyRun(run.id, currentToken, jobId, handle);
         if (!completedRun) break; // paused or cancelled
 
         if (completedRun.status !== "SUCCEEDED") {
           emitLog(accountId, jobId, `@${seed}: Apify run ${completedRun.status} — collecting partial data`, "warn");
         }
 
-        const rawReels = await getDatasetItems(completedRun.defaultDatasetId, apifyToken);
+        const rawReels = await getDatasetItems(completedRun.defaultDatasetId, currentToken);
         if (rawReels.length === 0 && completedRun.status === "FAILED") {
           emitLog(accountId, jobId, `@${seed}: Apify run failed with no data, skipping seed`, "error");
           continue;
@@ -329,23 +423,27 @@ async function processJob(jobId) {
         emitStatus(accountId, jobId, "scraping_comments");
         emitLog(accountId, jobId, `Scraping comments for reel ${i + 1}/${allReelUrls.length} (@${seed})`);
 
-        const commentRun = await startApifyRun(
+        const { run: commentRun, tokenValue: commentToken } = await startApifyRunWithRotation(
           COMMENT_SCRAPER,
           { directUrls: [reelUrl], resultsPerPost: job.comment_limit },
-          apifyToken,
+          job.account_id,
+          legacyToken,
+          jobId,
+          accountId,
         );
+        currentToken = commentToken;
 
         job.current_apify_run_id = commentRun.id;
         await job.save();
 
-        const completedCommentRun = await waitForApifyRun(commentRun.id, apifyToken, jobId, handle);
+        const completedCommentRun = await waitForApifyRun(commentRun.id, currentToken, jobId, handle);
         if (!completedCommentRun) break;
 
         if (completedCommentRun.status !== "SUCCEEDED") {
           emitLog(accountId, jobId, `Reel ${i + 1}: comment scraper ${completedCommentRun.status} — collecting partial data`, "warn");
         }
 
-        const comments = await getDatasetItems(completedCommentRun.defaultDatasetId, apifyToken);
+        const comments = await getDatasetItems(completedCommentRun.defaultDatasetId, currentToken);
         console.log(`[deep-scraper] Reel ${i + 1}: got ${comments.length} comments`);
 
         if (comments.length === 0 && completedCommentRun.status === "FAILED") {
@@ -435,23 +533,27 @@ async function processJob(jobId) {
               `Enriching profiles ${batchStart + 1}-${batchStart + batch.length} of ${usernamesToProcess.length} (reel ${i + 1})`,
             );
 
-            const profileRun = await startApifyRun(
+            const { run: profileRun, tokenValue: profileToken } = await startApifyRunWithRotation(
               PROFILE_SCRAPER,
               { usernames: batch },
-              apifyToken,
+              job.account_id,
+              legacyToken,
+              jobId,
+              accountId,
             );
+            currentToken = profileToken;
 
             job.current_apify_run_id = profileRun.id;
             await job.save();
 
-            const completedProfileRun = await waitForApifyRun(profileRun.id, apifyToken, jobId, handle);
+            const completedProfileRun = await waitForApifyRun(profileRun.id, currentToken, jobId, handle);
             if (!completedProfileRun) break;
 
             if (completedProfileRun.status !== "SUCCEEDED") {
               emitLog(accountId, jobId, `Profile batch: Apify run ${completedProfileRun.status} — collecting partial data`, "warn");
             }
 
-            const profiles = await getDatasetItems(completedProfileRun.defaultDatasetId, apifyToken);
+            const profiles = await getDatasetItems(completedProfileRun.defaultDatasetId, currentToken);
 
             if (profiles.length === 0 && completedProfileRun.status === "FAILED") {
               emitLog(accountId, jobId, `Profile batch failed with no data, skipping ${batch.length} users`, "error");
@@ -558,13 +660,13 @@ async function processJob(jobId) {
 
     // Handle interrupts
     if (handle.cancelled || handle.paused) {
-      await handleInterrupt(job, handle, accountId, jobId, apifyToken);
+      await handleInterrupt(job, handle, accountId, jobId, currentToken || legacyToken);
       return;
     }
 
     if (handle.skipComments) {
       if (job.current_apify_run_id) {
-        await abortApifyRun(job.current_apify_run_id, apifyToken);
+        await abortApifyRun(job.current_apify_run_id, currentToken || legacyToken);
       }
       job.comments_skipped = true;
       job.current_apify_run_id = null;
@@ -594,13 +696,27 @@ async function processJob(jobId) {
     );
   } catch (err) {
     if (!handle.paused && !handle.cancelled) {
-      console.error(`[deep-scraper] Job ${jobId} failed:`, err.message);
-      job.status = "failed";
-      job.error = err.message;
-      job.completed_at = new Date();
-      await job.save();
-      emitStatus(accountId, jobId, "failed", { error: err.message });
-      emitLog(accountId, jobId, `Job failed: ${err.message}`, "error");
+      // 403 / token exhaustion → pause (not fail) so user can add tokens and resume
+      if (err instanceof ApifyLimitError) {
+        console.log(`[deep-scraper] Job ${jobId} paused — Apify limit: ${err.message}`);
+        if (job.current_apify_run_id && currentToken) {
+          await abortApifyRun(job.current_apify_run_id, currentToken).catch(() => {});
+        }
+        job.status = "paused";
+        job.error = "Paused – All Apify tokens exhausted (monthly limit reached). Add a new token or wait for limit reset, then resume.";
+        job.current_apify_run_id = null;
+        await job.save();
+        emitStatus(accountId, jobId, "paused", { error: job.error });
+        emitLog(accountId, jobId, job.error, "error");
+      } else {
+        console.error(`[deep-scraper] Job ${jobId} failed:`, err.message);
+        job.status = "failed";
+        job.error = err.message;
+        job.completed_at = new Date();
+        await job.save();
+        emitStatus(accountId, jobId, "failed", { error: err.message });
+        emitLog(accountId, jobId, `Job failed: ${err.message}`, "error");
+      }
     }
   }
 

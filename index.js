@@ -31,8 +31,8 @@ const outboundAccountRoutes = require("./routes/outbound-accounts");
 const warmupRoutes = require("./routes/warmup");
 const trackingPublicRoutes = require("./routes/tracking-public");
 const trackingRoutes = require("./routes/tracking");
-const scrapeRoutes = require("./routes/scrape");
 const deepScrapeRoutes = require("./routes/deep-scrape");
+const apifyTokenRoutes = require("./routes/apify-tokens");
 const replyCheckRoutes = require("./routes/reply-checks");
 
 const { auth } = require("./middleware/auth");
@@ -42,7 +42,6 @@ const jobWorker = require("./services/jobWorker");
 const { recoverStuckJobs } = require("./services/jobRecovery");
 const campaignScheduler = require("./services/campaignScheduler");
 const deepScrapeScheduler = require("./services/deepScrapeScheduler");
-const instagramScraper = require("./services/instagramScraper");
 
 const app = express();
 const server = http.createServer(app);
@@ -80,7 +79,6 @@ const io = socketManager.init(server, allowedOrigins);
 // Initialize job worker with Socket.IO, then init queue
 jobWorker.init(io);
 jobQueue.init(jobWorker.processJob);
-instagramScraper.init(io);
 
 const MONGO_URI = process.env.MONGO_URI;
 
@@ -163,8 +161,8 @@ app.use("/api/manual-campaigns", manualCampaignRoutes);
 app.use("/api/campaigns", campaignRoutes);
 app.use("/api/outbound-accounts", outboundAccountRoutes);
 app.use("/api/warmup", warmupRoutes);
-app.use("/api/scrape", scrapeRoutes);
 app.use("/api/deep-scrape", deepScrapeRoutes);
+app.use("/api/apify-tokens", apifyTokenRoutes);
 app.use("/api/reply-checks", replyCheckRoutes);
 app.use("/tracking", trackingRoutes);
 
@@ -203,9 +201,6 @@ connectDB()
     // Start schedulers
     campaignScheduler.start();
     deepScrapeScheduler.start();
-
-    // Recover stuck scrape jobs
-    await instagramScraper.recoverJobs();
 
     console.log("Startup complete");
   })
