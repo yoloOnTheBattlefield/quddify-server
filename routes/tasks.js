@@ -94,13 +94,30 @@ router.post("/:taskId/complete", async (req, res) => {
     }
 
     // Update CampaignLead + Campaign stats if this is a campaign task
+    // Use conditional update to avoid double-decrementing stats.queued
+    // (stale lock cleanup may have already reset the lead to "pending")
     if (task.campaign_lead_id) {
-      await CampaignLead.findByIdAndUpdate(task.campaign_lead_id, {
-        $set: { status: "sent", sent_at: new Date() },
-      });
-      await Campaign.findByIdAndUpdate(task.campaign_id, {
-        $inc: { "stats.queued": -1, "stats.sent": 1 },
-      });
+      const leadUpdate = await CampaignLead.findOneAndUpdate(
+        { _id: task.campaign_lead_id, status: "queued" },
+        { $set: { status: "sent", sent_at: new Date() } },
+      );
+      if (leadUpdate) {
+        await Campaign.findByIdAndUpdate(task.campaign_id, {
+          $inc: { "stats.queued": -1, "stats.sent": 1 },
+        });
+      } else {
+        // Lead was already reset by stale cleanup — just mark it sent, adjust from current state
+        const lead = await CampaignLead.findOneAndUpdate(
+          { _id: task.campaign_lead_id, status: { $in: ["pending", "failed"] } },
+          { $set: { status: "sent", sent_at: new Date() } },
+        );
+        if (lead) {
+          const fromStat = lead.status === "failed" ? "stats.failed" : "stats.pending";
+          await Campaign.findByIdAndUpdate(task.campaign_id, {
+            $inc: { [fromStat]: -1, "stats.sent": 1 },
+          });
+        }
+      }
     }
 
     emitToAccount(req.account._id.toString(), "task:completed", {
@@ -150,13 +167,28 @@ router.post("/:taskId/failed", async (req, res) => {
     await task.save();
 
     // Update CampaignLead + Campaign stats if this is a campaign task
+    // Use conditional update to avoid double-decrementing stats.queued
     if (task.campaign_lead_id) {
-      await CampaignLead.findByIdAndUpdate(task.campaign_lead_id, {
-        $set: { status: "failed", error: errorMsg || "Unknown error" },
-      });
-      await Campaign.findByIdAndUpdate(task.campaign_id, {
-        $inc: { "stats.queued": -1, "stats.failed": 1 },
-      });
+      const leadUpdate = await CampaignLead.findOneAndUpdate(
+        { _id: task.campaign_lead_id, status: "queued" },
+        { $set: { status: "failed", error: errorMsg || "Unknown error" } },
+      );
+      if (leadUpdate) {
+        await Campaign.findByIdAndUpdate(task.campaign_id, {
+          $inc: { "stats.queued": -1, "stats.failed": 1 },
+        });
+      } else {
+        // Lead was already reset by stale cleanup — mark it failed from current state
+        const lead = await CampaignLead.findOneAndUpdate(
+          { _id: task.campaign_lead_id, status: "pending" },
+          { $set: { status: "failed", error: errorMsg || "Unknown error" } },
+        );
+        if (lead) {
+          await Campaign.findByIdAndUpdate(task.campaign_id, {
+            $inc: { "stats.pending": -1, "stats.failed": 1 },
+          });
+        }
+      }
     }
 
     emitToAccount(req.account._id.toString(), "task:failed", {
