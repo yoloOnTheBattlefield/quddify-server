@@ -214,13 +214,16 @@ function emitToAccount(accountId, event, data) {
 }
 
 function emitToSender(senderId, event, data) {
-  if (!io) return;
+  if (!io) return false;
+  const sid = senderId.toString();
   for (const [socketId, info] of senderSockets) {
-    if (info.senderId === senderId.toString()) {
+    if (info.senderId === sid) {
       io.to(socketId).emit(event, data);
-      break;
+      return true;
     }
   }
+  console.warn(`[socket] emitToSender: no socket found for sender ${sid} (event: ${event})`);
+  return false;
 }
 
 function getIO() {

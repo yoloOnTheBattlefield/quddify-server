@@ -5,7 +5,7 @@ const SenderAccount = require("../models/SenderAccount");
 const OutboundAccount = require("../models/OutboundAccount");
 const WarmupLog = require("../models/WarmupLog");
 const Task = require("../models/Task");
-const { emitToAccount } = require("./socketManager");
+const { emitToAccount, emitToSender } = require("./socketManager");
 
 let tickInterval = null;
 
@@ -101,12 +101,11 @@ async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, send
     $set: { task_id: task._id, message_used: message, template_index },
   });
 
-  // Notify extension via websocket
-  const delivered = emitToAccount(account_id, "task:new", task);
+  // Notify the specific sender's extension via websocket (not the whole account room)
+  const delivered = emitToSender(sender_id, "task:new", task);
 
   if (!delivered) {
-    // No sockets in room — fail the task so stale cleanup can retry the lead
-    console.warn(`[scheduler] No connected sockets for account ${account_id} — task ${task._id} will be retried by stale cleanup`);
+    console.warn(`[scheduler] No connected socket for sender ${sender_id} — task ${task._id} will be retried by stale cleanup`);
   }
 
   console.log(`[scheduler] Task created for ${target} → sender ${sender_id} (delivered: ${delivered})`);
@@ -194,14 +193,19 @@ async function processTick() {
 
       if (allSenders.length === 0) continue;
 
+      // Count only online senders for delay calculation — avoids
+      // cramming messages when some senders are offline
+      const onlineSenders = allSenders.filter((s) => s.status === "online");
+      if (onlineSenders.length === 0) continue;
+
       // Test mode: any online sender with test_mode skips all pacing/limit checks
-      const isTestMode = allSenders.some((s) => s.status === "online" && s.test_mode);
+      const isTestMode = onlineSenders.some((s) => s.test_mode);
 
       // Check time window (skip in test mode)
       if (!isTestMode && !isWithinActiveHours(campaign.schedule)) continue;
 
-      // Calculate how long to wait between sends
-      const delaySec = calculateDelay(campaign, allSenders.length);
+      // Calculate how long to wait between sends (based on online senders only)
+      const delaySec = calculateDelay(campaign, onlineSenders.length);
 
       // Check if enough time has passed since last send (skip in test mode)
       if (!isTestMode && campaign.last_sent_at) {
