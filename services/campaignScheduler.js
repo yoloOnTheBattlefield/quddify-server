@@ -73,6 +73,18 @@ function calculateDelay(campaign, numSenders, sentToday) {
   return Math.max(Math.round(Math.min(delay, fullWindowDelay)), 30); // min 30 seconds
 }
 
+function calculateBurstDelay(campaign) {
+  const minDelay = campaign.schedule.min_delay_seconds || 60;
+  const maxDelay = campaign.schedule.max_delay_seconds || 180;
+  return Math.round(minDelay + Math.random() * (maxDelay - minDelay));
+}
+
+function calculateGroupBreak(campaign) {
+  const minBreak = campaign.schedule.min_group_break_seconds || 600;
+  const maxBreak = campaign.schedule.max_group_break_seconds || 1200;
+  return Math.round(minBreak + Math.random() * (maxBreak - minBreak));
+}
+
 // Check if an outbound account is on a mandatory rest day
 function isAccountResting(outboundAcct) {
   if (!outboundAcct.streak_rest_until) return false;
@@ -280,6 +292,21 @@ async function processTick() {
   for (const campaign of campaigns) {
     try {
 
+      // Burst mode: reset group counter if last send was a different day
+      if (campaign.schedule.burst_enabled && campaign.last_sent_at) {
+        const lastSendDay = new Date(campaign.last_sent_at);
+        lastSendDay.setHours(0, 0, 0, 0);
+        const todayMidnight = new Date();
+        todayMidnight.setHours(0, 0, 0, 0);
+        if (lastSendDay.getTime() < todayMidnight.getTime()) {
+          await Campaign.findByIdAndUpdate(campaign._id, {
+            $set: { burst_sent_in_group: 0, burst_break_until: null },
+          });
+          campaign.burst_sent_in_group = 0;
+          campaign.burst_break_until = null;
+        }
+      }
+
       // Get ALL senders linked to this campaign's outbound accounts (for round-robin order)
       const allSenders = await SenderAccount.find({
         outbound_account_id: { $in: campaign.outbound_account_ids },
@@ -298,6 +325,19 @@ async function processTick() {
       // Check time window (skip in test mode)
       if (!isTestMode && !isWithinActiveHours(campaign.schedule)) continue;
 
+      // Burst mode: check if we're on a group break
+      if (!isTestMode && campaign.schedule.burst_enabled && campaign.burst_break_until) {
+        if (new Date() < new Date(campaign.burst_break_until)) {
+          continue; // still on break
+        }
+        // Break expired — reset for next group
+        await Campaign.findByIdAndUpdate(campaign._id, {
+          $set: { burst_sent_in_group: 0, burst_break_until: null },
+        });
+        campaign.burst_sent_in_group = 0;
+        campaign.burst_break_until = null;
+      }
+
       // Count how many have been sent today (across all senders for this campaign)
       const todayStartForDelay = new Date();
       todayStartForDelay.setHours(0, 0, 0, 0);
@@ -307,8 +347,10 @@ async function processTick() {
         updatedAt: { $gte: todayStartForDelay },
       });
 
-      // Calculate how long to wait between sends (dynamic — based on remaining quota/time)
-      const delaySec = calculateDelay(campaign, onlineSenders.length, sentTodayTotal);
+      // Calculate how long to wait between sends
+      const delaySec = campaign.schedule.burst_enabled
+        ? calculateBurstDelay(campaign)
+        : calculateDelay(campaign, onlineSenders.length, sentTodayTotal);
 
       // Check if enough time has passed since last send (skip in test mode)
       if (!isTestMode && campaign.last_sent_at) {
@@ -471,14 +513,46 @@ async function processTick() {
       const nextMessageIndex = (messageIndex + 1) % campaign.messages.length;
 
       // Update campaign tracking (atomic to avoid race with task completion)
-      await Campaign.findByIdAndUpdate(campaign._id, {
+      const trackingUpdate = {
         $inc: { "stats.pending": -1, "stats.queued": 1 },
         $set: {
           last_sent_at: new Date(),
           last_sender_index: nextSenderIndex,
           last_message_index: nextMessageIndex,
         },
-      });
+      };
+
+      // Burst mode: increment group counter
+      if (campaign.schedule.burst_enabled) {
+        trackingUpdate.$inc.burst_sent_in_group = 1;
+      }
+
+      await Campaign.findByIdAndUpdate(campaign._id, trackingUpdate);
+
+      // Burst mode: check if group is complete and schedule a break
+      if (campaign.schedule.burst_enabled) {
+        const newGroupCount = (campaign.burst_sent_in_group || 0) + 1;
+        const groupSize = campaign.schedule.messages_per_group || 10;
+
+        if (newGroupCount >= groupSize) {
+          // Check if there are more pending leads and daily limit not yet hit
+          const pendingLeft = await CampaignLead.countDocuments({
+            campaign_id: campaign._id,
+            status: "pending",
+          });
+
+          if (pendingLeft > 0) {
+            const breakSeconds = calculateGroupBreak(campaign);
+            await Campaign.findByIdAndUpdate(campaign._id, {
+              $set: {
+                burst_sent_in_group: 0,
+                burst_break_until: new Date(Date.now() + breakSeconds * 1000),
+              },
+            });
+            console.log(`[scheduler] Campaign ${campaign.name} burst group done (${groupSize} msgs) — breaking for ${breakSeconds}s`);
+          }
+        }
+      }
 
       // Process DM directly (no Redis queue needed)
       await processDM({

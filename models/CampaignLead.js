@@ -19,7 +19,7 @@ const CampaignLeadSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "queued", "sent", "failed", "skipped"],
+      enum: ["pending", "queued", "sent", "delivered", "replied", "failed", "skipped"],
       default: "pending",
     },
     sent_at: { type: Date, default: null },
@@ -32,6 +32,13 @@ const CampaignLeadSchema = new mongoose.Schema(
     },
     error: { type: String, default: null },
     queued_at: { type: Date, default: null },
+    manually_overridden: { type: Boolean, default: false },
+    overridden_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Account",
+      default: null,
+    },
+    overridden_at: { type: Date, default: null },
   },
   { collection: "campaign_leads", versionKey: false, timestamps: true },
 );

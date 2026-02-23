@@ -614,7 +614,7 @@ router.get("/outbound", async (req, res) => {
 router.get("/messages", async (req, res) => {
   try {
     const { campaign_id } = req.query;
-    const matchFilter = { status: "sent" };
+    const matchFilter = { status: { $in: ["sent", "delivered", "replied"] } };
     if (campaign_id) matchFilter.campaign_id = new mongoose.Types.ObjectId(campaign_id);
 
     // Group by campaign_id + template_index (the template identifier)
@@ -699,11 +699,11 @@ router.get("/senders", async (req, res) => {
       {
         $group: {
           _id: "$sender_id",
-          sent: { $sum: { $cond: [{ $eq: ["$status", "sent"] }, 1, 0] } },
+          sent: { $sum: { $cond: [{ $in: ["$status", ["sent", "delivered", "replied"]] }, 1, 0] } },
           failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } },
           skipped: { $sum: { $cond: [{ $eq: ["$status", "skipped"] }, 1, 0] } },
           outbound_lead_ids: {
-            $push: { $cond: [{ $eq: ["$status", "sent"] }, "$outbound_lead_id", "$$REMOVE"] },
+            $push: { $cond: [{ $in: ["$status", ["sent", "delivered", "replied"]] }, "$outbound_lead_id", "$$REMOVE"] },
           },
         },
       },
@@ -767,7 +767,7 @@ router.get("/campaigns", async (req, res) => {
 
     const results = await Promise.all(
       campaigns.map(async (c) => {
-        const sentLeads = await CampaignLead.find({ campaign_id: c._id, status: "sent" })
+        const sentLeads = await CampaignLead.find({ campaign_id: c._id, status: { $in: ["sent", "delivered", "replied"] } })
           .select("outbound_lead_id")
           .lean();
         const outboundIds = sentLeads.map((l) => l.outbound_lead_id);

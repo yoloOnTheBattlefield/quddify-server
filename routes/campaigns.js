@@ -118,6 +118,8 @@ router.get("/:id/next-send", async (req, res) => {
       nextSendAt = new Date().toISOString();
     }
 
+    const burstOnBreak = campaign.burst_break_until ? new Date(campaign.burst_break_until) > new Date() : false;
+
     res.json({
       status: "active",
       next_send_at: nextSendAt,
@@ -127,8 +129,14 @@ router.get("/:id/next-send", async (req, res) => {
       online_senders: onlineSenders.length,
       total_senders: senders.length,
       pending_leads: campaign.stats.pending,
-      reason,
+      reason: burstOnBreak ? "Burst group break" : reason,
       test_mode: isTestMode,
+      burst_enabled: campaign.schedule?.burst_enabled || false,
+      burst_sent_in_group: campaign.burst_sent_in_group || 0,
+      burst_on_break: burstOnBreak,
+      burst_break_remaining: campaign.burst_break_until
+        ? Math.max(0, Math.round((new Date(campaign.burst_break_until).getTime() - Date.now()) / 1000))
+        : null,
     });
   } catch (err) {
     console.error("Next send estimate error:", err);
@@ -220,6 +228,20 @@ router.patch("/:id", async (req, res) => {
     if (messages !== undefined) campaign.messages = messages;
     if (outbound_account_ids !== undefined) campaign.outbound_account_ids = outbound_account_ids;
     if (schedule !== undefined) {
+      if (schedule.messages_per_group !== undefined && schedule.messages_per_group < 1) {
+        return res.status(400).json({ error: "messages_per_group must be >= 1" });
+      }
+      if (schedule.min_delay_seconds !== undefined && schedule.min_delay_seconds < 10) {
+        return res.status(400).json({ error: "min_delay_seconds must be >= 10" });
+      }
+      if (schedule.max_delay_seconds !== undefined && schedule.min_delay_seconds !== undefined
+          && schedule.max_delay_seconds < schedule.min_delay_seconds) {
+        return res.status(400).json({ error: "max_delay_seconds must be >= min_delay_seconds" });
+      }
+      if (schedule.min_group_break_seconds !== undefined && schedule.max_group_break_seconds !== undefined
+          && schedule.max_group_break_seconds < schedule.min_group_break_seconds) {
+        return res.status(400).json({ error: "max_group_break_seconds must be >= min_group_break_seconds" });
+      }
       Object.assign(campaign.schedule, schedule);
     }
     if (daily_limit_per_sender !== undefined) {
@@ -309,6 +331,8 @@ router.post("/:id/start", async (req, res) => {
     }
 
     campaign.status = "active";
+    campaign.burst_sent_in_group = 0;
+    campaign.burst_break_until = null;
     await campaign.save();
 
     res.json({ success: true, status: "active" });
@@ -339,6 +363,8 @@ router.post("/:id/pause", async (req, res) => {
     }
 
     campaign.status = "paused";
+    campaign.burst_sent_in_group = 0;
+    campaign.burst_break_until = null;
     await campaign.save();
 
     res.json({ success: true, status: "paused" });
@@ -392,7 +418,7 @@ router.post("/:id/recalc-stats", async (req, res) => {
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
 
-    const stats = { total: 0, pending: 0, queued: 0, sent: 0, failed: 0, skipped: 0 };
+    const stats = { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, replied: 0, failed: 0, skipped: 0 };
     for (const c of counts) {
       if (stats.hasOwnProperty(c._id)) stats[c._id] = c.count;
       stats.total += c.count;
@@ -479,6 +505,87 @@ router.post("/:id/leads/retry", async (req, res) => {
   } catch (err) {
     console.error("Retry campaign leads error:", err);
     res.status(500).json({ error: "Failed to retry leads" });
+  }
+});
+
+// PATCH /api/campaigns/:id/leads/:leadId/status — manual status override
+router.patch("/:id/leads/:leadId/status", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id) || !mongoose.Types.ObjectId.isValid(req.params.leadId)) {
+      return res.status(400).json({ error: "Invalid ID" });
+    }
+
+    const { status } = req.body;
+    const allowedStatuses = ["pending", "sent", "delivered", "replied", "failed", "skipped"];
+    if (!status || !allowedStatuses.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${allowedStatuses.join(", ")}` });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    });
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const lead = await CampaignLead.findOne({
+      _id: req.params.leadId,
+      campaign_id: campaign._id,
+    });
+    if (!lead) {
+      return res.status(404).json({ error: "Campaign lead not found" });
+    }
+
+    const oldStatus = lead.status;
+    if (oldStatus === status) {
+      return res.json(lead);
+    }
+
+    // Build update
+    const update = {
+      status,
+      manually_overridden: true,
+      overridden_by: req.account._id,
+      overridden_at: new Date(),
+    };
+
+    // Set sent_at if moving to sent/delivered and not already set
+    if ((status === "sent" || status === "delivered") && !lead.sent_at) {
+      update.sent_at = new Date();
+    }
+
+    // Clear error if moving away from failed
+    if (oldStatus === "failed" && status !== "failed") {
+      update.error = null;
+    }
+
+    await CampaignLead.findByIdAndUpdate(lead._id, { $set: update });
+
+    // Adjust campaign stats
+    await Campaign.findByIdAndUpdate(campaign._id, {
+      $inc: {
+        [`stats.${oldStatus}`]: -1,
+        [`stats.${status}`]: 1,
+      },
+    });
+
+    // Mark outbound lead as messaged if moving to sent/delivered
+    if ((status === "sent" || status === "delivered") && lead.outbound_lead_id) {
+      await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, {
+        $set: { isMessaged: true },
+      });
+    }
+
+    const updated = await CampaignLead.findById(lead._id)
+      .populate("outbound_lead_id", "username fullName bio followersCount profileLink")
+      .populate("sender_id", "ig_username display_name")
+      .lean();
+
+    res.json(updated);
+  } catch (err) {
+    console.error("Manual status override error:", err);
+    res.status(500).json({ error: "Failed to update lead status" });
   }
 });
 
