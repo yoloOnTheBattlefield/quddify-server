@@ -111,7 +111,7 @@ router.get("/next", async (req, res) => {
       }
 
       // Check cooldown
-      const delaySec = calculateDelay(campaign, 1);
+      const delaySec = calculateDelay(campaign, 1, sentToday);
       if (campaign.last_sent_at) {
         const elapsed = (Date.now() - campaign.last_sent_at.getTime()) / 1000;
         if (elapsed < delaySec) {

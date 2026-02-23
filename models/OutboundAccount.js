@@ -23,6 +23,12 @@ const OutboundAccountSchema = new mongoose.Schema(
     notes: { type: String, default: null },
     twoFA: { type: String, default: null },
     browser_token: { type: String, default: null },
+    // Sending streak tracking — enforces rest days
+    // 1 day break after every 5 consecutive sending days
+    // 2 day break after every 10 consecutive sending days (cycle resets)
+    sending_streak: { type: Number, default: 0 },
+    streak_last_send_date: { type: Date, default: null },
+    streak_rest_until: { type: Date, default: null },
     warmup: {
       enabled: { type: Boolean, default: false },
       startDate: { type: Date, default: null },

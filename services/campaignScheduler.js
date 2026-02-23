@@ -31,18 +31,112 @@ function isWithinActiveHours(schedule) {
   return currentHour >= schedule.active_hours_start && currentHour < schedule.active_hours_end;
 }
 
-// Calculate seconds between each message so they spread evenly across the active window
-function calculateDelay(campaign, numSenders) {
-  const activeHours =
-    (campaign.schedule.active_hours_end || 21) - (campaign.schedule.active_hours_start || 9);
+// Calculate seconds between each message based on REMAINING quota and REMAINING time.
+// This ensures the daily limit is always reached — if the campaign starts late or
+// tasks get stuck, subsequent sends speed up to compensate.
+function calculateDelay(campaign, numSenders, sentToday) {
+  const tz = campaign.schedule.timezone || "America/New_York";
+  const endHour = campaign.schedule.active_hours_end || 21;
+  const startHour = campaign.schedule.active_hours_start || 9;
   const totalDailyMessages =
     (campaign.daily_limit_per_sender || 50) * Math.max(numSenders, 1);
-  // Total seconds in active window / total messages = seconds between each send
-  const baseDelay = (activeHours * 3600) / totalDailyMessages;
+
+  // Calculate remaining time in active window (in seconds)
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(now);
+  const currentHour = parseInt(parts.find((p) => p.type === "hour").value, 10);
+  const currentMin = parseInt(parts.find((p) => p.type === "minute").value, 10);
+  const currentTimeInSeconds = currentHour * 3600 + currentMin * 60;
+  const endTimeInSeconds = endHour * 3600;
+  const remainingSeconds = Math.max(endTimeInSeconds - currentTimeInSeconds, 1800); // min 30 min buffer
+
+  // Calculate remaining messages to send
+  const alreadySent = sentToday || 0;
+  const remainingMessages = Math.max(totalDailyMessages - alreadySent, 1);
+
+  // Spread remaining messages across remaining time
+  const baseDelay = remainingSeconds / remainingMessages;
+
   // Add ±20% jitter so it doesn't look robotic
   const jitter = baseDelay * 0.2;
   const delay = baseDelay + (Math.random() * 2 - 1) * jitter;
-  return Math.max(Math.round(delay), 30); // minimum 30 seconds
+
+  // Floor: full-window spread (never slower than if we had all day)
+  const fullWindowDelay = ((endHour - startHour) * 3600) / totalDailyMessages;
+
+  return Math.max(Math.round(Math.min(delay, fullWindowDelay)), 30); // min 30 seconds
+}
+
+// Check if an outbound account is on a mandatory rest day
+function isAccountResting(outboundAcct) {
+  if (!outboundAcct.streak_rest_until) return false;
+  const todayMidnight = new Date();
+  todayMidnight.setHours(0, 0, 0, 0);
+  return todayMidnight < outboundAcct.streak_rest_until;
+}
+
+// Update sending streak after a DM is queued (called once per day per account)
+async function updateSendingStreak(outboundAccountId) {
+  const acct = await OutboundAccount.findById(outboundAccountId);
+  if (!acct) return;
+
+  const todayMidnight = new Date();
+  todayMidnight.setHours(0, 0, 0, 0);
+
+  // Check if already counted today
+  if (acct.streak_last_send_date) {
+    const lastMidnight = new Date(acct.streak_last_send_date);
+    lastMidnight.setHours(0, 0, 0, 0);
+    if (lastMidnight.getTime() === todayMidnight.getTime()) return; // already counted
+  }
+
+  let newStreak;
+
+  if (acct.streak_rest_until) {
+    // Coming back from enforced rest — continue streak from where it was
+    newStreak = (acct.sending_streak || 0) + 1;
+  } else if (acct.streak_last_send_date) {
+    const yesterdayMidnight = new Date(todayMidnight.getTime() - 86400000);
+    const lastMidnight = new Date(acct.streak_last_send_date);
+    lastMidnight.setHours(0, 0, 0, 0);
+
+    if (lastMidnight.getTime() === yesterdayMidnight.getTime()) {
+      // Sent yesterday — continue streak
+      newStreak = (acct.sending_streak || 0) + 1;
+    } else {
+      // Gap (campaign was paused, etc.) — reset streak
+      newStreak = 1;
+    }
+  } else {
+    // First ever send
+    newStreak = 1;
+  }
+
+  const update = {
+    sending_streak: newStreak,
+    streak_last_send_date: new Date(),
+    streak_rest_until: null, // clear expired rest
+  };
+
+  // Check if rest is needed
+  if (newStreak >= 10) {
+    // 2 days rest after 10 consecutive sending days, then reset cycle
+    update.streak_rest_until = new Date(todayMidnight.getTime() + 3 * 86400000);
+    update.sending_streak = 0;
+    console.log(`[scheduler] Account ${acct.username} hit 10-day streak — resting 2 days (until ${update.streak_rest_until.toISOString().split("T")[0]})`);
+  } else if (newStreak === 5) {
+    // 1 day rest after 5 consecutive sending days (streak continues through rest)
+    update.streak_rest_until = new Date(todayMidnight.getTime() + 2 * 86400000);
+    console.log(`[scheduler] Account ${acct.username} hit 5-day streak — resting 1 day (until ${update.streak_rest_until.toISOString().split("T")[0]})`);
+  }
+
+  await OutboundAccount.findByIdAndUpdate(outboundAccountId, { $set: update });
 }
 
 async function checkStaleSenders() {
@@ -204,8 +298,17 @@ async function processTick() {
       // Check time window (skip in test mode)
       if (!isTestMode && !isWithinActiveHours(campaign.schedule)) continue;
 
-      // Calculate how long to wait between sends (based on online senders only)
-      const delaySec = calculateDelay(campaign, onlineSenders.length);
+      // Count how many have been sent today (across all senders for this campaign)
+      const todayStartForDelay = new Date();
+      todayStartForDelay.setHours(0, 0, 0, 0);
+      const sentTodayTotal = await CampaignLead.countDocuments({
+        campaign_id: campaign._id,
+        status: { $in: ["sent", "queued"] },
+        updatedAt: { $gte: todayStartForDelay },
+      });
+
+      // Calculate how long to wait between sends (dynamic — based on remaining quota/time)
+      const delaySec = calculateDelay(campaign, onlineSenders.length, sentTodayTotal);
 
       // Check if enough time has passed since last send (skip in test mode)
       if (!isTestMode && campaign.last_sent_at) {
@@ -244,6 +347,13 @@ async function processTick() {
             const outboundAcct = candidate.outbound_account_id
               ? await OutboundAccount.findById(candidate.outbound_account_id).lean()
               : null;
+
+            // Check sending streak rest days (5 days on → 1 off, 10 days on → 2 off)
+            if (outboundAcct && isAccountResting(outboundAcct)) {
+              senderIndex++;
+              attempts++;
+              continue;
+            }
 
             if (outboundAcct?.warmup?.enabled) {
               const msPerDay = 86400000;
@@ -382,6 +492,13 @@ async function processTick() {
         template_index: messageIndex,
       });
 
+      // Update sending streak for this outbound account (idempotent per day)
+      if (sender.outbound_account_id) {
+        await updateSendingStreak(sender.outbound_account_id).catch((err) =>
+          console.error("[scheduler] Streak update error:", err.message),
+        );
+      }
+
       // Tell each sender when their next task will come (staggered per round-robin position)
       const pendingRemaining = await CampaignLead.countDocuments({
         campaign_id: campaign._id,
@@ -434,4 +551,4 @@ function stop() {
   console.log("[scheduler] Campaign scheduler stopped");
 }
 
-module.exports = { start, stop, resolveTemplate, isWithinActiveHours, calculateDelay };
+module.exports = { start, stop, resolveTemplate, isWithinActiveHours, calculateDelay, isAccountResting, updateSendingStreak };
