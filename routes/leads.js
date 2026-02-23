@@ -91,11 +91,21 @@ router.post("/generate", async (req, res) => {
   try {
     const {
       total = 100,
+      days_back = 30,
+      mode = "raw",
+      randomize = false,
+    } = req.body;
+
+    let {
       link_sent = 0,
       booked = 0,
       ghosted = 0,
       follow_up = 0,
-      days_back = 30,
+      closed = 0,
+      contract_value_min = null,
+      contract_value_max = null,
+      score_min = null,
+      score_max = null,
     } = req.body;
 
     const ghl = req.account.ghl;
@@ -103,11 +113,49 @@ router.post("/generate", async (req, res) => {
       return res.status(400).json({ error: "Account has no GHL location ID" });
     }
 
+    // Randomize mode — generate realistic funnel distributions
+    if (randomize) {
+      link_sent = Math.round(total * (0.25 + Math.random() * 0.20));
+      booked = Math.round(link_sent * (0.20 + Math.random() * 0.20));
+      ghosted = Math.round(total * (0.10 + Math.random() * 0.15));
+      follow_up = Math.round(total * (0.05 + Math.random() * 0.10));
+      closed = Math.round(booked * (0.30 + Math.random() * 0.30));
+      if (link_sent + ghosted > total) ghosted = total - link_sent;
+      contract_value_min = 1000;
+      contract_value_max = 5000;
+      score_min = 1;
+      score_max = 10;
+    }
+
+    // Percentage mode — convert percentages to raw counts
+    if (mode === "percentage" && !randomize) {
+      link_sent = Math.round((total * link_sent) / 100);
+      booked = Math.round((total * booked) / 100);
+      ghosted = Math.round((total * ghosted) / 100);
+      follow_up = Math.round((total * follow_up) / 100);
+      closed = Math.round((total * closed) / 100);
+    }
+
+    // Validation
     if (booked > link_sent) {
       return res.status(400).json({ error: "booked cannot exceed link_sent" });
     }
     if (link_sent + ghosted > total) {
       return res.status(400).json({ error: "link_sent + ghosted cannot exceed total" });
+    }
+    if (closed > booked) {
+      return res.status(400).json({ error: "closed cannot exceed booked" });
+    }
+    if (contract_value_min != null && contract_value_max != null && contract_value_min > contract_value_max) {
+      return res.status(400).json({ error: "contract_value_min cannot exceed contract_value_max" });
+    }
+    if (score_min != null && score_max != null) {
+      if (score_min < 1 || score_max > 10 || score_min > score_max) {
+        return res.status(400).json({ error: "score_min/score_max must be between 1-10 and min <= max" });
+      }
+    }
+    if (closed > 0 && (contract_value_min == null || contract_value_max == null)) {
+      return res.status(400).json({ error: "contract_value_min and contract_value_max are required when closed > 0" });
     }
 
     const firstNames = [
@@ -173,6 +221,9 @@ router.post("/generate", async (req, res) => {
         booked_at: null,
         ghosted_at: null,
         follow_up_at: null,
+        closed_at: null,
+        contract_value: null,
+        score: null,
         low_ticket: null,
         summary: null,
         questions_and_answers: [],
@@ -187,6 +238,19 @@ router.post("/generate", async (req, res) => {
         }
       } else if (i >= link_sent && i < link_sent + ghosted) {
         lead.ghosted_at = new Date(createdAt.getTime() + randHours(24, 120) * 3600000);
+      }
+
+      // Closed leads = first `closed` indices within booked leads
+      if (i < closed && lead.booked_at) {
+        lead.closed_at = new Date(lead.booked_at.getTime() + randHours(24, 168) * 3600000);
+        lead.contract_value = Math.round(
+          contract_value_min + Math.random() * (contract_value_max - contract_value_min),
+        );
+      }
+
+      // Score for leads that progressed past link_sent
+      if (lead.link_sent_at && score_min != null && score_max != null) {
+        lead.score = Math.round(score_min + Math.random() * (score_max - score_min));
       }
 
       // Booked leads get Calendly-style Q&A
@@ -219,7 +283,14 @@ router.post("/generate", async (req, res) => {
     res.json({
       success: true,
       created: leads.length,
-      breakdown: { link_sent, booked, ghosted, follow_up },
+      breakdown: {
+        link_sent,
+        booked,
+        ghosted,
+        follow_up,
+        closed,
+        total_revenue: leads.reduce((sum, l) => sum + (l.contract_value || 0), 0),
+      },
     });
   } catch (error) {
     console.error("Generate leads error:", error);
