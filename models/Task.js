@@ -9,7 +9,7 @@ const TaskSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["send_dm", "follow", "unfollow"],
+      enum: ["send_dm", "follow", "unfollow", "comment_post"],
       required: true,
     },
     target: { type: String, required: true },

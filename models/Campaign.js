@@ -42,6 +42,18 @@ const CampaignSchema = new mongoose.Schema(
     last_message_index: { type: Number, default: 0 },
     burst_sent_in_group: { type: Number, default: 0 },
     burst_break_until: { type: Date, default: null },
+    ai_personalization: {
+      enabled: { type: Boolean, default: false },
+      prompt: { type: String, default: null },
+      status: {
+        type: String,
+        enum: ["idle", "generating", "completed", "failed"],
+        default: "idle",
+      },
+      progress: { type: Number, default: 0 },
+      total: { type: Number, default: 0 },
+      error: { type: String, default: null },
+    },
     stats: {
       total: { type: Number, default: 0 },
       pending: { type: Number, default: 0 },

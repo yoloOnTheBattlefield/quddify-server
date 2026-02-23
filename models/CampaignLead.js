@@ -39,6 +39,7 @@ const CampaignLeadSchema = new mongoose.Schema(
       default: null,
     },
     overridden_at: { type: Date, default: null },
+    custom_message: { type: String, default: null },
   },
   { collection: "campaign_leads", versionKey: false, timestamps: true },
 );

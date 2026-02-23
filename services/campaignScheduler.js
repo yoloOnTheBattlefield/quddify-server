@@ -503,14 +503,23 @@ async function processTick() {
         continue;
       }
 
-      // Round-robin message variant (sequential, not random)
-      const messageIndex = (campaign.last_message_index || 0) % campaign.messages.length;
-      const template = campaign.messages[messageIndex];
-      const message = resolveTemplate(template, outboundLead);
+      // Check for AI-personalized custom message first, fall back to template rotation
+      let message;
+      let messageIndex;
+      let nextMessageIndex;
+      if (campaignLead.custom_message) {
+        message = campaignLead.custom_message;
+        messageIndex = null;
+        nextMessageIndex = campaign.last_message_index || 0; // don't advance
+      } else {
+        messageIndex = (campaign.last_message_index || 0) % campaign.messages.length;
+        const template = campaign.messages[messageIndex];
+        message = resolveTemplate(template, outboundLead);
+        nextMessageIndex = (messageIndex + 1) % campaign.messages.length;
+      }
 
       // Advance round-robin indexes
       const nextSenderIndex = (senderIndex + 1) % allSenders.length;
-      const nextMessageIndex = (messageIndex + 1) % campaign.messages.length;
 
       // Update campaign tracking (atomic to avoid race with task completion)
       const trackingUpdate = {

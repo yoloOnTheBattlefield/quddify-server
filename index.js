@@ -35,6 +35,7 @@ const deepScrapeRoutes = require("./routes/deep-scrape");
 const apifyTokenRoutes = require("./routes/apify-tokens");
 const adminRoutes = require("./routes/admin");
 const replyCheckRoutes = require("./routes/reply-checks");
+const aiPromptRoutes = require("./routes/ai-prompts");
 
 const { auth } = require("./middleware/auth");
 const socketManager = require("./services/socketManager");
@@ -167,6 +168,7 @@ app.use("/api/deep-scrape", deepScrapeRoutes);
 app.use("/api/apify-tokens", apifyTokenRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reply-checks", replyCheckRoutes);
+app.use("/api/ai-prompts", aiPromptRoutes);
 app.use("/tracking", trackingRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass

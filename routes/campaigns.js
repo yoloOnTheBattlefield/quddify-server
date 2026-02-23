@@ -1,9 +1,12 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const OpenAI = require("openai");
 const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
+const Account = require("../models/Account");
+const { emitToAccount } = require("../services/socketManager");
 const { isWithinActiveHours, calculateDelay } = require("../services/campaignScheduler");
 const router = express.Router();
 
@@ -810,6 +813,348 @@ router.post("/:id/duplicate", async (req, res) => {
   } catch (err) {
     console.error("Duplicate campaign error:", err);
     res.status(500).json({ error: "Failed to duplicate campaign" });
+  }
+});
+
+// PATCH /api/campaigns/:id/ai-prompt — save AI personalization prompt
+router.patch("/:id/ai-prompt", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const { prompt } = req.body;
+    if (typeof prompt !== "string") {
+      return res.status(400).json({ error: "prompt string is required" });
+    }
+
+    const campaign = await Campaign.findOneAndUpdate(
+      { _id: req.params.id, account_id: req.account._id },
+      { $set: { "ai_personalization.prompt": prompt.trim() || null } },
+      { new: true },
+    ).lean();
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    res.json({ prompt: campaign.ai_personalization?.prompt || null });
+  } catch (err) {
+    console.error("Save AI prompt error:", err);
+    res.status(500).json({ error: "Failed to save prompt" });
+  }
+});
+
+// POST /api/campaigns/:id/generate-messages — AI personalized message generation
+router.post("/:id/generate-messages", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const { prompt } = req.body;
+    if (!prompt || !prompt.trim()) {
+      return res.status(400).json({ error: "Prompt is required" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    if (campaign.status === "active") {
+      return res.status(400).json({ error: "Pause the campaign before generating messages" });
+    }
+
+    if (campaign.ai_personalization?.status === "generating") {
+      return res.status(400).json({ error: "Generation already in progress" });
+    }
+
+    // Find pending leads that don't already have a custom_message
+    const leads = await CampaignLead.find({
+      campaign_id: campaign._id,
+      status: "pending",
+      $or: [{ custom_message: null }, { custom_message: { $exists: false } }],
+    }).populate("outbound_lead_id", "username fullName bio").lean();
+
+    if (leads.length === 0) {
+      return res.status(400).json({ error: "No pending leads without messages to generate for" });
+    }
+
+    // Save prompt and set generating status
+    await Campaign.findByIdAndUpdate(campaign._id, {
+      $set: {
+        "ai_personalization.enabled": true,
+        "ai_personalization.prompt": prompt.trim(),
+        "ai_personalization.status": "generating",
+        "ai_personalization.progress": 0,
+        "ai_personalization.total": leads.length,
+        "ai_personalization.error": null,
+      },
+    });
+
+    // Return immediately
+    res.json({ status: "generating", total: leads.length });
+
+    // Async generation (fire and forget)
+    const accountId = req.account._id.toString();
+
+    (async () => {
+      try {
+        // Get OpenAI API key
+        const account = await Account.findById(req.account._id, "openai_token").lean();
+        const apiKey = (account && account.openai_token) || process.env.OPENAI;
+
+        if (!apiKey) {
+          await Campaign.findByIdAndUpdate(campaign._id, {
+            $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No OpenAI API key configured" },
+          });
+          emitToAccount(accountId, "campaign:generation:failed", {
+            campaignId: campaign._id.toString(),
+            error: "No OpenAI API key configured",
+          });
+          return;
+        }
+
+        const openai = new OpenAI({ apiKey });
+        const BATCH_SIZE = 5;
+        let processed = 0;
+
+        for (let i = 0; i < leads.length; i += BATCH_SIZE) {
+          const batch = leads.slice(i, i + BATCH_SIZE);
+
+          const results = await Promise.allSettled(
+            batch.map(async (lead) => {
+              const outboundLead = lead.outbound_lead_id;
+              if (!outboundLead) return null;
+
+              // Build lead context for the user message
+              const fullName = outboundLead.fullName || outboundLead.username || "";
+              const leadContext = `Username: ${outboundLead.username || "N/A"}\nFull Name: ${fullName}\nBio: ${outboundLead.bio || "N/A"}`;
+
+              const response = await openai.chat.completions.create({
+                model: "o4-mini",
+                messages: [
+                  {
+                    role: "system",
+                    content: prompt,
+                  },
+                  { role: "user", content: leadContext },
+                ],
+              });
+
+              const generatedMessage = response.choices[0]?.message?.content?.trim();
+              if (generatedMessage) {
+                await CampaignLead.findByIdAndUpdate(lead._id, {
+                  $set: { custom_message: generatedMessage },
+                });
+              }
+
+              return generatedMessage;
+            }),
+          );
+
+          processed += batch.length;
+
+          // Update progress
+          await Campaign.findByIdAndUpdate(campaign._id, {
+            $set: { "ai_personalization.progress": processed },
+          });
+
+          emitToAccount(accountId, "campaign:generation:progress", {
+            campaignId: campaign._id.toString(),
+            progress: processed,
+            total: leads.length,
+          });
+        }
+
+        // Mark completed
+        await Campaign.findByIdAndUpdate(campaign._id, {
+          $set: { "ai_personalization.status": "completed" },
+        });
+
+        emitToAccount(accountId, "campaign:generation:completed", {
+          campaignId: campaign._id.toString(),
+        });
+
+        console.log(`[ai-gen] Campaign ${campaign.name}: generated ${processed} messages`);
+      } catch (err) {
+        console.error("[ai-gen] Generation error:", err);
+        await Campaign.findByIdAndUpdate(campaign._id, {
+          $set: {
+            "ai_personalization.status": "failed",
+            "ai_personalization.error": err.message || "Generation failed",
+          },
+        });
+
+        emitToAccount(accountId, "campaign:generation:failed", {
+          campaignId: campaign._id.toString(),
+          error: err.message || "Generation failed",
+        });
+      }
+    })();
+  } catch (err) {
+    console.error("Generate messages error:", err);
+    res.status(500).json({ error: "Failed to start message generation" });
+  }
+});
+
+// POST /api/campaigns/:id/leads/:leadId/regenerate — regenerate a single lead's AI message
+router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id) || !mongoose.Types.ObjectId.isValid(req.params.leadId)) {
+      return res.status(400).json({ error: "Invalid ID" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const prompt = req.body.prompt || campaign.ai_personalization?.prompt;
+    if (!prompt) {
+      return res.status(400).json({ error: "No prompt available. Provide a prompt or generate messages first." });
+    }
+
+    const lead = await CampaignLead.findOne({
+      _id: req.params.leadId,
+      campaign_id: campaign._id,
+    }).populate("outbound_lead_id", "username fullName bio").lean();
+
+    if (!lead) {
+      return res.status(404).json({ error: "Campaign lead not found" });
+    }
+
+    const outboundLead = lead.outbound_lead_id;
+    if (!outboundLead) {
+      return res.status(400).json({ error: "Lead has no associated outbound lead" });
+    }
+
+    // Get OpenAI API key
+    const account = await Account.findById(req.account._id, "openai_token").lean();
+    const apiKey = (account && account.openai_token) || process.env.OPENAI;
+
+    if (!apiKey) {
+      return res.status(400).json({ error: "No OpenAI API key configured" });
+    }
+
+    const openai = new OpenAI({ apiKey });
+    const fullName = outboundLead.fullName || outboundLead.username || "";
+    const leadContext = `Username: ${outboundLead.username || "N/A"}\nFull Name: ${fullName}\nBio: ${outboundLead.bio || "N/A"}`;
+
+    const response = await openai.chat.completions.create({
+      model: "o4-mini",
+      messages: [
+        {
+          role: "system",
+          content: prompt,
+        },
+        { role: "user", content: leadContext },
+      ],
+    });
+
+    const generatedMessage = response.choices[0]?.message?.content?.trim();
+
+    const updated = await CampaignLead.findByIdAndUpdate(
+      lead._id,
+      { $set: { custom_message: generatedMessage || null } },
+      { new: true },
+    )
+      .populate("outbound_lead_id", "username fullName bio followersCount profileLink")
+      .populate("sender_id", "ig_username display_name")
+      .lean();
+
+    res.json(updated);
+  } catch (err) {
+    console.error("Regenerate lead message error:", err);
+    res.status(500).json({ error: "Failed to regenerate message" });
+  }
+});
+
+// PATCH /api/campaigns/:id/leads/:leadId/message — manually edit a lead's custom message
+router.patch("/:id/leads/:leadId/message", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id) || !mongoose.Types.ObjectId.isValid(req.params.leadId)) {
+      return res.status(400).json({ error: "Invalid ID" });
+    }
+
+    const { custom_message } = req.body;
+    if (typeof custom_message !== "string") {
+      return res.status(400).json({ error: "custom_message string is required" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const updated = await CampaignLead.findOneAndUpdate(
+      { _id: req.params.leadId, campaign_id: campaign._id },
+      { $set: { custom_message: custom_message.trim() || null } },
+      { new: true },
+    )
+      .populate("outbound_lead_id", "username fullName bio followersCount profileLink")
+      .populate("sender_id", "ig_username display_name")
+      .lean();
+
+    if (!updated) {
+      return res.status(404).json({ error: "Campaign lead not found" });
+    }
+
+    res.json(updated);
+  } catch (err) {
+    console.error("Edit lead message error:", err);
+    res.status(500).json({ error: "Failed to edit message" });
+  }
+});
+
+// POST /api/campaigns/:id/clear-messages — clear all custom messages on pending leads
+router.post("/:id/clear-messages", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const result = await CampaignLead.updateMany(
+      { campaign_id: campaign._id, status: "pending" },
+      { $set: { custom_message: null } },
+    );
+
+    // Reset AI personalization state
+    await Campaign.findByIdAndUpdate(campaign._id, {
+      $set: {
+        "ai_personalization.status": "idle",
+        "ai_personalization.progress": 0,
+        "ai_personalization.total": 0,
+        "ai_personalization.error": null,
+      },
+    });
+
+    res.json({ cleared: result.modifiedCount });
+  } catch (err) {
+    console.error("Clear messages error:", err);
+    res.status(500).json({ error: "Failed to clear messages" });
   }
 });
 
