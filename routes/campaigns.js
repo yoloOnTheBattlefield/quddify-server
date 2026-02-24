@@ -313,9 +313,10 @@ router.post("/:id/start", async (req, res) => {
       return res.status(400).json({ error: "Campaign is already completed" });
     }
 
-    // Validate campaign has messages
-    if (!campaign.messages || campaign.messages.length === 0) {
-      return res.status(400).json({ error: "Campaign must have at least one message template" });
+    // Validate campaign has messages (skip if AI personalization generated custom messages)
+    const hasAIMessages = campaign.ai_personalization?.status === "completed";
+    if (!hasAIMessages && (!campaign.messages || campaign.messages.length === 0)) {
+      return res.status(400).json({ error: "Campaign must have at least one message template or AI-generated messages" });
     }
 
     // Validate campaign has outbound accounts
