@@ -719,10 +719,19 @@ router.get("/:id/leads", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const { status, page, limit } = req.query;
+    const { status, search, page, limit } = req.query;
     const filter = { campaign_id: campaign._id };
 
     if (status) filter.status = status;
+
+    // Search by outbound lead username or fullName
+    if (search) {
+      const matchingLeadIds = await OutboundLead.find(
+        { $or: [{ username: { $regex: search, $options: "i" } }, { fullName: { $regex: search, $options: "i" } }] },
+        { _id: 1 },
+      ).lean();
+      filter.outbound_lead_id = { $in: matchingLeadIds.map((l) => l._id) };
+    }
 
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = Math.min(parseInt(limit, 10) || 50, 100);
@@ -730,7 +739,7 @@ router.get("/:id/leads", async (req, res) => {
 
     const [leads, total] = await Promise.all([
       CampaignLead.find(filter)
-        .populate("outbound_lead_id", "username fullName bio followersCount profileLink")
+        .populate("outbound_lead_id", "username fullName bio followersCount profileLink replied booked")
         .populate("sender_id", "ig_username display_name")
         .sort({ createdAt: -1 })
         .skip(skip)
