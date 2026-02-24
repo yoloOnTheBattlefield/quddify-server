@@ -251,6 +251,37 @@ router.delete("/:id/token", async (req, res) => {
   }
 });
 
+// PATCH /api/outbound-accounts/me/status — extension sets its own account status
+router.patch("/me/status", async (req, res) => {
+  try {
+    if (!req.outboundAccount) {
+      return res.status(403).json({ error: "This endpoint requires a browser token (extension only)" });
+    }
+
+    const { status } = req.body;
+    const allowed = ["ready", "restricted", "disabled"];
+    if (!status || !allowed.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${allowed.join(", ")}` });
+    }
+
+    const account = await OutboundAccount.findByIdAndUpdate(
+      req.outboundAccount._id,
+      { $set: { status } },
+      { new: true },
+    ).lean();
+
+    emitToAccount(req.account._id.toString(), "outbound-account:updated", {
+      accountId: account._id,
+      status,
+    });
+
+    res.json(account);
+  } catch (err) {
+    console.error("Extension set status error:", err);
+    res.status(500).json({ error: "Failed to update status" });
+  }
+});
+
 // DELETE /api/outbound-accounts/:id — delete account
 router.delete("/:id", async (req, res) => {
   try {

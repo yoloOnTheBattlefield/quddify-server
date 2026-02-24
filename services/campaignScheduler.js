@@ -31,6 +31,21 @@ function isWithinActiveHours(schedule) {
   return currentHour >= schedule.active_hours_start && currentHour < schedule.active_hours_end;
 }
 
+// Calculate the effective daily limit per sender, accounting for campaign warmup ramp
+function getEffectiveDailyLimit(campaign) {
+  const baseLimit = campaign.daily_limit_per_sender || 50;
+  if (!campaign.warmup_days || campaign.warmup_days <= 0 || !campaign.warmup_start_date) {
+    return baseLimit;
+  }
+
+  const msPerDay = 86400000;
+  const dayNumber = Math.floor((Date.now() - new Date(campaign.warmup_start_date).getTime()) / msPerDay) + 1;
+
+  if (dayNumber >= campaign.warmup_days) return baseLimit;
+
+  return Math.max(Math.ceil(baseLimit * dayNumber / campaign.warmup_days), 1);
+}
+
 // Calculate seconds between each message based on REMAINING quota and REMAINING time.
 // This ensures the daily limit is always reached — if the campaign starts late or
 // tasks get stuck, subsequent sends speed up to compensate.
@@ -38,8 +53,8 @@ function calculateDelay(campaign, numSenders, sentToday) {
   const tz = campaign.schedule.timezone || "America/New_York";
   const endHour = campaign.schedule.active_hours_end || 21;
   const startHour = campaign.schedule.active_hours_start || 9;
-  const totalDailyMessages =
-    (campaign.daily_limit_per_sender || 50) * Math.max(numSenders, 1);
+  const effectiveLimit = getEffectiveDailyLimit(campaign);
+  const totalDailyMessages = effectiveLimit * Math.max(numSenders, 1);
 
   // Calculate remaining time in active window (in seconds)
   const now = new Date();
@@ -390,6 +405,13 @@ async function processTick() {
               ? await OutboundAccount.findById(candidate.outbound_account_id).lean()
               : null;
 
+            // Skip accounts that aren't in "ready" status (restricted, disabled, etc.)
+            if (outboundAcct && outboundAcct.status !== "ready") {
+              senderIndex++;
+              attempts++;
+              continue;
+            }
+
             // Check sending streak rest days (5 days on → 1 off, 10 days on → 2 off)
             if (outboundAcct && isAccountResting(outboundAcct)) {
               senderIndex++;
@@ -436,7 +458,7 @@ async function processTick() {
               updatedAt: { $gte: todayStart },
             });
 
-            const dailyLimit = campaign.daily_limit_per_sender || candidate.daily_limit || 50;
+            const dailyLimit = getEffectiveDailyLimit(campaign);
             if (sentToday < dailyLimit) {
               const existingTask = await Task.findOne({
                 sender_id: candidate._id,
@@ -458,12 +480,21 @@ async function processTick() {
 
       if (!sender) continue; // no available sender right now
 
-      // Pick next pending lead (atomic)
-      const campaignLead = await CampaignLead.findOneAndUpdate(
-        { campaign_id: campaign._id, status: "pending" },
+      // Pick next pending lead (atomic) — prefer leads that haven't failed with this sender
+      let campaignLead = await CampaignLead.findOneAndUpdate(
+        { campaign_id: campaign._id, status: "pending", failed_sender_ids: { $nin: [sender._id] } },
         { $set: { status: "queued", sender_id: sender._id, queued_at: new Date() } },
         { sort: { createdAt: 1 }, new: true },
       );
+
+      // Fallback: if all remaining leads failed with this sender, pick any pending lead
+      if (!campaignLead) {
+        campaignLead = await CampaignLead.findOneAndUpdate(
+          { campaign_id: campaign._id, status: "pending" },
+          { $set: { status: "queued", sender_id: sender._id, queued_at: new Date() } },
+          { sort: { createdAt: 1 }, new: true },
+        );
+      }
 
       if (!campaignLead) {
         // No more pending leads — check if campaign should complete
@@ -634,4 +665,4 @@ function stop() {
   console.log("[scheduler] Campaign scheduler stopped");
 }
 
-module.exports = { start, stop, resolveTemplate, isWithinActiveHours, calculateDelay, isAccountResting, updateSendingStreak };
+module.exports = { start, stop, resolveTemplate, isWithinActiveHours, calculateDelay, isAccountResting, updateSendingStreak, getEffectiveDailyLimit };

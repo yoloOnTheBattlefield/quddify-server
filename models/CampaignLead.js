@@ -40,6 +40,7 @@ const CampaignLeadSchema = new mongoose.Schema(
     },
     overridden_at: { type: Date, default: null },
     custom_message: { type: String, default: null },
+    failed_sender_ids: [{ type: mongoose.Schema.Types.ObjectId, ref: "SenderAccount" }],
   },
   { collection: "campaign_leads", versionKey: false, timestamps: true },
 );

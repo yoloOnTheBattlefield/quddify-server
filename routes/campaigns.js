@@ -337,6 +337,10 @@ router.post("/:id/start", async (req, res) => {
     campaign.status = "active";
     campaign.burst_sent_in_group = 0;
     campaign.burst_break_until = null;
+    // Set warmup start date on first activation (don't reset on resume)
+    if (campaign.warmup_days > 0 && !campaign.warmup_start_date) {
+      campaign.warmup_start_date = new Date();
+    }
     await campaign.save();
 
     res.json({ success: true, status: "active" });
@@ -478,6 +482,20 @@ router.post("/:id/leads/retry", async (req, res) => {
 
     if (totalRetried === 0) {
       return res.json({ retried: 0 });
+    }
+
+    // Track which sender failed each lead so the scheduler avoids reusing them
+    const failedLeads = await CampaignLead.find({
+      _id: { $in: lead_ids.map((id) => new mongoose.Types.ObjectId(id)) },
+      campaign_id: campaign._id,
+      status: "failed",
+      sender_id: { $ne: null },
+    }, { _id: 1, sender_id: 1 }).lean();
+
+    for (const fl of failedLeads) {
+      await CampaignLead.findByIdAndUpdate(fl._id, {
+        $addToSet: { failed_sender_ids: fl.sender_id },
+      });
     }
 
     // Reset leads to pending

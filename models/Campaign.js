@@ -37,6 +37,8 @@ const CampaignSchema = new mongoose.Schema(
       max_group_break_seconds: { type: Number, default: 1200 },
     },
     daily_limit_per_sender: { type: Number, default: 50 },
+    warmup_days: { type: Number, default: 0 },
+    warmup_start_date: { type: Date, default: null },
     last_sent_at: { type: Date, default: null },
     last_sender_index: { type: Number, default: 0 },
     last_message_index: { type: Number, default: 0 },
