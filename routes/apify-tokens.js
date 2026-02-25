@@ -114,6 +114,45 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// GET /api/apify-tokens/usage — fetch Apify usage/limits for each token
+router.get("/usage", async (req, res) => {
+  try {
+    const tokens = await ApifyToken.find({ account_id: req.account._id }).lean();
+
+    const results = await Promise.all(
+      tokens.map(async (t) => {
+        try {
+          const [usageRes, limitsRes] = await Promise.all([
+            fetch(`https://api.apify.com/v2/users/me/usage/monthly?token=${t.token}`),
+            fetch(`https://api.apify.com/v2/users/me/limits?token=${t.token}`),
+          ]);
+
+          if (!usageRes.ok || !limitsRes.ok) {
+            return { _id: t._id, error: "Failed to fetch from Apify" };
+          }
+
+          const usage = await usageRes.json();
+          const limits = await limitsRes.json();
+
+          return {
+            _id: t._id,
+            totalUsageUsd: usage.data?.totalUsageCreditsUsdAfterVolumeDiscount ?? null,
+            usageCycle: usage.data?.usageCycle ?? null,
+            monthlyUsageLimitUsd: limits.data?.current?.maxMonthlyUsageUsd ?? null,
+          };
+        } catch {
+          return { _id: t._id, error: "Network error" };
+        }
+      }),
+    );
+
+    res.json({ usage: results });
+  } catch (err) {
+    console.error("Apify usage fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch usage" });
+  }
+});
+
 // POST /api/apify-tokens/:id/reset — reset a limit_reached token back to active
 router.post("/:id/reset", async (req, res) => {
   try {
