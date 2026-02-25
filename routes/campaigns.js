@@ -580,13 +580,16 @@ router.get("/:id/stats", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    // Compute replied count from OutboundLead.replied boolean (manual toggles)
+    // Compute replied/booked counts from OutboundLead booleans (manual toggles)
     const campaignLeadOutboundIds = await CampaignLead.find({ campaign_id: campaign._id }).distinct("outbound_lead_id");
-    const repliedCount = campaignLeadOutboundIds.length > 0
-      ? await OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true })
-      : 0;
+    const [repliedCount, bookedCount] = campaignLeadOutboundIds.length > 0
+      ? await Promise.all([
+          OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true }),
+          OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, booked: true }),
+        ])
+      : [0, 0];
 
-    res.json({ ...campaign.stats, replied: repliedCount });
+    res.json({ ...campaign.stats, replied: repliedCount, booked: bookedCount });
   } catch (err) {
     console.error("Campaign stats error:", err);
     res.status(500).json({ error: "Failed to get stats" });
@@ -623,11 +626,15 @@ router.post("/:id/recalc-stats", async (req, res) => {
       stats.total += c.count;
     }
 
-    // Compute replied from OutboundLead.replied boolean (manual toggles)
-    const repliedCount = campaignLeadOutboundIds.length > 0
-      ? await OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true })
-      : 0;
+    // Compute replied/booked from OutboundLead booleans (manual toggles)
+    const [repliedCount, bookedCount] = campaignLeadOutboundIds.length > 0
+      ? await Promise.all([
+          OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true }),
+          OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, booked: true }),
+        ])
+      : [0, 0];
     stats.replied = repliedCount;
+    stats.booked = bookedCount;
 
     campaign.stats = stats;
     await campaign.save();
