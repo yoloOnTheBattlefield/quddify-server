@@ -22,7 +22,7 @@ function buildLoginResponse(user, account, accountUser) {
     last_name: user.last_name,
     email: user.email,
     role: accountUser.role,
-    has_outbound: account.has_outbound && accountUser.has_outbound,
+    has_outbound: account.has_outbound && (accountUser.role === 0 || accountUser.has_outbound),
     has_research: accountUser.has_research,
     ghl: account.ghl,
     calendly: account.calendly,
@@ -207,7 +207,7 @@ router.post("/login", async (req, res) => {
           name: acc ? accountName(acc) : "Unknown",
           ghl: acc?.ghl || null,
           role: m.role,
-          has_outbound: (acc?.has_outbound ?? false) && m.has_outbound,
+          has_outbound: (acc?.has_outbound ?? false) && (m.role === 0 || m.has_outbound),
           has_research: m.has_research,
           is_default: m.is_default,
           disabled: acc?.disabled || false,
@@ -269,7 +269,7 @@ router.post("/select-account", async (req, res) => {
       ...buildLoginResponse(user, account, accountUser),
       accounts: allMemberships.map((m) => {
         const acc = accMap[m.account_id.toString()];
-        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: m.has_research, is_default: m.is_default };
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && (m.role === 0 || m.has_outbound), has_research: m.has_research, is_default: m.is_default };
       }),
     });
   } catch (error) {
@@ -313,7 +313,7 @@ router.post("/switch-account", async (req, res) => {
       ...buildLoginResponse(user, account, accountUser),
       accounts: allMemberships.map((m) => {
         const acc = accMap[m.account_id.toString()];
-        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: m.has_research, is_default: m.is_default };
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && (m.role === 0 || m.has_outbound), has_research: m.has_research, is_default: m.is_default };
       }),
     });
   } catch (error) {
@@ -340,7 +340,7 @@ router.get("/my-accounts", async (req, res) => {
           name: acc ? accountName(acc) : "Unknown",
           ghl: acc?.ghl || null,
           role: m.role,
-          has_outbound: (acc?.has_outbound ?? false) && m.has_outbound,
+          has_outbound: (acc?.has_outbound ?? false) && (m.role === 0 || m.has_outbound),
           has_research: m.has_research,
           is_default: m.is_default,
         };
