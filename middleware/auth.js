@@ -12,7 +12,7 @@ function generateToken(user, account, accountUser) {
       accountId: account._id,
       ghl: account.ghl,
       role: accountUser.role,
-      has_outbound: accountUser.has_outbound,
+      has_outbound: account.has_outbound && accountUser.has_outbound,
       has_research: accountUser.has_research,
     },
     JWT_SECRET,

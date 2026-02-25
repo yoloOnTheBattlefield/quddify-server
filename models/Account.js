@@ -8,6 +8,7 @@ const AccountSchema = new mongoose.Schema(
     calendly_token: { type: String, default: null },
     ghl_lead_booked_webhook: { type: String, default: null },
     openai_token: { type: String, default: null },
+    has_outbound: { type: Boolean, default: false },
     disabled: { type: Boolean, default: false },
     api_key: { type: String, unique: true, sparse: true },
     tracking_enabled: { type: Boolean, default: false },

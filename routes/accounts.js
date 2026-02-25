@@ -22,7 +22,7 @@ function buildLoginResponse(user, account, accountUser) {
     last_name: user.last_name,
     email: user.email,
     role: accountUser.role,
-    has_outbound: accountUser.has_outbound,
+    has_outbound: account.has_outbound && accountUser.has_outbound,
     has_research: accountUser.has_research,
     ghl: account.ghl,
     calendly: account.calendly,
@@ -207,7 +207,7 @@ router.post("/login", async (req, res) => {
           name: acc ? accountName(acc) : "Unknown",
           ghl: acc?.ghl || null,
           role: m.role,
-          has_outbound: m.has_outbound,
+          has_outbound: (acc?.has_outbound ?? false) && m.has_outbound,
           has_research: m.has_research,
           is_default: m.is_default,
           disabled: acc?.disabled || false,
@@ -269,7 +269,7 @@ router.post("/select-account", async (req, res) => {
       ...buildLoginResponse(user, account, accountUser),
       accounts: allMemberships.map((m) => {
         const acc = accMap[m.account_id.toString()];
-        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: m.has_outbound, has_research: m.has_research, is_default: m.is_default };
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: m.has_research, is_default: m.is_default };
       }),
     });
   } catch (error) {
@@ -313,7 +313,7 @@ router.post("/switch-account", async (req, res) => {
       ...buildLoginResponse(user, account, accountUser),
       accounts: allMemberships.map((m) => {
         const acc = accMap[m.account_id.toString()];
-        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: m.has_outbound, has_research: m.has_research, is_default: m.is_default };
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: m.has_research, is_default: m.is_default };
       }),
     });
   } catch (error) {
@@ -340,7 +340,7 @@ router.get("/my-accounts", async (req, res) => {
           name: acc ? accountName(acc) : "Unknown",
           ghl: acc?.ghl || null,
           role: m.role,
-          has_outbound: m.has_outbound,
+          has_outbound: (acc?.has_outbound ?? false) && m.has_outbound,
           has_research: m.has_research,
           is_default: m.is_default,
         };
@@ -767,6 +767,7 @@ router.get("/ghl-webhook", async (req, res) => {
       account_id: account._id,
       ghl: account.ghl,
       name: accountName(account),
+      has_outbound: !!account.has_outbound,
       ghl_lead_booked_webhook: account.ghl_lead_booked_webhook || undefined,
     });
   } catch (error) {
@@ -797,6 +798,29 @@ router.post("/ghl-webhook", async (req, res) => {
   } catch (error) {
     console.error("GHL webhook update error:", error);
     res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// ---------- PATCH /accounts/:accountId/has-outbound ----------
+
+router.patch("/:accountId/has-outbound", async (req, res) => {
+  try {
+    if (req.user?.role !== 0) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const { has_outbound } = req.body;
+    const account = await Account.findByIdAndUpdate(
+      req.params.accountId,
+      { has_outbound: !!has_outbound },
+      { new: true },
+    );
+    if (!account) return res.status(404).json({ error: "Account not found" });
+
+    res.json({ has_outbound: account.has_outbound });
+  } catch (error) {
+    console.error("Toggle has_outbound error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

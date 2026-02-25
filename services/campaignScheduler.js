@@ -3,6 +3,7 @@ const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
 const OutboundAccount = require("../models/OutboundAccount");
+const Account = require("../models/Account");
 const WarmupLog = require("../models/WarmupLog");
 const Task = require("../models/Task");
 const { emitToAccount, emitToSender } = require("./socketManager");
@@ -306,6 +307,10 @@ async function processTick() {
 
   for (const campaign of campaigns) {
     try {
+
+      // Skip campaigns for accounts without outbound enabled
+      const campaignAccount = await Account.findById(campaign.account_id).lean();
+      if (!campaignAccount?.has_outbound) continue;
 
       // Burst mode: reset group counter if last send was a different day
       if (campaign.schedule.burst_enabled && campaign.last_sent_at) {
