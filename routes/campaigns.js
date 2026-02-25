@@ -5,6 +5,7 @@ const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
+const OutboundAccount = require("../models/OutboundAccount");
 const Account = require("../models/Account");
 const { emitToAccount } = require("../services/socketManager");
 const { isWithinActiveHours, calculateDelay } = require("../services/campaignScheduler");
@@ -144,6 +145,187 @@ router.get("/:id/next-send", async (req, res) => {
   } catch (err) {
     console.error("Next send estimate error:", err);
     res.status(500).json({ error: "Failed to compute next send estimate" });
+  }
+});
+
+// GET /api/campaigns/:id/senders — detailed sender info for campaign
+router.get("/:id/senders", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    if (!campaign.outbound_account_ids || campaign.outbound_account_ids.length === 0) {
+      return res.json({ senders: [], summary: { total: 0, online: 0, offline: 0, issues: 0 } });
+    }
+
+    // Fetch outbound accounts and linked senders in parallel
+    const [outboundAccounts, senders] = await Promise.all([
+      OutboundAccount.find({ _id: { $in: campaign.outbound_account_ids } }).lean(),
+      SenderAccount.find({ outbound_account_id: { $in: campaign.outbound_account_ids } }).lean(),
+    ]);
+
+    const outboundMap = {};
+    for (const oa of outboundAccounts) {
+      outboundMap[oa._id.toString()] = oa;
+    }
+
+    // Count messages sent today per sender for this campaign
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const sentTodayCounts = await CampaignLead.aggregate([
+      {
+        $match: {
+          campaign_id: campaign._id,
+          sender_id: { $in: senders.map((s) => s._id) },
+          sent_at: { $gte: todayStart },
+        },
+      },
+      { $group: { _id: "$sender_id", count: { $sum: 1 } } },
+    ]);
+
+    const sentTodayMap = {};
+    for (const c of sentTodayCounts) {
+      sentTodayMap[c._id.toString()] = c.count;
+    }
+
+    // Count failed messages per sender
+    const failedCounts = await CampaignLead.aggregate([
+      {
+        $match: {
+          campaign_id: campaign._id,
+          sender_id: { $in: senders.map((s) => s._id) },
+          status: "failed",
+        },
+      },
+      { $group: { _id: "$sender_id", count: { $sum: 1 } } },
+    ]);
+
+    const failedMap = {};
+    for (const c of failedCounts) {
+      failedMap[c._id.toString()] = c.count;
+    }
+
+    let online = 0;
+    let offline = 0;
+    let issues = 0;
+
+    const result = senders.map((s) => {
+      const oa = s.outbound_account_id ? outboundMap[s.outbound_account_id.toString()] : null;
+      const sentToday = sentTodayMap[s._id.toString()] || 0;
+      const failedTotal = failedMap[s._id.toString()] || 0;
+      const dailyLimit = s.daily_limit || 50;
+
+      // Determine health
+      let health = "good";
+      let issue = null;
+
+      if (s.status === "restricted") {
+        health = "risk";
+        issue = s.restriction_reason || "Restricted";
+        issues++;
+      } else if (oa && oa.status === "restricted") {
+        health = "risk";
+        issue = "Account restricted";
+        issues++;
+      } else if (oa && oa.status === "disabled") {
+        health = "risk";
+        issue = "Account disabled";
+        issues++;
+      } else if (s.status === "offline") {
+        health = "warning";
+        issue = "Offline";
+      } else if (oa && oa.status === "warming") {
+        health = "warning";
+        issue = "Warming up";
+      } else if (sentToday >= dailyLimit) {
+        health = "warning";
+        issue = "Daily limit reached";
+      } else if (failedTotal > 5) {
+        health = "warning";
+        issue = `${failedTotal} failed messages`;
+      }
+
+      if (s.status === "online") online++;
+      else offline++;
+
+      // Rest day check
+      if (oa && oa.streak_rest_until && new Date(oa.streak_rest_until) > new Date()) {
+        health = "warning";
+        issue = "Rest day";
+      }
+
+      return {
+        _id: s._id,
+        ig_username: s.ig_username,
+        display_name: s.display_name,
+        status: s.status,
+        last_seen: s.last_seen,
+        daily_limit: dailyLimit,
+        sent_today: sentToday,
+        failed_total: failedTotal,
+        health,
+        issue,
+        outbound_account: oa
+          ? {
+              _id: oa._id,
+              username: oa.username,
+              status: oa.status,
+              streak_rest_until: oa.streak_rest_until || null,
+            }
+          : null,
+      };
+    });
+
+    // Also include outbound accounts without a linked sender
+    const linkedOutboundIds = new Set(senders.map((s) => s.outbound_account_id?.toString()).filter(Boolean));
+    for (const oa of outboundAccounts) {
+      if (!linkedOutboundIds.has(oa._id.toString())) {
+        issues++;
+        offline++;
+        result.push({
+          _id: null,
+          ig_username: oa.username,
+          display_name: null,
+          status: "offline",
+          last_seen: null,
+          daily_limit: 50,
+          sent_today: 0,
+          failed_total: 0,
+          health: "risk",
+          issue: "No sender linked (extension not connected)",
+          outbound_account: {
+            _id: oa._id,
+            username: oa.username,
+            status: oa.status,
+            streak_rest_until: oa.streak_rest_until || null,
+          },
+        });
+      }
+    }
+
+    res.json({
+      senders: result,
+      summary: {
+        total: result.length,
+        online,
+        offline,
+        issues,
+      },
+    });
+  } catch (err) {
+    console.error("Campaign senders error:", err);
+    res.status(500).json({ error: "Failed to get sender details" });
   }
 });
 
