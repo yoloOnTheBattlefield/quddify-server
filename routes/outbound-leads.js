@@ -249,7 +249,11 @@ router.get("/sources", async (req, res) => {
 // GET /outbound-leads/stats — funnel counts
 router.get("/stats", async (req, res) => {
   try {
+    const { qualified } = req.query;
     const af = { account_id: req.account._id };
+    if (qualified === "true") af.qualified = true;
+    else if (qualified === "false") af.qualified = false;
+
     const [total, messaged, replied, booked, contractSum] = await Promise.all([
       OutboundLead.countDocuments(af),
       OutboundLead.countDocuments({ ...af, isMessaged: true }),
@@ -378,6 +382,8 @@ router.post("/bulk-delete", async (req, res) => {
       if (filters.isMessaged !== undefined) {
         deleteFilter.isMessaged = filters.isMessaged === "true" ? true : { $ne: true };
       }
+      if (filters.qualified === "true") deleteFilter.qualified = true;
+      else if (filters.qualified === "false") deleteFilter.qualified = false;
       if (filters.search) {
         deleteFilter.$or = [
           { username: { $regex: filters.search, $options: "i" } },
