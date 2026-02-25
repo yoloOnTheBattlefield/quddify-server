@@ -13,7 +13,7 @@ function generateToken(user, account, accountUser) {
       ghl: account.ghl,
       role: accountUser.role,
       has_outbound: account.has_outbound && accountUser.has_outbound,
-      has_research: accountUser.has_research,
+      has_research: account.has_research && accountUser.has_research,
     },
     JWT_SECRET,
     { expiresIn: "7d" },

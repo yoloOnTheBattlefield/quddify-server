@@ -23,7 +23,7 @@ function buildLoginResponse(user, account, accountUser) {
     email: user.email,
     role: accountUser.role,
     has_outbound: account.has_outbound && accountUser.has_outbound,
-    has_research: accountUser.has_research,
+    has_research: account.has_research && accountUser.has_research,
     ghl: account.ghl,
     calendly: account.calendly,
     ghl_lead_booked_webhook: account.ghl_lead_booked_webhook,
@@ -179,7 +179,7 @@ router.post("/login", async (req, res) => {
       }
       return res.json({
         ...buildLoginResponse(user, account, m),
-        accounts: [{ account_id: m.account_id, name: accountName(account), ghl: account.ghl, role: m.role, has_outbound: m.has_outbound, has_research: m.has_research, is_default: m.is_default }],
+        accounts: [{ account_id: m.account_id, name: accountName(account), ghl: account.ghl, role: m.role, has_outbound: (account.has_outbound ?? false) && m.has_outbound, has_research: (account.has_research ?? false) && m.has_research, is_default: m.is_default }],
       });
     }
 
@@ -208,7 +208,7 @@ router.post("/login", async (req, res) => {
           ghl: acc?.ghl || null,
           role: m.role,
           has_outbound: (acc?.has_outbound ?? false) && m.has_outbound,
-          has_research: m.has_research,
+          has_research: (acc?.has_research ?? false) && m.has_research,
           is_default: m.is_default,
           disabled: acc?.disabled || false,
         };
@@ -269,7 +269,7 @@ router.post("/select-account", async (req, res) => {
       ...buildLoginResponse(user, account, accountUser),
       accounts: allMemberships.map((m) => {
         const acc = accMap[m.account_id.toString()];
-        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: m.has_research, is_default: m.is_default };
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: (acc?.has_research ?? false) && m.has_research, is_default: m.is_default };
       }),
     });
   } catch (error) {
@@ -313,7 +313,7 @@ router.post("/switch-account", async (req, res) => {
       ...buildLoginResponse(user, account, accountUser),
       accounts: allMemberships.map((m) => {
         const acc = accMap[m.account_id.toString()];
-        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: m.has_research, is_default: m.is_default };
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: (acc?.has_research ?? false) && m.has_research, is_default: m.is_default };
       }),
     });
   } catch (error) {
@@ -341,7 +341,7 @@ router.get("/my-accounts", async (req, res) => {
           ghl: acc?.ghl || null,
           role: m.role,
           has_outbound: (acc?.has_outbound ?? false) && m.has_outbound,
-          has_research: m.has_research,
+          has_research: (acc?.has_research ?? false) && m.has_research,
           is_default: m.is_default,
         };
       }),
@@ -768,6 +768,7 @@ router.get("/ghl-webhook", async (req, res) => {
       ghl: account.ghl,
       name: accountName(account),
       has_outbound: !!account.has_outbound,
+      has_research: !!account.has_research,
       ghl_lead_booked_webhook: account.ghl_lead_booked_webhook || undefined,
     });
   } catch (error) {
@@ -820,6 +821,29 @@ router.patch("/:accountId/has-outbound", async (req, res) => {
     res.json({ has_outbound: account.has_outbound });
   } catch (error) {
     console.error("Toggle has_outbound error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ---------- PATCH /accounts/:accountId/has-research ----------
+
+router.patch("/:accountId/has-research", async (req, res) => {
+  try {
+    if (req.user?.role !== 0) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const { has_research } = req.body;
+    const account = await Account.findByIdAndUpdate(
+      req.params.accountId,
+      { has_research: !!has_research },
+      { new: true },
+    );
+    if (!account) return res.status(404).json({ error: "Account not found" });
+
+    res.json({ has_research: account.has_research });
+  } catch (error) {
+    console.error("Toggle has_research error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
