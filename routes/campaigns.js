@@ -398,7 +398,13 @@ router.get("/:id/stats", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    res.json(campaign.stats);
+    // Compute replied count from OutboundLead.replied boolean (manual toggles)
+    const campaignLeadOutboundIds = await CampaignLead.find({ campaign_id: campaign._id }).distinct("outbound_lead_id");
+    const repliedCount = campaignLeadOutboundIds.length > 0
+      ? await OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true })
+      : 0;
+
+    res.json({ ...campaign.stats, replied: repliedCount });
   } catch (err) {
     console.error("Campaign stats error:", err);
     res.status(500).json({ error: "Failed to get stats" });
@@ -421,9 +427,12 @@ router.post("/:id/recalc-stats", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const counts = await CampaignLead.aggregate([
-      { $match: { campaign_id: campaign._id } },
-      { $group: { _id: "$status", count: { $sum: 1 } } },
+    const [counts, campaignLeadOutboundIds] = await Promise.all([
+      CampaignLead.aggregate([
+        { $match: { campaign_id: campaign._id } },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
+      CampaignLead.find({ campaign_id: campaign._id }).distinct("outbound_lead_id"),
     ]);
 
     const stats = { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, replied: 0, failed: 0, skipped: 0 };
@@ -431,6 +440,12 @@ router.post("/:id/recalc-stats", async (req, res) => {
       if (stats.hasOwnProperty(c._id)) stats[c._id] = c.count;
       stats.total += c.count;
     }
+
+    // Compute replied from OutboundLead.replied boolean (manual toggles)
+    const repliedCount = campaignLeadOutboundIds.length > 0
+      ? await OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true })
+      : 0;
+    stats.replied = repliedCount;
 
     campaign.stats = stats;
     await campaign.save();
