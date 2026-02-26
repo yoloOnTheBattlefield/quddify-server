@@ -142,7 +142,6 @@ app.post("/login", accountRoutes);
 app.post("/register", accountRoutes);
 app.post("/accounts/login", accountRoutes);
 app.post("/accounts/register", accountRoutes);
-app.post("/accounts/select-account", accountRoutes);
 app.use("/api/calendly", calendlyRoutes);
 app.get("/api/health", healthRoutes);
 app.get("/api/debug", healthRoutes);

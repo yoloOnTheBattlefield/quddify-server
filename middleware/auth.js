@@ -29,6 +29,9 @@ function generateSelectionToken(user) {
 }
 
 async function auth(req, res, next) {
+  // Public endpoints under authenticated prefixes — they handle their own auth
+  if (req.method === "POST" && req.path === "/accounts/select-account") return next();
+
   const authHeader = req.headers.authorization;
   const apiKeyHeader = req.headers["x-api-key"];
 
