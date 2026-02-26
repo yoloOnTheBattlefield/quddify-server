@@ -422,6 +422,27 @@ router.post("/team", async (req, res) => {
   }
 });
 
+// ---------- GET /accounts/team/check-email ----------
+
+router.get("/team/check-email", async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ error: "Email is required" });
+
+    const user = await User.findOne({ email }).lean();
+    if (!user) return res.json({ exists: false });
+
+    res.json({
+      exists: true,
+      first_name: user.first_name,
+      last_name: user.last_name,
+    });
+  } catch (error) {
+    console.error("Check email error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ---------- GET /accounts/team ----------
 
 router.get("/team", async (req, res) => {
