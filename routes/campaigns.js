@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const OpenAI = require("openai");
+const Anthropic = require("@anthropic-ai/sdk");
 const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
@@ -1084,9 +1085,12 @@ router.post("/:id/generate-messages", async (req, res) => {
       return res.status(400).json({ error: "Invalid campaign ID" });
     }
 
-    const { prompt } = req.body;
+    const { prompt, provider = "openai" } = req.body;
     if (!prompt || !prompt.trim()) {
       return res.status(400).json({ error: "Prompt is required" });
+    }
+    if (provider !== "openai" && provider !== "claude") {
+      return res.status(400).json({ error: "Invalid provider. Use 'openai' or 'claude'" });
     }
 
     const campaign = await Campaign.findOne({
@@ -1137,22 +1141,40 @@ router.post("/:id/generate-messages", async (req, res) => {
 
     (async () => {
       try {
-        // Get OpenAI API key
-        const account = await Account.findById(req.account._id, "openai_token").lean();
-        const apiKey = (account && account.openai_token) || process.env.OPENAI;
+        // Get API key based on provider
+        const account = await Account.findById(req.account._id, "openai_token claude_token").lean();
 
-        if (!apiKey) {
-          await Campaign.findByIdAndUpdate(campaign._id, {
-            $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No OpenAI API key configured" },
-          });
-          emitToAccount(accountId, "campaign:generation:failed", {
-            campaignId: campaign._id.toString(),
-            error: "No OpenAI API key configured",
-          });
-          return;
+        let aiClient;
+        const useClaude = provider === "claude";
+
+        if (useClaude) {
+          const apiKey = (account && account.claude_token) || process.env.CLAUDE;
+          if (!apiKey) {
+            await Campaign.findByIdAndUpdate(campaign._id, {
+              $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No Claude API key configured" },
+            });
+            emitToAccount(accountId, "campaign:generation:failed", {
+              campaignId: campaign._id.toString(),
+              error: "No Claude API key configured",
+            });
+            return;
+          }
+          aiClient = new Anthropic({ apiKey });
+        } else {
+          const apiKey = (account && account.openai_token) || process.env.OPENAI;
+          if (!apiKey) {
+            await Campaign.findByIdAndUpdate(campaign._id, {
+              $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No OpenAI API key configured" },
+            });
+            emitToAccount(accountId, "campaign:generation:failed", {
+              campaignId: campaign._id.toString(),
+              error: "No OpenAI API key configured",
+            });
+            return;
+          }
+          aiClient = new OpenAI({ apiKey });
         }
 
-        const openai = new OpenAI({ apiKey });
         const BATCH_SIZE = 5;
         let processed = 0;
 
@@ -1168,18 +1190,27 @@ router.post("/:id/generate-messages", async (req, res) => {
               const fullName = outboundLead.fullName || outboundLead.username || "";
               const leadContext = `Username: ${outboundLead.username || "N/A"}\nFull Name: ${fullName}\nBio: ${outboundLead.bio || "N/A"}`;
 
-              const response = await openai.chat.completions.create({
-                model: "o4-mini",
-                messages: [
-                  {
-                    role: "system",
-                    content: prompt,
-                  },
-                  { role: "user", content: leadContext },
-                ],
-              });
+              let generatedMessage;
 
-              const generatedMessage = response.choices[0]?.message?.content?.trim();
+              if (useClaude) {
+                const response = await aiClient.messages.create({
+                  model: "claude-sonnet-4-20250514",
+                  max_tokens: 1024,
+                  system: prompt,
+                  messages: [{ role: "user", content: leadContext }],
+                });
+                generatedMessage = response.content[0]?.text?.trim();
+              } else {
+                const response = await aiClient.chat.completions.create({
+                  model: "o4-mini",
+                  messages: [
+                    { role: "system", content: prompt },
+                    { role: "user", content: leadContext },
+                  ],
+                });
+                generatedMessage = response.choices[0]?.message?.content?.trim();
+              }
+
               if (generatedMessage) {
                 await CampaignLead.findByIdAndUpdate(lead._id, {
                   $set: { custom_message: generatedMessage },
@@ -1252,6 +1283,7 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
     }
 
     const prompt = req.body.prompt || campaign.ai_personalization?.prompt;
+    const providerParam = req.body.provider || "openai";
     if (!prompt) {
       return res.status(400).json({ error: "No prompt available. Provide a prompt or generate messages first." });
     }
@@ -1270,30 +1302,40 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
       return res.status(400).json({ error: "Lead has no associated outbound lead" });
     }
 
-    // Get OpenAI API key
-    const account = await Account.findById(req.account._id, "openai_token").lean();
-    const apiKey = (account && account.openai_token) || process.env.OPENAI;
+    // Get API key based on provider
+    const account = await Account.findById(req.account._id, "openai_token claude_token").lean();
+    const useClaude = providerParam === "claude";
 
-    if (!apiKey) {
-      return res.status(400).json({ error: "No OpenAI API key configured" });
-    }
-
-    const openai = new OpenAI({ apiKey });
+    let generatedMessage;
     const fullName = outboundLead.fullName || outboundLead.username || "";
     const leadContext = `Username: ${outboundLead.username || "N/A"}\nFull Name: ${fullName}\nBio: ${outboundLead.bio || "N/A"}`;
 
-    const response = await openai.chat.completions.create({
-      model: "o4-mini",
-      messages: [
-        {
-          role: "system",
-          content: prompt,
-        },
-        { role: "user", content: leadContext },
-      ],
-    });
+    if (useClaude) {
+      const apiKey = (account && account.claude_token) || process.env.CLAUDE;
+      if (!apiKey) return res.status(400).json({ error: "No Claude API key configured" });
 
-    const generatedMessage = response.choices[0]?.message?.content?.trim();
+      const anthropic = new Anthropic({ apiKey });
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1024,
+        system: prompt,
+        messages: [{ role: "user", content: leadContext }],
+      });
+      generatedMessage = response.content[0]?.text?.trim();
+    } else {
+      const apiKey = (account && account.openai_token) || process.env.OPENAI;
+      if (!apiKey) return res.status(400).json({ error: "No OpenAI API key configured" });
+
+      const openai = new OpenAI({ apiKey });
+      const response = await openai.chat.completions.create({
+        model: "o4-mini",
+        messages: [
+          { role: "system", content: prompt },
+          { role: "user", content: leadContext },
+        ],
+      });
+      generatedMessage = response.choices[0]?.message?.content?.trim();
+    }
 
     const updated = await CampaignLead.findByIdAndUpdate(
       lead._id,
