@@ -581,16 +581,19 @@ router.get("/:id/stats", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    // Compute replied/booked counts from OutboundLead booleans (manual toggles)
+    // Compute replied/booked/without_message counts
     const campaignLeadOutboundIds = await CampaignLead.find({ campaign_id: campaign._id }).distinct("outbound_lead_id");
-    const [repliedCount, bookedCount] = campaignLeadOutboundIds.length > 0
-      ? await Promise.all([
-          OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true }),
-          OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, booked: true }),
-        ])
-      : [0, 0];
+    const [repliedCount, bookedCount, withoutMessageCount] = await Promise.all([
+      campaignLeadOutboundIds.length > 0
+        ? OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true })
+        : 0,
+      campaignLeadOutboundIds.length > 0
+        ? OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, booked: true })
+        : 0,
+      CampaignLead.countDocuments({ campaign_id: campaign._id, custom_message: null }),
+    ]);
 
-    res.json({ ...campaign.stats, replied: repliedCount, booked: bookedCount });
+    res.json({ ...campaign.stats, replied: repliedCount, booked: bookedCount, without_message: withoutMessageCount });
   } catch (err) {
     console.error("Campaign stats error:", err);
     res.status(500).json({ error: "Failed to get stats" });
@@ -613,19 +616,21 @@ router.post("/:id/recalc-stats", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const [counts, campaignLeadOutboundIds] = await Promise.all([
+    const [counts, campaignLeadOutboundIds, withoutMessageCount] = await Promise.all([
       CampaignLead.aggregate([
         { $match: { campaign_id: campaign._id } },
         { $group: { _id: "$status", count: { $sum: 1 } } },
       ]),
       CampaignLead.find({ campaign_id: campaign._id }).distinct("outbound_lead_id"),
+      CampaignLead.countDocuments({ campaign_id: campaign._id, custom_message: null }),
     ]);
 
-    const stats = { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, replied: 0, failed: 0, skipped: 0 };
+    const stats = { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, replied: 0, failed: 0, skipped: 0, without_message: 0 };
     for (const c of counts) {
       if (stats.hasOwnProperty(c._id)) stats[c._id] = c.count;
       stats.total += c.count;
     }
+    stats.without_message = withoutMessageCount;
 
     // Compute replied/booked from OutboundLead booleans (manual toggles)
     const [repliedCount, bookedCount] = campaignLeadOutboundIds.length > 0
@@ -1213,7 +1218,7 @@ router.post("/:id/generate-messages", async (req, res) => {
 
               if (generatedMessage) {
                 await CampaignLead.findByIdAndUpdate(lead._id, {
-                  $set: { custom_message: generatedMessage },
+                  $set: { custom_message: generatedMessage, ai_provider: provider },
                 });
               }
 
@@ -1339,7 +1344,7 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
 
     const updated = await CampaignLead.findByIdAndUpdate(
       lead._id,
-      { $set: { custom_message: generatedMessage || null } },
+      { $set: { custom_message: generatedMessage || null, ai_provider: providerParam } },
       { new: true },
     )
       .populate("outbound_lead_id", "username fullName bio followersCount profileLink")
