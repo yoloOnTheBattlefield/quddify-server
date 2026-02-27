@@ -22,6 +22,7 @@ const OutboundAccountSchema = new mongoose.Schema(
     isBlacklisted: { type: Boolean, default: false },
     notes: { type: String, default: null },
     twoFA: { type: String, default: null },
+    hidemyacc_profile_id: { type: String, default: null },
     browser_token: { type: String, default: null },
     // Sending streak tracking — enforces rest days
     // 1 day break after every 5 consecutive sending days
