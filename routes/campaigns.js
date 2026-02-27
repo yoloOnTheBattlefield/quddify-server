@@ -1131,11 +1131,8 @@ router.post("/:id/preview-message", async (req, res) => {
       const apiKey = (account && account.gemini_token) || process.env.GEMINI;
       if (!apiKey) return res.status(400).json({ error: "No Gemini API key configured" });
       const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-      const result = await model.generateContent({
-        systemInstruction: prompt.trim(),
-        contents: [{ role: "user", parts: [{ text: leadContext }] }],
-      });
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: prompt.trim() });
+      const result = await model.generateContent(leadContext);
       generatedMessage = result.response.text()?.trim();
     } else if (provider === "claude") {
       const apiKey = (account && account.claude_token) || process.env.CLAUDE;
@@ -1170,7 +1167,7 @@ router.post("/:id/preview-message", async (req, res) => {
     });
   } catch (err) {
     console.error("Preview message error:", err);
-    res.status(500).json({ error: "Failed to generate preview" });
+    res.status(500).json({ error: err.message || "Failed to generate preview" });
   }
 });
 
@@ -1303,11 +1300,8 @@ router.post("/:id/generate-messages", async (req, res) => {
               let generatedMessage;
 
               if (useGemini) {
-                const model = aiClient.getGenerativeModel({ model: "gemini-2.0-flash" });
-                const result = await model.generateContent({
-                  systemInstruction: prompt,
-                  contents: [{ role: "user", parts: [{ text: leadContext }] }],
-                });
+                const model = aiClient.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: prompt });
+                const result = await model.generateContent(leadContext);
                 generatedMessage = result.response.text()?.trim();
               } else if (useClaude) {
                 const response = await aiClient.messages.create({
@@ -1433,11 +1427,8 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
       if (!apiKey) return res.status(400).json({ error: "No Gemini API key configured" });
 
       const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-      const result = await model.generateContent({
-        systemInstruction: prompt,
-        contents: [{ role: "user", parts: [{ text: leadContext }] }],
-      });
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: prompt });
+      const result = await model.generateContent(leadContext);
       generatedMessage = result.response.text()?.trim();
     } else if (useClaude) {
       const apiKey = (account && account.claude_token) || process.env.CLAUDE;
