@@ -2,6 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const OpenAI = require("openai");
 const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
@@ -1083,6 +1084,96 @@ router.patch("/:id/ai-prompt", async (req, res) => {
   }
 });
 
+// POST /api/campaigns/:id/preview-message — preview AI message for one lead (no DB write)
+router.post("/:id/preview-message", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const { prompt, provider = "openai" } = req.body;
+    if (!prompt || !prompt.trim()) {
+      return res.status(400).json({ error: "Prompt is required" });
+    }
+    if (!["openai", "claude", "gemini"].includes(provider)) {
+      return res.status(400).json({ error: "Invalid provider" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // Find first eligible lead
+    const lead = await CampaignLead.findOne({
+      campaign_id: campaign._id,
+      status: "pending",
+      $or: [{ custom_message: null }, { custom_message: { $exists: false } }],
+    }).populate("outbound_lead_id", "username fullName bio").lean();
+
+    if (!lead || !lead.outbound_lead_id) {
+      return res.status(400).json({ error: "No eligible leads to preview" });
+    }
+
+    const outboundLead = lead.outbound_lead_id;
+    const fullName = outboundLead.fullName || outboundLead.username || "";
+    const leadContext = `Username: ${outboundLead.username || "N/A"}\nFull Name: ${fullName}\nBio: ${outboundLead.bio || "N/A"}`;
+
+    const account = await Account.findById(req.account._id, "openai_token claude_token gemini_token").lean();
+
+    let generatedMessage;
+
+    if (provider === "gemini") {
+      const apiKey = (account && account.gemini_token) || process.env.GEMINI;
+      if (!apiKey) return res.status(400).json({ error: "No Gemini API key configured" });
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const result = await model.generateContent({
+        systemInstruction: prompt.trim(),
+        contents: [{ role: "user", parts: [{ text: leadContext }] }],
+      });
+      generatedMessage = result.response.text()?.trim();
+    } else if (provider === "claude") {
+      const apiKey = (account && account.claude_token) || process.env.CLAUDE;
+      if (!apiKey) return res.status(400).json({ error: "No Claude API key configured" });
+      const anthropic = new Anthropic({ apiKey });
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1024,
+        system: prompt.trim(),
+        messages: [{ role: "user", content: leadContext }],
+      });
+      generatedMessage = response.content[0]?.text?.trim();
+    } else {
+      const apiKey = (account && account.openai_token) || process.env.OPENAI;
+      if (!apiKey) return res.status(400).json({ error: "No OpenAI API key configured" });
+      const openai = new OpenAI({ apiKey });
+      const response = await openai.chat.completions.create({
+        model: "o4-mini",
+        messages: [
+          { role: "system", content: prompt.trim() },
+          { role: "user", content: leadContext },
+        ],
+      });
+      generatedMessage = response.choices[0]?.message?.content?.trim();
+    }
+
+    res.json({
+      lead_name: outboundLead.fullName || outboundLead.username || "Unknown",
+      lead_username: outboundLead.username || null,
+      lead_bio: outboundLead.bio || null,
+      generated_message: generatedMessage || null,
+    });
+  } catch (err) {
+    console.error("Preview message error:", err);
+    res.status(500).json({ error: "Failed to generate preview" });
+  }
+});
+
 // POST /api/campaigns/:id/generate-messages — AI personalized message generation
 router.post("/:id/generate-messages", async (req, res) => {
   try {
@@ -1094,8 +1185,8 @@ router.post("/:id/generate-messages", async (req, res) => {
     if (!prompt || !prompt.trim()) {
       return res.status(400).json({ error: "Prompt is required" });
     }
-    if (provider !== "openai" && provider !== "claude") {
-      return res.status(400).json({ error: "Invalid provider. Use 'openai' or 'claude'" });
+    if (!["openai", "claude", "gemini"].includes(provider)) {
+      return res.status(400).json({ error: "Invalid provider. Use 'openai', 'claude', or 'gemini'" });
     }
 
     const campaign = await Campaign.findOne({
@@ -1147,12 +1238,26 @@ router.post("/:id/generate-messages", async (req, res) => {
     (async () => {
       try {
         // Get API key based on provider
-        const account = await Account.findById(req.account._id, "openai_token claude_token").lean();
+        const account = await Account.findById(req.account._id, "openai_token claude_token gemini_token").lean();
 
         let aiClient;
+        const useGemini = provider === "gemini";
         const useClaude = provider === "claude";
 
-        if (useClaude) {
+        if (useGemini) {
+          const apiKey = (account && account.gemini_token) || process.env.GEMINI;
+          if (!apiKey) {
+            await Campaign.findByIdAndUpdate(campaign._id, {
+              $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No Gemini API key configured" },
+            });
+            emitToAccount(accountId, "campaign:generation:failed", {
+              campaignId: campaign._id.toString(),
+              error: "No Gemini API key configured",
+            });
+            return;
+          }
+          aiClient = new GoogleGenerativeAI(apiKey);
+        } else if (useClaude) {
           const apiKey = (account && account.claude_token) || process.env.CLAUDE;
           if (!apiKey) {
             await Campaign.findByIdAndUpdate(campaign._id, {
@@ -1197,7 +1302,14 @@ router.post("/:id/generate-messages", async (req, res) => {
 
               let generatedMessage;
 
-              if (useClaude) {
+              if (useGemini) {
+                const model = aiClient.getGenerativeModel({ model: "gemini-2.0-flash" });
+                const result = await model.generateContent({
+                  systemInstruction: prompt,
+                  contents: [{ role: "user", parts: [{ text: leadContext }] }],
+                });
+                generatedMessage = result.response.text()?.trim();
+              } else if (useClaude) {
                 const response = await aiClient.messages.create({
                   model: "claude-sonnet-4-20250514",
                   max_tokens: 1024,
@@ -1308,14 +1420,26 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
     }
 
     // Get API key based on provider
-    const account = await Account.findById(req.account._id, "openai_token claude_token").lean();
+    const account = await Account.findById(req.account._id, "openai_token claude_token gemini_token").lean();
+    const useGemini = providerParam === "gemini";
     const useClaude = providerParam === "claude";
 
     let generatedMessage;
     const fullName = outboundLead.fullName || outboundLead.username || "";
     const leadContext = `Username: ${outboundLead.username || "N/A"}\nFull Name: ${fullName}\nBio: ${outboundLead.bio || "N/A"}`;
 
-    if (useClaude) {
+    if (useGemini) {
+      const apiKey = (account && account.gemini_token) || process.env.GEMINI;
+      if (!apiKey) return res.status(400).json({ error: "No Gemini API key configured" });
+
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const result = await model.generateContent({
+        systemInstruction: prompt,
+        contents: [{ role: "user", parts: [{ text: leadContext }] }],
+      });
+      generatedMessage = result.response.text()?.trim();
+    } else if (useClaude) {
       const apiKey = (account && account.claude_token) || process.env.CLAUDE;
       if (!apiKey) return res.status(400).json({ error: "No Claude API key configured" });
 
