@@ -55,6 +55,22 @@ router.get("/", async (req, res) => {
   res.json(result);
 });
 
+// ---------- GET /accounts/me ----------
+
+router.get("/me", async (req, res) => {
+  try {
+    const account = req.account;
+    res.json({
+      openai_token: account.openai_token || null,
+      claude_token: account.claude_token || null,
+      calendly_token: account.calendly_token || null,
+    });
+  } catch (error) {
+    console.error("Get account me error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ---------- GET /accounts/analytics ----------
 
 router.get("/analytics", async (req, res) => {
@@ -637,7 +653,7 @@ router.delete("/ig-sessions/:username", async (req, res) => {
 
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, has_outbound, has_research, ghl, calendly, openai_token, apify_token, ig_session, ig_username, ig_proxy } = req.body;
+    const { first_name, last_name, email, has_outbound, has_research, ghl, calendly, openai_token, claude_token, apify_token, ig_session, ig_username, ig_proxy } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
@@ -648,6 +664,7 @@ router.patch("/:id", async (req, res) => {
     if (ghl !== undefined) accountUpdates.ghl = ghl;
     if (calendly !== undefined) accountUpdates.calendly = calendly;
     if (openai_token !== undefined) accountUpdates.openai_token = openai_token;
+    if (claude_token !== undefined) accountUpdates.claude_token = claude_token;
     if (apify_token !== undefined) accountUpdates.apify_token = apify_token;
     if (ig_proxy !== undefined) accountUpdates.ig_proxy = ig_proxy || null;
     if (ig_session !== undefined) {
@@ -729,6 +746,7 @@ router.patch("/:id", async (req, res) => {
       calendly: updatedAccount.calendly,
       ghl_lead_booked_webhook: updatedAccount.ghl_lead_booked_webhook,
       openai_token: updatedAccount.openai_token,
+      claude_token: updatedAccount.claude_token,
       apify_token: updatedAccount.apify_token,
       api_key: updatedAccount.api_key,
       ig_session_set: !!(updatedAccount.ig_session?.session_id) || (updatedAccount.ig_sessions && updatedAccount.ig_sessions.length > 0),
