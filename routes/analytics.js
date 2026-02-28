@@ -830,12 +830,19 @@ async function buildOutboundFilter(req) {
   return filter;
 }
 
-// Helper: build campaign lead match filter
-function buildCampaignLeadMatch(req) {
+// Helper: build campaign lead match filter (scoped to current account's campaigns)
+async function buildCampaignLeadMatch(req) {
   const { start_date, end_date, campaign_id } = req.query;
   const match = { status: { $in: ["sent", "delivered", "replied"] } };
 
-  if (campaign_id) match.campaign_id = new mongoose.Types.ObjectId(campaign_id);
+  if (campaign_id) {
+    match.campaign_id = new mongoose.Types.ObjectId(campaign_id);
+  } else {
+    // Scope to the current account's campaigns
+    const accountCampaigns = await Campaign.find({ account_id: req.account._id }).select("_id").lean();
+    match.campaign_id = { $in: accountCampaigns.map((c) => c._id) };
+  }
+
   if (start_date || end_date) {
     match.sent_at = {};
     if (start_date) match.sent_at.$gte = new Date(`${start_date}T00:00:00.000Z`);
@@ -1036,7 +1043,7 @@ const PROVIDER_MODEL_FALLBACK = {
 router.get("/outbound/ai-models", async (req, res) => {
   try {
     const { sender_id } = req.query;
-    const match = buildCampaignLeadMatch(req);
+    const match = await buildCampaignLeadMatch(req);
 
     if (sender_id) match.sender_id = new mongoose.Types.ObjectId(sender_id);
     match.ai_provider = { $ne: null };
@@ -1108,7 +1115,7 @@ router.get("/outbound/ai-models", async (req, res) => {
 // GET /analytics/outbound/edited-comparison — AI generated vs manually edited
 router.get("/outbound/edited-comparison", async (req, res) => {
   try {
-    const match = buildCampaignLeadMatch(req);
+    const match = await buildCampaignLeadMatch(req);
 
     const groups = await CampaignLead.aggregate([
       { $match: match },
@@ -1167,7 +1174,7 @@ router.get("/outbound/edited-comparison", async (req, res) => {
 // GET /analytics/outbound/time-of-day — reply rate by hour of day
 router.get("/outbound/time-of-day", async (req, res) => {
   try {
-    const match = buildCampaignLeadMatch(req);
+    const match = await buildCampaignLeadMatch(req);
     // Ensure sent_at exists for $hour extraction
     if (!match.sent_at) match.sent_at = { $ne: null };
     else match.sent_at.$ne = null;
