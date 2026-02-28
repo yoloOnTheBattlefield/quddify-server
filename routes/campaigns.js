@@ -13,6 +13,13 @@ const { emitToAccount } = require("../services/socketManager");
 const { isWithinActiveHours, calculateDelay } = require("../services/campaignScheduler");
 const router = express.Router();
 
+// Model IDs used per AI provider
+const AI_MODELS = {
+  openai: "o4-mini",
+  claude: "claude-sonnet-4-20250514",
+  gemini: "gemini-2.0-flash",
+};
+
 // GET /api/campaigns — list campaigns
 router.get("/", async (req, res) => {
   try {
@@ -1324,7 +1331,7 @@ router.post("/:id/generate-messages", async (req, res) => {
 
               if (generatedMessage) {
                 await CampaignLead.findByIdAndUpdate(lead._id, {
-                  $set: { custom_message: generatedMessage, ai_provider: provider },
+                  $set: { custom_message: generatedMessage, ai_provider: provider, ai_model: AI_MODELS[provider] || provider },
                 });
               }
 
@@ -1459,7 +1466,7 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
 
     const updated = await CampaignLead.findByIdAndUpdate(
       lead._id,
-      { $set: { custom_message: generatedMessage || null, ai_provider: providerParam } },
+      { $set: { custom_message: generatedMessage || null, ai_provider: providerParam, ai_model: AI_MODELS[providerParam] || providerParam } },
       { new: true },
     )
       .populate("outbound_lead_id", "username fullName bio followersCount profileLink")

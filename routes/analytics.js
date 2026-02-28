@@ -1025,7 +1025,14 @@ router.get("/outbound/conversation-depth", async (req, res) => {
   }
 });
 
-// GET /analytics/outbound/ai-models — performance per AI model/provider
+// Fallback map for older leads that only have ai_provider but no ai_model
+const PROVIDER_MODEL_FALLBACK = {
+  openai: "o4-mini",
+  claude: "claude-sonnet-4-20250514",
+  gemini: "gemini-2.0-flash",
+};
+
+// GET /analytics/outbound/ai-models — performance per AI model
 router.get("/outbound/ai-models", async (req, res) => {
   try {
     const { sender_id } = req.query;
@@ -1037,8 +1044,17 @@ router.get("/outbound/ai-models", async (req, res) => {
     const modelSends = await CampaignLead.aggregate([
       { $match: match },
       {
+        // Use ai_model if present, otherwise fall back to ai_provider
+        $addFields: {
+          resolved_model: {
+            $ifNull: ["$ai_model", "$ai_provider"],
+          },
+        },
+      },
+      {
         $group: {
-          _id: "$ai_provider",
+          _id: "$resolved_model",
+          ai_provider: { $first: "$ai_provider" },
           messages_sent: { $sum: 1 },
           outbound_lead_ids: { $push: "$outbound_lead_id" },
         },
@@ -1065,14 +1081,15 @@ router.get("/outbound/ai-models", async (req, res) => {
           .filter((t) => t > 0);
 
         const sent = m.messages_sent;
+        // Resolve model name: if _id is still a provider key, map it to the model name
+        const modelName = PROVIDER_MODEL_FALLBACK[m._id] || m._id;
 
         return {
-          model: m._id,
+          model: modelName,
+          provider: m.ai_provider,
           messages_sent: sent,
           replied,
           reply_rate: sent > 0 ? round2((replied / sent) * 100) : 0,
-          link_sent: booked,
-          link_sent_rate: sent > 0 ? round2((booked / sent) * 100) : 0,
           booked,
           booked_rate: sent > 0 ? round2((booked / sent) * 100) : 0,
           avg_response_time_min: round2(average(responseTimes)),
