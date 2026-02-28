@@ -807,4 +807,461 @@ router.get("/campaigns", async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// Extended Outbound Analytics Endpoints
+// ────────────────────────────────────────────────────────────────────────────
+
+// Helper: build outbound lead filter with optional campaign scoping + date range
+async function buildOutboundFilter(req) {
+  const { start_date, end_date, campaign_id } = req.query;
+  const filter = { account_id: req.account._id, isMessaged: true };
+
+  if (start_date || end_date) {
+    filter.dmDate = {};
+    if (start_date) filter.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
+    if (end_date) filter.dmDate.$lte = new Date(`${end_date}T23:59:59.999Z`);
+  }
+
+  if (campaign_id) {
+    const campaignLeads = await CampaignLead.find({ campaign_id }).select("outbound_lead_id").lean();
+    filter._id = { $in: campaignLeads.map((cl) => cl.outbound_lead_id) };
+  }
+
+  return filter;
+}
+
+// Helper: build campaign lead match filter
+function buildCampaignLeadMatch(req) {
+  const { start_date, end_date, campaign_id } = req.query;
+  const match = { status: { $in: ["sent", "delivered", "replied"] } };
+
+  if (campaign_id) match.campaign_id = new mongoose.Types.ObjectId(campaign_id);
+  if (start_date || end_date) {
+    match.sent_at = {};
+    if (start_date) match.sent_at.$gte = new Date(`${start_date}T00:00:00.000Z`);
+    if (end_date) match.sent_at.$lte = new Date(`${end_date}T23:59:59.999Z`);
+  }
+
+  return match;
+}
+
+// GET /analytics/outbound/daily — daily sent/replied/link_sent/booked counts
+router.get("/outbound/daily", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+    const obLeads = await OutboundLead.find(obFilter).select("dmDate replied booked").lean();
+
+    // Build daily map
+    const dailyMap = {};
+    for (const lead of obLeads) {
+      const dateStr = toDateString(lead.dmDate);
+      if (!dateStr) continue;
+      if (!dailyMap[dateStr]) dailyMap[dateStr] = { sent: 0, replied: 0, link_sent: 0, booked: 0 };
+      dailyMap[dateStr].sent++;
+      if (lead.replied) dailyMap[dateStr].replied++;
+      if (lead.booked) {
+        dailyMap[dateStr].link_sent++;
+        dailyMap[dateStr].booked++;
+      }
+    }
+
+    const days = Object.entries(dailyMap)
+      .map(([date, counts]) => ({ date, ...counts }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({ days });
+  } catch (err) {
+    console.error("Daily activity error:", err);
+    res.status(500).json({ error: "Failed to fetch daily activity" });
+  }
+});
+
+// GET /analytics/outbound/response-speed — response time metrics
+router.get("/outbound/response-speed", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+    const obLeads = await OutboundLead.find(obFilter)
+      .select("dmDate replied replied_at booked username fullName")
+      .lean();
+
+    // Prospect reply times (dmDate → replied_at)
+    const prospectReplyTimes = [];
+    for (const lead of obLeads) {
+      if (lead.replied && lead.replied_at && lead.dmDate) {
+        const mins = (new Date(lead.replied_at) - new Date(lead.dmDate)) / 60000;
+        if (mins > 0) prospectReplyTimes.push(mins);
+      }
+    }
+
+    const avgProspectReply = average(prospectReplyTimes);
+    const medianProspectReply = median(prospectReplyTimes);
+
+    // User response time mirrors prospect reply time for now
+    // Will be updated once per-message conversation tracking is added
+    const avgUserResponse = avgProspectReply;
+    const medianUserResponse = medianProspectReply;
+
+    // Distribution buckets
+    const bucketDefs = [
+      { bucket: "0–5 min", min: 0, max: 5 },
+      { bucket: "5–30 min", min: 5, max: 30 },
+      { bucket: "30–120 min", min: 30, max: 120 },
+      { bucket: "2–6 hours", min: 120, max: 360 },
+      { bucket: "6–24 hours", min: 360, max: 1440 },
+      { bucket: "24h+", min: 1440, max: Infinity },
+    ];
+
+    const distribution = bucketDefs.map((b) => {
+      const count = prospectReplyTimes.filter((t) => t >= b.min && t < b.max).length;
+      return {
+        bucket: b.bucket,
+        count,
+        percentage: prospectReplyTimes.length > 0 ? round2((count / prospectReplyTimes.length) * 100) : 0,
+      };
+    });
+
+    // Unanswered: replied but not booked
+    const unansweredLeads = obLeads.filter((l) => l.replied && !l.booked);
+
+    // Oldest waiting conversation
+    let oldestWaiting = null;
+    const sortedUnanswered = unansweredLeads
+      .filter((l) => l.replied_at)
+      .sort((a, b) => new Date(a.replied_at) - new Date(b.replied_at));
+    if (sortedUnanswered.length > 0) {
+      const oldest = sortedUnanswered[0];
+      oldestWaiting = {
+        lead_name: oldest.fullName || oldest.username || "Unknown",
+        waiting_since: oldest.replied_at.toISOString(),
+        waiting_minutes: round2((Date.now() - new Date(oldest.replied_at)) / 60000),
+      };
+    }
+
+    // Avg waiting time for unanswered
+    const waitingTimes = unansweredLeads
+      .filter((l) => l.replied_at)
+      .map((l) => (Date.now() - new Date(l.replied_at)) / 60000);
+
+    res.json({
+      avg_prospect_reply_time_min: round2(avgProspectReply),
+      avg_user_response_time_min: round2(avgUserResponse),
+      median_user_response_time_min: round2(medianUserResponse),
+      distribution,
+      unanswered_count: unansweredLeads.length,
+      oldest_waiting: oldestWaiting,
+      avg_waiting_time_min: round2(average(waitingTimes)),
+    });
+  } catch (err) {
+    console.error("Response speed error:", err);
+    res.status(500).json({ error: "Failed to fetch response speed analytics" });
+  }
+});
+
+// GET /analytics/outbound/conversation-depth — conversation engagement metrics
+router.get("/outbound/conversation-depth", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+    const obLeads = await OutboundLead.find(obFilter).select("_id replied booked").lean();
+
+    const obLeadIds = obLeads.map((l) => l._id);
+    const obLeadMap = {};
+    for (const l of obLeads) obLeadMap[l._id.toString()] = l;
+
+    // Count campaign leads per outbound lead (multiple sends = deeper engagement)
+    const depthAgg = await CampaignLead.aggregate([
+      {
+        $match: {
+          outbound_lead_id: { $in: obLeadIds },
+          status: { $in: ["sent", "delivered", "replied"] },
+        },
+      },
+      {
+        $group: {
+          _id: "$outbound_lead_id",
+          message_count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const totalConversations = depthAgg.length;
+    const messageCounts = depthAgg.map((d) => d.message_count);
+    const avgMessages = average(messageCounts);
+    const threeOrMore = depthAgg.filter((d) => d.message_count >= 3).length;
+    const fiveOrMore = depthAgg.filter((d) => d.message_count >= 5).length;
+
+    // Booking rate by depth
+    const depthBuckets = [
+      { depth: "1 message", min: 1, max: 1 },
+      { depth: "2 messages", min: 2, max: 2 },
+      { depth: "3-4 messages", min: 3, max: 4 },
+      { depth: "5+ messages", min: 5, max: Infinity },
+    ];
+
+    const bookingByDepth = depthBuckets.map((bucket) => {
+      const inBucket = depthAgg.filter((d) => d.message_count >= bucket.min && d.message_count <= bucket.max);
+      const conversations = inBucket.length;
+      const booked = inBucket.filter((d) => {
+        const lead = obLeadMap[d._id.toString()];
+        return lead && lead.booked;
+      }).length;
+
+      return {
+        depth: bucket.depth,
+        conversations,
+        booked,
+        booking_rate: conversations > 0 ? round2((booked / conversations) * 100) : 0,
+      };
+    });
+
+    res.json({
+      avg_messages_per_conversation: round2(avgMessages),
+      pct_3_plus_messages: totalConversations > 0 ? round2((threeOrMore / totalConversations) * 100) : 0,
+      pct_5_plus_messages: totalConversations > 0 ? round2((fiveOrMore / totalConversations) * 100) : 0,
+      booking_rate_by_depth: bookingByDepth,
+    });
+  } catch (err) {
+    console.error("Conversation depth error:", err);
+    res.status(500).json({ error: "Failed to fetch conversation depth analytics" });
+  }
+});
+
+// GET /analytics/outbound/ai-models — performance per AI model/provider
+router.get("/outbound/ai-models", async (req, res) => {
+  try {
+    const { sender_id } = req.query;
+    const match = buildCampaignLeadMatch(req);
+
+    if (sender_id) match.sender_id = new mongoose.Types.ObjectId(sender_id);
+    match.ai_provider = { $ne: null };
+
+    const modelSends = await CampaignLead.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: "$ai_provider",
+          messages_sent: { $sum: 1 },
+          outbound_lead_ids: { $push: "$outbound_lead_id" },
+        },
+      },
+    ]);
+
+    const results = await Promise.all(
+      modelSends.map(async (m) => {
+        const [replied, booked] = await Promise.all([
+          OutboundLead.countDocuments({ _id: { $in: m.outbound_lead_ids }, replied: true }),
+          OutboundLead.countDocuments({ _id: { $in: m.outbound_lead_ids }, booked: true }),
+        ]);
+
+        // Avg response time for this model's leads
+        const repliedLeads = await OutboundLead.find({
+          _id: { $in: m.outbound_lead_ids },
+          replied: true,
+          replied_at: { $ne: null },
+          dmDate: { $ne: null },
+        }).select("dmDate replied_at").lean();
+
+        const responseTimes = repliedLeads
+          .map((l) => (new Date(l.replied_at) - new Date(l.dmDate)) / 60000)
+          .filter((t) => t > 0);
+
+        const sent = m.messages_sent;
+
+        return {
+          model: m._id,
+          messages_sent: sent,
+          replied,
+          reply_rate: sent > 0 ? round2((replied / sent) * 100) : 0,
+          link_sent: booked,
+          link_sent_rate: sent > 0 ? round2((booked / sent) * 100) : 0,
+          booked,
+          booked_rate: sent > 0 ? round2((booked / sent) * 100) : 0,
+          avg_response_time_min: round2(average(responseTimes)),
+        };
+      }),
+    );
+
+    results.sort((a, b) => b.messages_sent - a.messages_sent);
+    res.json({ models: results });
+  } catch (err) {
+    console.error("AI model analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch AI model analytics" });
+  }
+});
+
+// GET /analytics/outbound/edited-comparison — AI generated vs manually edited
+router.get("/outbound/edited-comparison", async (req, res) => {
+  try {
+    const match = buildCampaignLeadMatch(req);
+
+    const groups = await CampaignLead.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { $cond: [{ $eq: ["$manually_overridden", true] }, "edited", "ai_generated"] },
+          count: { $sum: 1 },
+          outbound_lead_ids: { $push: "$outbound_lead_id" },
+        },
+      },
+    ]);
+
+    const buildStats = async (group) => {
+      if (!group) return { count: 0, reply_rate: 0, link_sent_rate: 0, booked_rate: 0, avg_response_time_min: 0 };
+
+      const [replied, booked] = await Promise.all([
+        OutboundLead.countDocuments({ _id: { $in: group.outbound_lead_ids }, replied: true }),
+        OutboundLead.countDocuments({ _id: { $in: group.outbound_lead_ids }, booked: true }),
+      ]);
+
+      const repliedLeads = await OutboundLead.find({
+        _id: { $in: group.outbound_lead_ids },
+        replied: true,
+        replied_at: { $ne: null },
+        dmDate: { $ne: null },
+      }).select("dmDate replied_at").lean();
+
+      const responseTimes = repliedLeads
+        .map((l) => (new Date(l.replied_at) - new Date(l.dmDate)) / 60000)
+        .filter((t) => t > 0);
+
+      return {
+        count: group.count,
+        reply_rate: group.count > 0 ? round2((replied / group.count) * 100) : 0,
+        link_sent_rate: group.count > 0 ? round2((booked / group.count) * 100) : 0,
+        booked_rate: group.count > 0 ? round2((booked / group.count) * 100) : 0,
+        avg_response_time_min: round2(average(responseTimes)),
+      };
+    };
+
+    const aiGroup = groups.find((g) => g._id === "ai_generated") || null;
+    const editedGroup = groups.find((g) => g._id === "edited") || null;
+
+    const [aiStats, editedStats] = await Promise.all([
+      buildStats(aiGroup),
+      buildStats(editedGroup),
+    ]);
+
+    res.json({ ai_generated: aiStats, edited: editedStats });
+  } catch (err) {
+    console.error("Edited comparison error:", err);
+    res.status(500).json({ error: "Failed to fetch edited comparison analytics" });
+  }
+});
+
+// GET /analytics/outbound/time-of-day — reply rate by hour of day
+router.get("/outbound/time-of-day", async (req, res) => {
+  try {
+    const match = buildCampaignLeadMatch(req);
+    // Ensure sent_at exists for $hour extraction
+    if (!match.sent_at) match.sent_at = { $ne: null };
+    else match.sent_at.$ne = null;
+
+    const hourAgg = await CampaignLead.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { $hour: "$sent_at" },
+          sent: { $sum: 1 },
+          outbound_lead_ids: { $push: "$outbound_lead_id" },
+        },
+      },
+    ]);
+
+    const results = await Promise.all(
+      hourAgg.map(async (h) => {
+        const replied = await OutboundLead.countDocuments({
+          _id: { $in: h.outbound_lead_ids },
+          replied: true,
+        });
+
+        return {
+          hour: h._id,
+          sent: h.sent,
+          replied,
+          reply_rate: h.sent > 0 ? round2((replied / h.sent) * 100) : 0,
+        };
+      }),
+    );
+
+    results.sort((a, b) => a.hour - b.hour);
+    res.json({ hours: results });
+  } catch (err) {
+    console.error("Time of day error:", err);
+    res.status(500).json({ error: "Failed to fetch time of day analytics" });
+  }
+});
+
+// GET /analytics/outbound/effort-outcome — efficiency ratios
+router.get("/outbound/effort-outcome", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+    const [messaged, replied, booked] = await Promise.all([
+      OutboundLead.countDocuments(obFilter),
+      OutboundLead.countDocuments({ ...obFilter, replied: true }),
+      OutboundLead.countDocuments({ ...obFilter, booked: true }),
+    ]);
+
+    res.json({
+      messages_per_reply: replied > 0 ? round2(messaged / replied) : 0,
+      messages_per_link_sent: booked > 0 ? round2(messaged / booked) : 0,
+      messages_per_booking: booked > 0 ? round2(messaged / booked) : 0,
+      replies_per_booking: booked > 0 ? round2(replied / booked) : 0,
+    });
+  } catch (err) {
+    console.error("Effort outcome error:", err);
+    res.status(500).json({ error: "Failed to fetch effort outcome analytics" });
+  }
+});
+
+// GET /analytics/outbound/trends — 7-day rolling reply & booked rates
+router.get("/outbound/trends", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+    const obLeads = await OutboundLead.find(obFilter).select("dmDate replied booked").lean();
+
+    // Build daily counts
+    const dailyMap = {};
+    for (const lead of obLeads) {
+      const dateStr = toDateString(lead.dmDate);
+      if (!dateStr) continue;
+      if (!dailyMap[dateStr]) dailyMap[dateStr] = { sent: 0, replied: 0, booked: 0 };
+      dailyMap[dateStr].sent++;
+      if (lead.replied) dailyMap[dateStr].replied++;
+      if (lead.booked) dailyMap[dateStr].booked++;
+    }
+
+    const dates = Object.keys(dailyMap).sort();
+    if (dates.length === 0) return res.json({ trends: [] });
+
+    // Fill gaps and compute 7-day rolling averages
+    const allDates = getDateRange(dates[0], dates[dates.length - 1]);
+    const fullDaily = allDates.map((date) => ({
+      date,
+      ...(dailyMap[date] || { sent: 0, replied: 0, booked: 0 }),
+    }));
+
+    const trends = [];
+    for (let i = 6; i < fullDaily.length; i++) {
+      let totalSent = 0;
+      let totalReplied = 0;
+      let totalBooked = 0;
+      for (let j = i - 6; j <= i; j++) {
+        totalSent += fullDaily[j].sent;
+        totalReplied += fullDaily[j].replied;
+        totalBooked += fullDaily[j].booked;
+      }
+
+      trends.push({
+        date: fullDaily[i].date,
+        reply_rate_7d: totalSent > 0 ? round2((totalReplied / totalSent) * 100) : 0,
+        booked_rate_7d: totalSent > 0 ? round2((totalBooked / totalSent) * 100) : 0,
+      });
+    }
+
+    res.json({ trends });
+  } catch (err) {
+    console.error("Trends error:", err);
+    res.status(500).json({ error: "Failed to fetch trend analytics" });
+  }
+});
+
 module.exports = router;
