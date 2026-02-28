@@ -1333,6 +1333,10 @@ router.post("/:id/generate-messages", async (req, res) => {
                 await CampaignLead.findByIdAndUpdate(lead._id, {
                   $set: { custom_message: generatedMessage, ai_provider: provider, ai_model: AI_MODELS[provider] || provider },
                 });
+                // Also track AI provider on the outbound lead for analytics
+                await OutboundLead.findByIdAndUpdate(outboundLead._id, {
+                  $set: { ai_provider: provider, ai_model: AI_MODELS[provider] || provider },
+                });
               }
 
               return generatedMessage;
@@ -1472,6 +1476,11 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
       .populate("outbound_lead_id", "username fullName bio followersCount profileLink")
       .populate("sender_id", "ig_username display_name")
       .lean();
+
+    // Also track AI provider on the outbound lead for analytics
+    await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, {
+      $set: { ai_provider: providerParam, ai_model: AI_MODELS[providerParam] || providerParam },
+    });
 
     res.json(updated);
   } catch (err) {

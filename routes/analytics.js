@@ -1039,23 +1039,35 @@ const PROVIDER_MODEL_FALLBACK = {
   gemini: "gemini-2.0-flash",
 };
 
-// GET /analytics/outbound/ai-models — performance per AI model
+// GET /analytics/outbound/ai-models — performance per AI model (from OutboundLeads)
 router.get("/outbound/ai-models", async (req, res) => {
   try {
-    const { sender_id } = req.query;
-    const match = await buildCampaignLeadMatch(req);
+    const { start_date, end_date, campaign_id } = req.query;
 
-    if (sender_id) match.sender_id = new mongoose.Types.ObjectId(sender_id);
-    match.ai_provider = { $ne: null };
+    const match = {
+      account_id: req.account._id,
+      isMessaged: true,
+      ai_provider: { $ne: null },
+    };
 
-    const modelSends = await CampaignLead.aggregate([
+    if (start_date || end_date) {
+      match.dmDate = {};
+      if (start_date) match.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
+      if (end_date) match.dmDate.$lte = new Date(`${end_date}T23:59:59.999Z`);
+    }
+
+    // If filtering by campaign, scope to that campaign's outbound lead IDs
+    if (campaign_id) {
+      const campaignLeadIds = await CampaignLead.find({ campaign_id: new mongoose.Types.ObjectId(campaign_id) })
+        .select("outbound_lead_id").lean();
+      match._id = { $in: campaignLeadIds.map((cl) => cl.outbound_lead_id) };
+    }
+
+    const modelSends = await OutboundLead.aggregate([
       { $match: match },
       {
-        // Use ai_model if present, otherwise fall back to ai_provider
         $addFields: {
-          resolved_model: {
-            $ifNull: ["$ai_model", "$ai_provider"],
-          },
+          resolved_model: { $ifNull: ["$ai_model", "$ai_provider"] },
         },
       },
       {
@@ -1063,46 +1075,37 @@ router.get("/outbound/ai-models", async (req, res) => {
           _id: "$resolved_model",
           ai_provider: { $first: "$ai_provider" },
           messages_sent: { $sum: 1 },
-          outbound_lead_ids: { $push: "$outbound_lead_id" },
+          replied: { $sum: { $cond: [{ $eq: ["$replied", true] }, 1, 0] } },
+          booked: { $sum: { $cond: [{ $eq: ["$booked", true] }, 1, 0] } },
+          response_times: {
+            $push: {
+              $cond: [
+                { $and: [{ $eq: ["$replied", true] }, { $ne: ["$replied_at", null] }, { $ne: ["$dmDate", null] }] },
+                { $divide: [{ $subtract: ["$replied_at", "$dmDate"] }, 60000] },
+                "$$REMOVE",
+              ],
+            },
+          },
         },
       },
     ]);
 
-    const results = await Promise.all(
-      modelSends.map(async (m) => {
-        const [replied, booked] = await Promise.all([
-          OutboundLead.countDocuments({ _id: { $in: m.outbound_lead_ids }, replied: true }),
-          OutboundLead.countDocuments({ _id: { $in: m.outbound_lead_ids }, booked: true }),
-        ]);
+    const results = modelSends.map((m) => {
+      const sent = m.messages_sent;
+      const modelName = PROVIDER_MODEL_FALLBACK[m._id] || m._id;
+      const validTimes = m.response_times.filter((t) => t > 0);
 
-        // Avg response time for this model's leads
-        const repliedLeads = await OutboundLead.find({
-          _id: { $in: m.outbound_lead_ids },
-          replied: true,
-          replied_at: { $ne: null },
-          dmDate: { $ne: null },
-        }).select("dmDate replied_at").lean();
-
-        const responseTimes = repliedLeads
-          .map((l) => (new Date(l.replied_at) - new Date(l.dmDate)) / 60000)
-          .filter((t) => t > 0);
-
-        const sent = m.messages_sent;
-        // Resolve model name: if _id is still a provider key, map it to the model name
-        const modelName = PROVIDER_MODEL_FALLBACK[m._id] || m._id;
-
-        return {
-          model: modelName,
-          provider: m.ai_provider,
-          messages_sent: sent,
-          replied,
-          reply_rate: sent > 0 ? round2((replied / sent) * 100) : 0,
-          booked,
-          booked_rate: sent > 0 ? round2((booked / sent) * 100) : 0,
-          avg_response_time_min: round2(average(responseTimes)),
-        };
-      }),
-    );
+      return {
+        model: modelName,
+        provider: m.ai_provider,
+        messages_sent: sent,
+        replied: m.replied,
+        reply_rate: sent > 0 ? round2((m.replied / sent) * 100) : 0,
+        booked: m.booked,
+        booked_rate: sent > 0 ? round2((m.booked / sent) * 100) : 0,
+        avg_response_time_min: round2(average(validTimes)),
+      };
+    });
 
     results.sort((a, b) => b.messages_sent - a.messages_sent);
     res.json({ models: results });

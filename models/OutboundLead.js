@@ -29,6 +29,8 @@ const OutboundLeadSchema = new mongoose.Schema(
     qualified: { type: Boolean, default: null },
     unqualified_reason: { type: String, default: null },
     ai_processed: { type: Boolean, default: false },
+    ai_provider: { type: String, default: null },
+    ai_model: { type: String, default: null },
     source_seeds: [{ type: String }],
     metadata: {
       source: { type: String },
