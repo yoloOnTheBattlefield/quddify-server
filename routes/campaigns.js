@@ -1496,7 +1496,14 @@ router.patch("/:id/leads/:leadId/message", async (req, res) => {
 
     const updated = await CampaignLead.findOneAndUpdate(
       { _id: req.params.leadId, campaign_id: campaign._id },
-      { $set: { custom_message: custom_message.trim() || null } },
+      {
+        $set: {
+          custom_message: custom_message.trim() || null,
+          manually_overridden: true,
+          overridden_by: req.account._id,
+          overridden_at: new Date(),
+        },
+      },
       { new: true },
     )
       .populate("outbound_lead_id", "username fullName bio followersCount profileLink")
