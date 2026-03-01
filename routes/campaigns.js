@@ -942,7 +942,11 @@ router.get("/:id/leads", async (req, res) => {
 
     if (status) filter.status = status;
     if (sender_id) {
-      filter.sender_id = sender_id === "none" ? null : sender_id;
+      if (sender_id === "none") {
+        filter.sender_id = null;
+      } else if (mongoose.Types.ObjectId.isValid(sender_id)) {
+        filter.sender_id = new mongoose.Types.ObjectId(sender_id);
+      }
     }
 
     // Search by outbound lead username or fullName
