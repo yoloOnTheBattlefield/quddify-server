@@ -425,6 +425,20 @@ router.patch("/:id", async (req, res) => {
     new: true,
   }).lean();
   if (!lead) return res.status(404).json({ error: "Not found" });
+
+  // Sync CampaignLead status when replied/booked is toggled
+  if (req.body.replied === true) {
+    await CampaignLead.updateMany(
+      { outbound_lead_id: lead._id, status: { $in: ["sent", "delivered"] } },
+      { $set: { status: "replied" } },
+    );
+  } else if (req.body.replied === false) {
+    await CampaignLead.updateMany(
+      { outbound_lead_id: lead._id, status: "replied" },
+      { $set: { status: "sent" } },
+    );
+  }
+
   res.json(lead);
 });
 
