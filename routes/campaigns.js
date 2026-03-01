@@ -937,10 +937,13 @@ router.get("/:id/leads", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const { status, search, page, limit } = req.query;
+    const { status, search, sender_id, page, limit } = req.query;
     const filter = { campaign_id: campaign._id };
 
     if (status) filter.status = status;
+    if (sender_id) {
+      filter.sender_id = sender_id === "none" ? null : sender_id;
+    }
 
     // Search by outbound lead username or fullName
     if (search) {
