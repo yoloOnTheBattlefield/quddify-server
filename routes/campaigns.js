@@ -921,6 +921,26 @@ router.delete("/:id/leads", async (req, res) => {
   }
 });
 
+// POST /api/campaigns/migrate-replied — one-time fix: sync CampaignLead status from OutboundLead.replied
+router.post("/migrate-replied", async (req, res) => {
+  try {
+    // Find all outbound leads that have replied=true
+    const repliedLeadIds = await OutboundLead.find({ replied: true }, { _id: 1 }).lean();
+    const ids = repliedLeadIds.map((l) => l._id);
+
+    // Update any CampaignLeads still stuck at sent/delivered
+    const result = await CampaignLead.updateMany(
+      { outbound_lead_id: { $in: ids }, status: { $in: ["sent", "delivered"] } },
+      { $set: { status: "replied" } },
+    );
+
+    res.json({ matched: result.matchedCount, modified: result.modifiedCount });
+  } catch (err) {
+    console.error("Migrate replied error:", err);
+    res.status(500).json({ error: "Migration failed" });
+  }
+});
+
 // GET /api/campaigns/:id/leads — list campaign leads with filters
 router.get("/:id/leads", async (req, res) => {
   try {
