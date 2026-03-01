@@ -560,13 +560,13 @@ router.get("/", async (req, res) => {
 // GET /analytics/outbound — outbound funnel with optional campaign + date filter
 router.get("/outbound", async (req, res) => {
   try {
-    const { campaign_id, from, to } = req.query;
+    const { campaign_id, start_date, end_date } = req.query;
     const outboundFilter = { account_id: req.account._id, isMessaged: true };
 
-    if (from || to) {
+    if (start_date || end_date) {
       outboundFilter.dmDate = {};
-      if (from) outboundFilter.dmDate.$gte = new Date(from);
-      if (to) outboundFilter.dmDate.$lte = new Date(to);
+      if (start_date) outboundFilter.dmDate.$gte = new Date(`${start_date}T00:00:00.000Z`);
+      if (end_date) outboundFilter.dmDate.$lte = new Date(`${end_date}T23:59:59.999Z`);
     }
 
     // Scope to specific campaign's leads
@@ -575,13 +575,7 @@ router.get("/outbound", async (req, res) => {
       outboundFilter._id = { $in: campaignLeads.map((cl) => cl.outbound_lead_id) };
     }
 
-    const totalFilter = { account_id: req.account._id };
-    if (campaign_id) {
-      totalFilter._id = outboundFilter._id;
-    }
-
-    const [total, messaged, replied, booked, contractAgg] = await Promise.all([
-      OutboundLead.countDocuments(totalFilter),
+    const [messaged, replied, booked, contractAgg] = await Promise.all([
       OutboundLead.countDocuments(outboundFilter),
       OutboundLead.countDocuments({ ...outboundFilter, replied: true }),
       OutboundLead.countDocuments({ ...outboundFilter, booked: true }),
@@ -594,7 +588,6 @@ router.get("/outbound", async (req, res) => {
     const contractData = contractAgg[0] || { total: 0, count: 0 };
 
     res.json({
-      total,
       messaged,
       replied,
       booked,
@@ -613,9 +606,14 @@ router.get("/outbound", async (req, res) => {
 // GET /analytics/messages — performance per message template
 router.get("/messages", async (req, res) => {
   try {
-    const { campaign_id } = req.query;
+    const { campaign_id, start_date, end_date } = req.query;
     const matchFilter = { status: { $in: ["sent", "delivered", "replied"] } };
     if (campaign_id) matchFilter.campaign_id = new mongoose.Types.ObjectId(campaign_id);
+    if (start_date || end_date) {
+      matchFilter.sent_at = {};
+      if (start_date) matchFilter.sent_at.$gte = new Date(`${start_date}T00:00:00.000Z`);
+      if (end_date) matchFilter.sent_at.$lte = new Date(`${end_date}T23:59:59.999Z`);
+    }
 
     // Group by campaign_id + template_index (the template identifier)
     // Falls back to message_used for legacy leads without template_index
@@ -690,9 +688,14 @@ router.get("/messages", async (req, res) => {
 // GET /analytics/senders — performance per sender account
 router.get("/senders", async (req, res) => {
   try {
-    const { campaign_id } = req.query;
+    const { campaign_id, start_date, end_date } = req.query;
     const matchFilter = { sender_id: { $ne: null } };
     if (campaign_id) matchFilter.campaign_id = new mongoose.Types.ObjectId(campaign_id);
+    if (start_date || end_date) {
+      matchFilter.sent_at = {};
+      if (start_date) matchFilter.sent_at.$gte = new Date(`${start_date}T00:00:00.000Z`);
+      if (end_date) matchFilter.sent_at.$lte = new Date(`${end_date}T23:59:59.999Z`);
+    }
 
     const senderSends = await CampaignLead.aggregate([
       { $match: matchFilter },
@@ -760,17 +763,30 @@ router.get("/senders", async (req, res) => {
 // GET /analytics/campaigns — performance per campaign
 router.get("/campaigns", async (req, res) => {
   try {
+    const { start_date, end_date } = req.query;
     const campaigns = await Campaign.find({ account_id: req.account._id })
       .select("name status stats outbound_account_ids messages createdAt")
       .sort({ createdAt: -1 })
       .lean();
 
+    const clDateFilter = {};
+    if (start_date || end_date) {
+      clDateFilter.sent_at = {};
+      if (start_date) clDateFilter.sent_at.$gte = new Date(`${start_date}T00:00:00.000Z`);
+      if (end_date) clDateFilter.sent_at.$lte = new Date(`${end_date}T23:59:59.999Z`);
+    }
+
     const results = await Promise.all(
       campaigns.map(async (c) => {
-        const sentLeads = await CampaignLead.find({ campaign_id: c._id, status: { $in: ["sent", "delivered", "replied"] } })
+        const sentLeads = await CampaignLead.find({
+          campaign_id: c._id,
+          status: { $in: ["sent", "delivered", "replied"] },
+          ...clDateFilter,
+        })
           .select("outbound_lead_id")
           .lean();
         const outboundIds = sentLeads.map((l) => l.outbound_lead_id);
+        const sent = sentLeads.length;
 
         const [replied, booked, contractAgg] = await Promise.all([
           OutboundLead.countDocuments({ _id: { $in: outboundIds }, replied: true }),
@@ -790,11 +806,12 @@ router.get("/campaigns", async (req, res) => {
           stats: c.stats,
           sender_count: c.outbound_account_ids.length,
           message_count: c.messages.length,
+          sent,
           replied,
           booked,
           contracts: contractData.count,
           contract_value: contractData.total,
-          reply_rate: c.stats.sent > 0 ? round2((replied / c.stats.sent) * 100) : 0,
+          reply_rate: sent > 0 ? round2((replied / sent) * 100) : 0,
           createdAt: c.createdAt,
         };
       }),
