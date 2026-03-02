@@ -578,6 +578,7 @@ async function processJob(jobId) {
               const isVerified = profile.isVerified ?? profile.is_verified ?? false;
               const externalUrl = profile.externalUrl ?? profile.external_url ?? null;
               const fullName = profile.fullName ?? profile.full_name ?? null;
+              const email = profile.businessEmail ?? profile.contactEmail ?? profile.publicEmail ?? null;
 
               job.stats.profiles_scraped++;
 
@@ -586,7 +587,7 @@ async function processJob(jobId) {
               // Follower filter
               if (followerCount < job.min_followers) {
                 await upsertLead(job, username, {
-                  fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl,
+                  fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
                   qualified: false, unqualified_reason: "low_followers", ai_processed: false,
                 }, userSeeds);
                 job.stats.filtered_low_followers++;
@@ -601,7 +602,7 @@ async function processJob(jobId) {
                   const isQualified = result === "Qualified";
 
                   await upsertLead(job, username, {
-                    fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl,
+                    fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
                     qualified: isQualified,
                     unqualified_reason: isQualified ? null : "ai_rejected",
                     ai_processed: true,
@@ -620,7 +621,7 @@ async function processJob(jobId) {
                 } catch (err) {
                   console.error(`[deep-scraper] AI error for @${username}:`, err.message);
                   await upsertLead(job, username, {
-                    fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl,
+                    fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
                     qualified: null, unqualified_reason: null, ai_processed: false,
                   }, userSeeds);
                   emitLog(accountId, jobId, `@${username} → AI error, saved without qualification`, "error");
@@ -628,7 +629,7 @@ async function processJob(jobId) {
               } else {
                 // No prompt → save as qualified by default
                 await upsertLead(job, username, {
-                  fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl,
+                  fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
                   qualified: true, unqualified_reason: null, ai_processed: false,
                 }, userSeeds);
                 job.stats.qualified++;
@@ -747,6 +748,7 @@ async function upsertLead(job, username, data, seeds) {
       bio: data.bio || null,
       postsCount: data.postsCount || 0,
       externalUrl: data.externalUrl || null,
+      email: data.email || null,
       source,
       scrapeDate: new Date(),
       qualified: data.qualified,
