@@ -11,6 +11,7 @@ const { emitToAccount } = require("./socketManager");
 
 // Apify actor IDs
 const REEL_SCRAPER = "apify~instagram-reel-scraper";
+const POST_SCRAPER = "apify/instagram-post-scraper";
 const COMMENT_SCRAPER = "SbK00X0JYCPblD2wp";
 const PROFILE_SCRAPER = "dSCLg0C3YEZ83HzYX";
 
@@ -284,19 +285,22 @@ async function processJob(jobId) {
     // Track unique commenters across all reels (restored from checkpoint on resume)
     const seenCommenters = new Set(job.commenter_usernames || []);
 
-    // ── Pipeline: for each seed, scrape reels then process each reel ──
+    const contentLabel = job.scrape_type === "posts" ? "posts" : "reels";
+    const contentActor = job.scrape_type === "posts" ? POST_SCRAPER : REEL_SCRAPER;
+
+    // ── Pipeline: for each seed, scrape reels/posts then process each ──
     for (const seed of job.seed_usernames) {
       if (handle.cancelled || handle.paused) break;
 
-      // ── Scrape reels for this seed (skip if already done) ──
+      // ── Scrape reels/posts for this seed (skip if already done) ──
       if (!seedsWithReels.has(seed)) {
         job.status = "scraping_reels";
         await job.save();
         emitStatus(accountId, jobId, "scraping_reels");
-        emitLog(accountId, jobId, `Scraping reels for @${seed}`);
+        emitLog(accountId, jobId, `Scraping ${contentLabel} for @${seed}`);
 
         const { run, tokenValue: reelToken } = await startApifyRunWithRotation(
-          REEL_SCRAPER,
+          contentActor,
           { username: [seed], resultsLimit: job.reel_limit },
           job.account_id,
           legacyToken,
@@ -308,7 +312,7 @@ async function processJob(jobId) {
         job.current_apify_run_id = run.id;
         await job.save();
 
-        emitLog(accountId, jobId, `Apify reel scraper started for @${seed} (${APIFY_MEMORY_MB}MB)`);
+        emitLog(accountId, jobId, `Apify ${contentLabel} scraper started for @${seed} (${APIFY_MEMORY_MB}MB)`);
 
         const completedRun = await waitForApifyRun(run.id, currentToken, jobId, handle);
         if (!completedRun) break; // paused or cancelled
@@ -330,11 +334,11 @@ async function processJob(jobId) {
           emitLog(accountId, jobId, `@${seed}: ${errorCount} error entries skipped (${rawReels.filter((r) => r.error).map((r) => r.errorDescription || r.error).join("; ")})`, "warn");
         }
 
-        emitLog(accountId, jobId, `Scraped ${reels.length} reels from @${seed}`, "success");
+        emitLog(accountId, jobId, `Scraped ${reels.length} ${contentLabel} from @${seed}`, "success");
 
         if (reels.length > 0) {
-          console.log(`[deep-scraper] Sample reel keys:`, Object.keys(reels[0]));
-          console.log(`[deep-scraper] Sample reel data:`, JSON.stringify(reels[0]).substring(0, 500));
+          console.log(`[deep-scraper] Sample ${contentLabel} keys:`, Object.keys(reels[0]));
+          console.log(`[deep-scraper] Sample ${contentLabel} data:`, JSON.stringify(reels[0]).substring(0, 500));
         }
 
         for (const reel of reels) {
@@ -350,8 +354,8 @@ async function processJob(jobId) {
           }
 
           if (!reelUrl) {
-            console.log(`[deep-scraper] Could not construct URL for reel:`, { shortCode, rawUrl, reelId });
-            emitLog(accountId, jobId, `Warning: Could not construct URL for a reel (id: ${reelId || "unknown"})`, "warn");
+            console.log(`[deep-scraper] Could not construct URL for ${contentLabel}:`, { shortCode, rawUrl, reelId });
+            emitLog(accountId, jobId, `Warning: Could not construct URL for a ${contentLabel === "posts" ? "post" : "reel"} (id: ${reelId || "unknown"})`, "warn");
           }
 
           if (reelUrl) {
@@ -366,7 +370,7 @@ async function processJob(jobId) {
               {
                 $set: {
                   competitor_handle: seed,
-                  post_type: "reel",
+                  post_type: job.scrape_type === "posts" ? "post" : "reel",
                   reel_url: reelUrl,
                   caption: reel.caption || reel.text || "",
                   likes_count: reel.likesCount ?? reel.diggCount ?? 0,
@@ -391,12 +395,12 @@ async function processJob(jobId) {
         await job.save();
         emitProgress(accountId, jobId, job.stats);
 
-        console.log(`[deep-scraper] Reels for @${seed}: ${reels.length} URLs collected`);
+        console.log(`[deep-scraper] ${contentLabel} for @${seed}: ${reels.length} URLs collected`);
         if (reels.length > 0 && allReelUrls.filter((_, idx) => allReelSeeds[idx] === seed).length === 0) {
-          emitLog(accountId, jobId, `Warning: ${reels.length} reels scraped for @${seed} but no valid URLs constructed. Check server logs.`, "error");
+          emitLog(accountId, jobId, `Warning: ${reels.length} ${contentLabel} scraped for @${seed} but no valid URLs constructed. Check server logs.`, "error");
         }
       } else {
-        emitLog(accountId, jobId, `Reels for @${seed} already scraped, resuming pipeline`);
+        emitLog(accountId, jobId, `${contentLabel.charAt(0).toUpperCase() + contentLabel.slice(1)} for @${seed} already scraped, resuming pipeline`);
       }
 
       if (handle.cancelled || handle.paused) break;

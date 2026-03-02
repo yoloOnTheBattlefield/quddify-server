@@ -16,6 +16,7 @@ router.post("/start", async (req, res) => {
     const {
       name,
       seed_usernames,
+      scrape_type,
       reel_limit,
       comment_limit,
       min_followers,
@@ -72,6 +73,7 @@ router.post("/start", async (req, res) => {
     const job = await DeepScrapeJob.create({
       account_id: req.account._id,
       name: name?.trim() || null,
+      scrape_type: scrape_type === "posts" ? "posts" : "reels",
       seed_usernames: cleaned,
       reel_limit: reel_limit || 10,
       comment_limit: comment_limit || 100,
@@ -495,7 +497,7 @@ router.patch("/:id", async (req, res) => {
         .json({ error: "Cannot edit an actively running job. Pause or cancel it first." });
     }
 
-    const { seed_usernames, name, reel_limit, comment_limit, min_followers, is_recurring, repeat_interval_days } = req.body;
+    const { seed_usernames, name, scrape_type, reel_limit, comment_limit, min_followers, is_recurring, repeat_interval_days } = req.body;
 
     if (seed_usernames !== undefined) {
       if (!Array.isArray(seed_usernames) || seed_usernames.length === 0) {
@@ -511,6 +513,7 @@ router.patch("/:id", async (req, res) => {
     }
 
     if (name !== undefined) job.name = name?.trim() || null;
+    if (scrape_type !== undefined) job.scrape_type = scrape_type === "posts" ? "posts" : "reels";
     if (reel_limit !== undefined) job.reel_limit = reel_limit;
     if (comment_limit !== undefined) job.comment_limit = comment_limit;
     if (min_followers !== undefined) job.min_followers = min_followers;
