@@ -36,6 +36,7 @@ const apifyTokenRoutes = require("./routes/apify-tokens");
 const adminRoutes = require("./routes/admin");
 const replyCheckRoutes = require("./routes/reply-checks");
 const aiPromptRoutes = require("./routes/ai-prompts");
+const researchRoutes = require("./routes/research");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -169,6 +170,7 @@ app.use("/api/apify-tokens", apifyTokenRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reply-checks", requireOutbound, replyCheckRoutes);
 app.use("/api/ai-prompts", aiPromptRoutes);
+app.use("/api/research", researchRoutes);
 app.use("/tracking", trackingRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass
