@@ -11,7 +11,7 @@ const { emitToAccount } = require("./socketManager");
 
 // Apify actor IDs
 const REEL_SCRAPER = "apify~instagram-reel-scraper";
-const POST_SCRAPER = "apify/instagram-post-scraper";
+const POST_SCRAPER = "apify~instagram-post-scraper";
 const COMMENT_SCRAPER = "SbK00X0JYCPblD2wp";
 const PROFILE_SCRAPER = "dSCLg0C3YEZ83HzYX";
 
