@@ -1,5 +1,5 @@
 const express = require("express");
-const OutboundLead = require("../models/OutboundLead");
+const Lead = require("../models/Lead");
 
 const router = express.Router();
 
@@ -23,31 +23,25 @@ router.post("/webhook", async (req, res) => {
       return res.status(400).json({ error: "Invalid ig_username" });
     }
 
-    const accountId = req.account._id;
-    const source = "manychat";
-    const followingKey = `${username}::${source}`;
-    const fullName =
-      full_name || [first_name, last_name].filter(Boolean).join(" ") || null;
-    const profileLink = `https://www.instagram.com/${username}/`;
+    const ghl = req.account.ghl;
+    const firstName =
+      first_name || (full_name ? full_name.split(" ")[0] : null);
+    const lastName =
+      last_name ||
+      (full_name && full_name.includes(" ")
+        ? full_name.split(" ").slice(1).join(" ")
+        : null);
 
-    const lead = await OutboundLead.findOneAndUpdate(
-      { username, account_id: accountId },
+    const lead = await Lead.findOneAndUpdate(
+      { ig_username: username, account_id: ghl },
       {
         $set: {
-          followingKey,
-          fullName,
-          profileLink,
-          source,
-          metadata: {
-            source: "manychat",
-            trigger_type: trigger_type || null,
-            syncedAt: new Date(),
-          },
+          first_name: firstName,
+          last_name: lastName,
+          source: `manychat:${trigger_type || "unknown"}`,
         },
         $setOnInsert: {
-          isMessaged: null,
-          qualified: null,
-          ai_processed: false,
+          date_created: new Date().toISOString(),
         },
       },
       { upsert: true, new: true },
@@ -60,18 +54,10 @@ router.post("/webhook", async (req, res) => {
     res.json({
       success: true,
       lead_id: lead._id,
-      username: lead.username,
-      created:
-        !lead.updatedAt ||
-        lead.createdAt.getTime() === lead.updatedAt.getTime(),
+      ig_username: lead.ig_username,
     });
   } catch (err) {
     console.error("[manychat] Webhook error:", err);
-
-    if (err.code === 11000) {
-      return res.json({ success: true, message: "Lead already exists" });
-    }
-
     res.status(500).json({ error: "Internal server error" });
   }
 });
