@@ -22,6 +22,7 @@ const OutboundLeadSchema = new mongoose.Schema(
     dmDate: { type: Date, default: null },
     message: { type: String, default: null },
     ig_thread_id: { type: String, default: null },
+    link_sent: { type: Boolean, default: false },
     replied: { type: Boolean, default: false },
     replied_at: { type: Date, default: null },
     booked: { type: Boolean, default: false },
