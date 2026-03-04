@@ -263,10 +263,11 @@ async function processJob(jobId) {
   const handle = { cancelled: false, paused: false, skipComments: false };
   activeJobs.set(jobId, handle);
 
-  // Resolve prompt
+  // Resolve prompt (only needed for outbound mode)
+  const isResearch = job.mode === "research";
   let promptText = DEFAULT_QUALIFICATION_PROMPT;
   let openaiClient = null;
-  if (job.promptId) {
+  if (!isResearch && job.promptId) {
     const promptDoc = await Prompt.findById(job.promptId).lean();
     if (promptDoc) promptText = promptDoc.promptText;
     const apiKey = account.openai_token || process.env.OPENAI;
@@ -498,7 +499,8 @@ async function processJob(jobId) {
         job.stats.unique_commenters = seenCommenters.size;
         emitLog(accountId, jobId, `Reel ${i + 1}: ${comments.length} comments, ${reelCommenters.size} commenters`);
 
-        // ── 2. Dedup commenters against already-processed leads ──
+        // ── 2. Dedup commenters, enrich profiles, qualify (outbound only) ──
+        if (!isResearch) {
         let usernamesToProcess = [...reelCommenters];
         if (!job.force_reprocess) {
           const existing = await OutboundLead.find(
@@ -647,6 +649,7 @@ async function processJob(jobId) {
             }
           }
         }
+        } // end outbound-only block
 
         if (handle.cancelled || handle.paused) break;
 
@@ -692,15 +695,12 @@ async function processJob(jobId) {
 
     emitStatus(accountId, jobId, "completed");
     emitProgress(accountId, jobId, job.stats);
-    emitLog(
-      accountId,
-      jobId,
-      `Job completed — ${job.stats.qualified} qualified, ${job.stats.filtered_low_followers} filtered, ${job.stats.rejected} rejected`,
-      "success",
-    );
-    console.log(
-      `[deep-scraper] Job ${jobId} complete. Q:${job.stats.qualified} F:${job.stats.filtered_low_followers} R:${job.stats.rejected}`,
-    );
+
+    const completionMsg = isResearch
+      ? `Job completed — ${job.stats.reels_scraped} posts, ${job.stats.comments_scraped} comments collected`
+      : `Job completed — ${job.stats.qualified} qualified, ${job.stats.filtered_low_followers} filtered, ${job.stats.rejected} rejected`;
+    emitLog(accountId, jobId, completionMsg, "success");
+    console.log(`[deep-scraper] Job ${jobId} complete (${job.mode || "outbound"}). ${completionMsg}`);
   } catch (err) {
     if (!handle.paused && !handle.cancelled) {
       // 403 / token exhaustion → pause (not fail) so user can add tokens and resume

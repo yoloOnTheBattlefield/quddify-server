@@ -25,6 +25,7 @@ const DeepScrapeJobSchema = new mongoose.Schema(
 
     // Configuration
     name: { type: String, default: null },
+    mode: { type: String, enum: ["outbound", "research"], default: "outbound" },
     scrape_type: { type: String, enum: ["reels", "posts"], default: "reels" },
     seed_usernames: [{ type: String }],
     reel_limit: { type: Number, default: 10 },

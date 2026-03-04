@@ -19,6 +19,7 @@ async function processTick() {
       const newJob = await DeepScrapeJob.create({
         account_id: job.account_id,
         name: job.name || null,
+        mode: job.mode || "outbound",
         scrape_type: job.scrape_type || "reels",
         seed_usernames: job.seed_usernames,
         reel_limit: job.reel_limit,
