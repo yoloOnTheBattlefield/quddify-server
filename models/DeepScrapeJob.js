@@ -31,6 +31,7 @@ const DeepScrapeJobSchema = new mongoose.Schema(
     comment_limit: { type: Number, default: 100 },
     min_followers: { type: Number, default: 1000 },
     force_reprocess: { type: Boolean, default: false },
+    scrape_emails: { type: Boolean, default: true },
     promptId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Prompt",

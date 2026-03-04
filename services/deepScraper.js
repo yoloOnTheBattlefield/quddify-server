@@ -578,7 +578,9 @@ async function processJob(jobId) {
               const isVerified = profile.isVerified ?? profile.is_verified ?? false;
               const externalUrl = profile.externalUrl ?? profile.external_url ?? null;
               const fullName = profile.fullName ?? profile.full_name ?? null;
-              const email = profile.businessEmail ?? profile.contactEmail ?? profile.publicEmail ?? null;
+              const email = job.scrape_emails !== false
+                ? (profile.businessEmail ?? profile.contactEmail ?? profile.publicEmail ?? null)
+                : null;
 
               job.stats.profiles_scraped++;
 
