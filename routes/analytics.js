@@ -1310,6 +1310,7 @@ router.get("/inbound", async (req, res) => {
     const booked = leads.filter((l) => l.booked_at).length;
     const closed = leads.filter((l) => l.closed_at).length;
     const revenue = leads.reduce((sum, l) => sum + (l.contract_value || 0), 0);
+    const crossChannel = leads.filter((l) => l.outbound_lead_id).length;
 
     const sourceMap = {};
     for (const lead of leads) {
@@ -1329,6 +1330,8 @@ router.get("/inbound", async (req, res) => {
       book_rate: total > 0 ? round2((booked / total) * 100) : 0,
       close_rate: booked > 0 ? round2((closed / booked) * 100) : 0,
       revenue,
+      cross_channel: crossChannel,
+      cross_channel_rate: total > 0 ? round2((crossChannel / total) * 100) : 0,
       sources,
     });
   } catch (err) {

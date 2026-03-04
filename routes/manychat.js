@@ -1,5 +1,6 @@
 const express = require("express");
 const Lead = require("../models/Lead");
+const OutboundLead = require("../models/OutboundLead");
 
 const router = express.Router();
 
@@ -49,14 +50,35 @@ router.post("/webhook", async (req, res) => {
       { upsert: true, new: true },
     );
 
+    // Cross-reference: link to OutboundLead if this user was previously scraped/messaged
+    let crossChannel = false;
+    if (!lead.outbound_lead_id) {
+      const obLead = await OutboundLead.findOne({
+        username,
+        account_id: req.account._id,
+      }).lean();
+      if (obLead) {
+        lead.outbound_lead_id = obLead._id;
+        await Lead.updateOne(
+          { _id: lead._id },
+          { $set: { outbound_lead_id: obLead._id } },
+        );
+        crossChannel = true;
+        console.log(`[manychat] Cross-channel link: ${username} → OutboundLead ${obLead._id}`);
+      }
+    } else {
+      crossChannel = true;
+    }
+
     console.log(
-      `[manychat] Lead upserted: ${username} (trigger: ${trigger_type || "unknown"})`,
+      `[manychat] Lead upserted: ${username} (trigger: ${trigger_type || "unknown"}, cross: ${crossChannel})`,
     );
 
     res.json({
       success: true,
       lead_id: lead._id,
       ig_username: lead.ig_username,
+      cross_channel: crossChannel,
     });
   } catch (err) {
     console.error("[manychat] Webhook error:", err);
