@@ -575,9 +575,10 @@ router.get("/outbound", async (req, res) => {
       outboundFilter._id = { $in: campaignLeads.map((cl) => cl.outbound_lead_id) };
     }
 
-    const [messaged, replied, booked, contractAgg] = await Promise.all([
+    const [messaged, replied, link_sent, booked, contractAgg] = await Promise.all([
       OutboundLead.countDocuments(outboundFilter),
       OutboundLead.countDocuments({ ...outboundFilter, replied: true }),
+      OutboundLead.countDocuments({ ...outboundFilter, link_sent: true }),
       OutboundLead.countDocuments({ ...outboundFilter, booked: true }),
       OutboundLead.aggregate([
         { $match: { ...outboundFilter, contract_value: { $gt: 0 } } },
@@ -590,10 +591,12 @@ router.get("/outbound", async (req, res) => {
     res.json({
       messaged,
       replied,
+      link_sent,
       booked,
       contracts: contractData.count,
       contract_value: contractData.total,
       reply_rate: messaged > 0 ? round2((replied / messaged) * 100) : 0,
+      link_sent_rate: replied > 0 ? round2((link_sent / replied) * 100) : 0,
       book_rate: replied > 0 ? round2((booked / replied) * 100) : 0,
       close_rate: booked > 0 ? round2((contractData.count / booked) * 100) : 0,
     });
@@ -873,7 +876,7 @@ async function buildCampaignLeadMatch(req) {
 router.get("/outbound/daily", async (req, res) => {
   try {
     const obFilter = await buildOutboundFilter(req);
-    const obLeads = await OutboundLead.find(obFilter).select("dmDate replied booked").lean();
+    const obLeads = await OutboundLead.find(obFilter).select("dmDate replied link_sent booked").lean();
 
     // Build daily map
     const dailyMap = {};
@@ -883,10 +886,8 @@ router.get("/outbound/daily", async (req, res) => {
       if (!dailyMap[dateStr]) dailyMap[dateStr] = { sent: 0, replied: 0, link_sent: 0, booked: 0 };
       dailyMap[dateStr].sent++;
       if (lead.replied) dailyMap[dateStr].replied++;
-      if (lead.booked) {
-        dailyMap[dateStr].link_sent++;
-        dailyMap[dateStr].booked++;
-      }
+      if (lead.link_sent) dailyMap[dateStr].link_sent++;
+      if (lead.booked) dailyMap[dateStr].booked++;
     }
 
     const days = Object.entries(dailyMap)
