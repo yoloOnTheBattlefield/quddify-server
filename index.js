@@ -38,6 +38,8 @@ const replyCheckRoutes = require("./routes/reply-checks");
 const aiPromptRoutes = require("./routes/ai-prompts");
 const researchRoutes = require("./routes/research");
 const manychatRoutes = require("./routes/manychat");
+const igWebhookRoutes = require("./routes/instagram-webhook");
+const igConversationRoutes = require("./routes/ig-conversations");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -50,6 +52,19 @@ const deepScrapeScheduler = require("./services/deepScrapeScheduler");
 
 const app = express();
 const server = http.createServer(app);
+
+// Instagram webhook — registered BEFORE express.json() so we can capture raw body for signature verification
+app.use(
+  "/instagram-webhook",
+  cors({ origin: true, credentials: false }),
+  express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+  igWebhookRoutes,
+);
+
 app.use(express.json());
 
 // Public tracking routes — registered before global CORS so any origin can call them
@@ -118,6 +133,10 @@ const connectDB = async () => {
     await SenderAccount.syncIndexes();
     const OutboundAccountModel = require("./models/OutboundAccount");
     await OutboundAccountModel.syncIndexes();
+    const IgConversation = require("./models/IgConversation");
+    await IgConversation.syncIndexes();
+    const IgMessage = require("./models/IgMessage");
+    await IgMessage.syncIndexes();
   }
 
   return cachedConnection;
@@ -173,6 +192,7 @@ app.use("/api/reply-checks", requireOutbound, replyCheckRoutes);
 app.use("/api/ai-prompts", aiPromptRoutes);
 app.use("/api/research", researchRoutes);
 app.use("/api/manychat", manychatRoutes);
+app.use("/api/ig-conversations", igConversationRoutes);
 app.use("/tracking", trackingRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass
