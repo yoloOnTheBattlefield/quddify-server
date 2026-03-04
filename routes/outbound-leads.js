@@ -421,6 +421,14 @@ router.get("/:id", async (req, res) => {
 
 // PATCH /outbound-leads/:id
 router.patch("/:id", async (req, res) => {
+  // Auto-set timestamps when boolean flags are toggled
+  if (req.body.link_sent === true && !req.body.link_sent_at) req.body.link_sent_at = new Date();
+  if (req.body.link_sent === false) req.body.link_sent_at = null;
+  if (req.body.booked === true && !req.body.booked_at) req.body.booked_at = new Date();
+  if (req.body.booked === false) req.body.booked_at = null;
+  if (req.body.replied === true && !req.body.replied_at) req.body.replied_at = new Date();
+  if (req.body.replied === false) req.body.replied_at = null;
+
   const lead = await OutboundLead.findByIdAndUpdate(req.params.id, req.body, {
     new: true,
   }).lean();
