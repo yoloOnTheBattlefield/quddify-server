@@ -45,7 +45,7 @@ router.get("/", (req, res) => {
 
   if (mode === "subscribe" && token === process.env.IG_VERIFY_TOKEN) {
     console.log("[ig-webhook] Verification successful");
-    return res.status(200).send(challenge);
+    return res.type("text/plain").status(200).send(challenge);
   }
 
   console.warn("[ig-webhook] Verification failed", { mode, token });
