@@ -237,9 +237,13 @@ router.post("/confirm", async (req, res) => {
     campaignLead.sent_at = new Date();
     await campaignLead.save();
 
-    // Mark outbound lead as messaged
+    // Mark outbound lead as messaged (store the actual message text sent)
     await OutboundLead.findByIdAndUpdate(campaignLead.outbound_lead_id, {
-      $set: { isMessaged: true },
+      $set: {
+        isMessaged: true,
+        dmDate: new Date(),
+        message: campaignLead.custom_message || campaignLead.message_used || null,
+      },
     });
 
     // Update campaign stats + last_sent_at (atomic)

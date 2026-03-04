@@ -810,10 +810,14 @@ router.patch("/:id/leads/:leadId/status", async (req, res) => {
       },
     });
 
-    // Mark outbound lead as messaged if moving to sent/delivered
+    // Mark outbound lead as messaged if moving to sent/delivered (store the actual message text)
     if ((status === "sent" || status === "delivered") && lead.outbound_lead_id) {
       await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, {
-        $set: { isMessaged: true },
+        $set: {
+          isMessaged: true,
+          dmDate: new Date(),
+          message: lead.custom_message || lead.message_used || null,
+        },
       });
     }
 

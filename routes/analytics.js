@@ -606,81 +606,53 @@ router.get("/outbound", async (req, res) => {
   }
 });
 
-// GET /analytics/messages — performance per message template
+// GET /analytics/messages — performance per unique message (source of truth: OutboundLead.message)
 router.get("/messages", async (req, res) => {
   try {
-    const { campaign_id, start_date, end_date } = req.query;
-    const matchFilter = { status: { $in: ["sent", "delivered", "replied"] } };
-    if (campaign_id) matchFilter.campaign_id = new mongoose.Types.ObjectId(campaign_id);
-    if (start_date || end_date) {
-      matchFilter.sent_at = {};
-      if (start_date) matchFilter.sent_at.$gte = new Date(`${start_date}T00:00:00.000Z`);
-      if (end_date) matchFilter.sent_at.$lte = new Date(`${end_date}T23:59:59.999Z`);
-    }
+    const { limit: qLimit, sort_by } = req.query;
+    const obFilter = await buildOutboundFilter(req);
+    obFilter.message = { $nin: [null, ""] };
 
-    // Group by campaign_id + template_index (the template identifier)
-    // Falls back to message_used for legacy leads without template_index
-    const messageSends = await CampaignLead.aggregate([
-      { $match: matchFilter },
+    const results = await OutboundLead.aggregate([
+      { $match: obFilter },
       {
         $group: {
-          _id: {
-            campaign_id: "$campaign_id",
-            template_index: "$template_index",
-          },
+          _id: "$message",
           sent: { $sum: 1 },
-          outbound_lead_ids: { $push: "$outbound_lead_id" },
-          sample_message: { $first: "$message_used" },
+          replied: { $sum: { $cond: ["$replied", 1, 0] } },
+          link_sent: { $sum: { $cond: ["$link_sent", 1, 0] } },
+          booked: { $sum: { $cond: ["$booked", 1, 0] } },
+          contract_value: { $sum: { $ifNull: ["$contract_value", 0] } },
+          contracts: { $sum: { $cond: [{ $gt: ["$contract_value", 0] }, 1, 0] } },
         },
       },
+      {
+        $project: {
+          _id: 0,
+          message: "$_id",
+          sent: 1,
+          replied: 1,
+          link_sent: 1,
+          booked: 1,
+          contracts: 1,
+          contract_value: 1,
+          reply_rate: {
+            $cond: [{ $gt: ["$sent", 0] }, { $multiply: [{ $divide: ["$replied", "$sent"] }, 100] }, 0],
+          },
+          book_rate: {
+            $cond: [{ $gt: ["$replied", 0] }, { $multiply: [{ $divide: ["$booked", "$replied"] }, 100] }, 0],
+          },
+        },
+      },
+      { $sort: sort_by === "sent" ? { sent: -1 } : { reply_rate: -1 } },
+      { $limit: parseInt(qLimit) || 50 },
     ]);
 
-    // Look up campaign names and raw templates in bulk
-    const campaignIds = [...new Set(messageSends.map((m) => m._id.campaign_id?.toString()).filter(Boolean))];
-    const campaignDocs = await Campaign.find({ _id: { $in: campaignIds } }).lean();
-    const campaignMap = {};
-    for (const c of campaignDocs) {
-      campaignMap[c._id.toString()] = c;
+    for (const r of results) {
+      r.reply_rate = round2(r.reply_rate);
+      r.book_rate = round2(r.book_rate);
     }
 
-    const results = await Promise.all(
-      messageSends.map(async (msg) => {
-        const [replied, booked, contractAgg] = await Promise.all([
-          OutboundLead.countDocuments({ _id: { $in: msg.outbound_lead_ids }, replied: true }),
-          OutboundLead.countDocuments({ _id: { $in: msg.outbound_lead_ids }, booked: true }),
-          OutboundLead.aggregate([
-            { $match: { _id: { $in: msg.outbound_lead_ids }, contract_value: { $gt: 0 } } },
-            { $group: { _id: null, total: { $sum: "$contract_value" }, count: { $sum: 1 } } },
-          ]),
-        ]);
-
-        const contractData = contractAgg[0] || { total: 0, count: 0 };
-        const camp = campaignMap[msg._id.campaign_id?.toString()] || null;
-        const templateIndex = msg._id.template_index;
-
-        // Get raw template text from campaign.messages[template_index]
-        let template = null;
-        if (camp && templateIndex != null && camp.messages && camp.messages[templateIndex]) {
-          template = camp.messages[templateIndex];
-        }
-
-        return {
-          campaign_id: msg._id.campaign_id || null,
-          campaign_name: camp ? camp.name : "Unknown",
-          template_index: templateIndex,
-          template: template || msg.sample_message || "(no template)",
-          sent: msg.sent,
-          replied,
-          booked,
-          contracts: contractData.count,
-          contract_value: contractData.total,
-          reply_rate: msg.sent > 0 ? round2((replied / msg.sent) * 100) : 0,
-          book_rate: replied > 0 ? round2((booked / replied) * 100) : 0,
-        };
-      }),
-    );
-
-    results.sort((a, b) => b.reply_rate - a.reply_rate);
     res.json({ messages: results });
   } catch (err) {
     console.error("Message analytics error:", err);
@@ -1427,6 +1399,145 @@ router.get("/inbound/daily", async (req, res) => {
   } catch (err) {
     console.error("Inbound daily analytics error:", err);
     res.status(500).json({ error: "Failed to fetch inbound daily analytics" });
+  }
+});
+
+// GET /analytics/outbound/follower-tiers — reply rate by follower tier
+router.get("/outbound/follower-tiers", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+
+    const tiers = await OutboundLead.aggregate([
+      { $match: obFilter },
+      {
+        $addFields: {
+          tier: {
+            $switch: {
+              branches: [
+                { case: { $or: [{ $eq: ["$followersCount", null] }, { $lt: ["$followersCount", 1000] }] }, then: "<1K" },
+                { case: { $lt: ["$followersCount", 10000] }, then: "1K-10K" },
+                { case: { $lt: ["$followersCount", 100000] }, then: "10K-100K" },
+              ],
+              default: "100K+",
+            },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$tier",
+          sent: { $sum: 1 },
+          replied: { $sum: { $cond: ["$replied", 1, 0] } },
+          booked: { $sum: { $cond: ["$booked", 1, 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          tier: "$_id",
+          sent: 1,
+          replied: 1,
+          booked: 1,
+          reply_rate: {
+            $cond: [{ $gt: ["$sent", 0] }, { $round: [{ $multiply: [{ $divide: ["$replied", "$sent"] }, 100] }, 2] }, 0],
+          },
+          book_rate: {
+            $cond: [{ $gt: ["$replied", 0] }, { $round: [{ $multiply: [{ $divide: ["$booked", "$replied"] }, 100] }, 2] }, 0],
+          },
+        },
+      },
+      { $sort: { sent: -1 } },
+    ]);
+
+    res.json({ tiers });
+  } catch (err) {
+    console.error("Follower tier analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch follower tier analytics" });
+  }
+});
+
+// GET /analytics/outbound/prompt-labels — reply rate by industry/prompt label
+router.get("/outbound/prompt-labels", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+
+    const labels = await OutboundLead.aggregate([
+      { $match: obFilter },
+      {
+        $group: {
+          _id: { $ifNull: ["$promptLabel", "No Label"] },
+          sent: { $sum: 1 },
+          replied: { $sum: { $cond: ["$replied", 1, 0] } },
+          booked: { $sum: { $cond: ["$booked", 1, 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          label: "$_id",
+          sent: 1,
+          replied: 1,
+          booked: 1,
+          reply_rate: {
+            $cond: [{ $gt: ["$sent", 0] }, { $round: [{ $multiply: [{ $divide: ["$replied", "$sent"] }, 100] }, 2] }, 0],
+          },
+          book_rate: {
+            $cond: [{ $gt: ["$replied", 0] }, { $round: [{ $multiply: [{ $divide: ["$booked", "$replied"] }, 100] }, 2] }, 0],
+          },
+        },
+      },
+      { $sort: { sent: -1 } },
+    ]);
+
+    res.json({ labels });
+  } catch (err) {
+    console.error("Prompt label analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch prompt label analytics" });
+  }
+});
+
+// Helper: classify a message into question type
+function classifyQuestionType(msg) {
+  if (/^how\b/i.test(msg) || /\bhow (do|can|would|should|did)\b/i.test(msg)) return "How";
+  if (/^(do|does|did|is|are|was|were|can|could|would|will|have|has|should)\b/i.test(msg)) return "Binary";
+  if (/what('s| is| are) your (process|approach|strategy)/i.test(msg) || /walk me through/i.test(msg) || /what steps/i.test(msg)) return "Process";
+  if (msg.includes("?")) return "Other Question";
+  return "Statement";
+}
+
+// GET /analytics/outbound/question-types — reply rate by message question type
+router.get("/outbound/question-types", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+    obFilter.message = { $nin: [null, ""] };
+
+    const leads = await OutboundLead.find(obFilter)
+      .select("message replied booked")
+      .lean();
+
+    const buckets = {};
+    for (const lead of leads) {
+      const qType = classifyQuestionType(lead.message.trim());
+      if (!buckets[qType]) buckets[qType] = { sent: 0, replied: 0, booked: 0 };
+      buckets[qType].sent++;
+      if (lead.replied) buckets[qType].replied++;
+      if (lead.booked) buckets[qType].booked++;
+    }
+
+    const types = Object.entries(buckets).map(([type, stats]) => ({
+      type,
+      sent: stats.sent,
+      replied: stats.replied,
+      booked: stats.booked,
+      reply_rate: stats.sent > 0 ? round2((stats.replied / stats.sent) * 100) : 0,
+      book_rate: stats.replied > 0 ? round2((stats.booked / stats.replied) * 100) : 0,
+    }));
+
+    types.sort((a, b) => b.sent - a.sent);
+    res.json({ types });
+  } catch (err) {
+    console.error("Question type analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch question type analytics" });
   }
 });
 

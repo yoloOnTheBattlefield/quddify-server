@@ -82,10 +82,13 @@ router.post("/:taskId/complete", async (req, res) => {
 
     // Auto-update OutboundLead for send_dm tasks
     if (task.type === "send_dm" && task.outbound_lead_id) {
+      if (!task.message) {
+        console.warn(`[tasks] Task ${task._id} completed with no message text — lead will be marked messaged but message is null`);
+      }
       const outboundUpdate = {
         isMessaged: true,
         dmDate: new Date(),
-        message: task.message,
+        message: task.message || null,
       };
       if (result?.threadId) outboundUpdate.ig_thread_id = result.threadId;
       await OutboundLead.findByIdAndUpdate(task.outbound_lead_id, {
