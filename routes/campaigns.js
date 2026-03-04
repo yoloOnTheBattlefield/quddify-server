@@ -921,6 +921,67 @@ router.delete("/:id/leads", async (req, res) => {
   }
 });
 
+// POST /api/campaigns/:id/leads/remove — remove specific leads by IDs
+router.post("/:id/leads/remove", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const { lead_ids } = req.body;
+    if (!Array.isArray(lead_ids) || lead_ids.length === 0) {
+      return res.status(400).json({ error: "lead_ids array is required" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const validIds = lead_ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) {
+      return res.status(400).json({ error: "No valid lead IDs provided" });
+    }
+
+    // Get the leads to be removed so we can update stats accurately
+    const leadsToRemove = await CampaignLead.find({
+      _id: { $in: validIds },
+      campaign_id: campaign._id,
+    });
+
+    if (leadsToRemove.length === 0) {
+      return res.json({ removed: 0 });
+    }
+
+    // Count by status for stats update
+    const statusCounts = {};
+    for (const lead of leadsToRemove) {
+      statusCounts[lead.status] = (statusCounts[lead.status] || 0) + 1;
+    }
+
+    const result = await CampaignLead.deleteMany({
+      _id: { $in: validIds },
+      campaign_id: campaign._id,
+    });
+
+    // Update stats
+    const statsUpdate = { $inc: { "stats.total": -result.deletedCount } };
+    for (const [status, count] of Object.entries(statusCounts)) {
+      statsUpdate.$inc[`stats.${status}`] = -count;
+    }
+    await Campaign.findByIdAndUpdate(campaign._id, statsUpdate);
+
+    res.json({ removed: result.deletedCount });
+  } catch (err) {
+    console.error("Remove selected campaign leads error:", err);
+    res.status(500).json({ error: "Failed to remove leads" });
+  }
+});
+
 // GET /api/campaigns/:id/leads — list campaign leads with filters
 router.get("/:id/leads", async (req, res) => {
   try {
