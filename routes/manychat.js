@@ -12,6 +12,7 @@ router.post("/webhook", async (req, res) => {
       last_name,
       full_name,
       trigger_type,
+      post_url,
     } = req.body;
 
     if (!ig_username) {
@@ -39,6 +40,7 @@ router.post("/webhook", async (req, res) => {
           first_name: firstName,
           last_name: lastName,
           source: `manychat:${trigger_type || "unknown"}`,
+          ...(post_url ? { post_url: post_url.trim() } : {}),
         },
         $setOnInsert: {
           date_created: new Date().toISOString(),

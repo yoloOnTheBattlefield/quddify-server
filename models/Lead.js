@@ -8,6 +8,7 @@ const LeadSchema = new mongoose.Schema(
     account_id: { type: String, default: null },
     ig_username: { type: String, default: null },
     source: { type: String, default: null },
+    post_url: { type: String, default: null },
     outbound_lead_id: { type: mongoose.Schema.Types.ObjectId, ref: "OutboundLead", default: null },
     ig_thread_id: { type: String, default: null },
 

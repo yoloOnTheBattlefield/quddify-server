@@ -1309,4 +1309,125 @@ router.get("/outbound/trends", async (req, res) => {
   }
 });
 
+// ── Inbound Analytics ─────────────────────────────────────────────────
+
+function buildInboundFilter(req) {
+  const { start_date, end_date } = req.query;
+  const isAdmin = req.user?.role === 0;
+  const filter = {};
+  if (isAdmin && req.query.account_id) {
+    filter.account_id = req.query.account_id;
+  } else if (!isAdmin && req.account.ghl) {
+    filter.account_id = req.account.ghl;
+  }
+  if (start_date || end_date) {
+    filter.date_created = {};
+    if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
+    if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
+  }
+  return filter;
+}
+
+// GET /analytics/inbound — overview KPIs + source breakdown
+router.get("/inbound", async (req, res) => {
+  try {
+    const filter = buildInboundFilter(req);
+    const leads = await Lead.find(filter).lean();
+
+    const total = leads.length;
+    const booked = leads.filter((l) => l.booked_at).length;
+    const closed = leads.filter((l) => l.closed_at).length;
+    const revenue = leads.reduce((sum, l) => sum + (l.contract_value || 0), 0);
+
+    const sourceMap = {};
+    for (const lead of leads) {
+      const src = lead.source || "unknown";
+      if (!sourceMap[src]) sourceMap[src] = { source: src, total: 0, booked: 0, closed: 0, revenue: 0 };
+      sourceMap[src].total++;
+      if (lead.booked_at) sourceMap[src].booked++;
+      if (lead.closed_at) sourceMap[src].closed++;
+      sourceMap[src].revenue += lead.contract_value || 0;
+    }
+    const sources = Object.values(sourceMap).sort((a, b) => b.total - a.total);
+
+    res.json({
+      total,
+      booked,
+      closed,
+      book_rate: total > 0 ? round2((booked / total) * 100) : 0,
+      close_rate: booked > 0 ? round2((closed / booked) * 100) : 0,
+      revenue,
+      sources,
+    });
+  } catch (err) {
+    console.error("Inbound analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch inbound analytics" });
+  }
+});
+
+// GET /analytics/inbound/posts — post performance table
+router.get("/inbound/posts", async (req, res) => {
+  try {
+    const filter = buildInboundFilter(req);
+    const leads = await Lead.find(filter).lean();
+
+    const postMap = {};
+    for (const lead of leads) {
+      const url = lead.post_url || "unknown";
+      if (!postMap[url]) postMap[url] = { post_url: url, total: 0, booked: 0, closed: 0, revenue: 0 };
+      postMap[url].total++;
+      if (lead.booked_at) postMap[url].booked++;
+      if (lead.closed_at) postMap[url].closed++;
+      postMap[url].revenue += lead.contract_value || 0;
+    }
+
+    const posts = Object.values(postMap)
+      .map((p) => ({
+        ...p,
+        book_rate: p.total > 0 ? round2((p.booked / p.total) * 100) : 0,
+        close_rate: p.booked > 0 ? round2((p.closed / p.booked) * 100) : 0,
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    res.json({ posts });
+  } catch (err) {
+    console.error("Inbound posts analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch inbound posts analytics" });
+  }
+});
+
+// GET /analytics/inbound/daily — daily volume
+router.get("/inbound/daily", async (req, res) => {
+  try {
+    const filter = buildInboundFilter(req);
+    const leads = await Lead.find(filter).lean();
+
+    const dailyMap = {};
+    for (const lead of leads) {
+      const dateStr = toDateString(lead.date_created);
+      if (!dateStr) continue;
+      if (!dailyMap[dateStr]) dailyMap[dateStr] = { date: dateStr, created: 0, booked: 0, closed: 0 };
+      dailyMap[dateStr].created++;
+    }
+    for (const lead of leads) {
+      const bookedDate = toDateString(lead.booked_at);
+      if (bookedDate) {
+        if (!dailyMap[bookedDate]) dailyMap[bookedDate] = { date: bookedDate, created: 0, booked: 0, closed: 0 };
+        dailyMap[bookedDate].booked++;
+      }
+      const closedDate = toDateString(lead.closed_at);
+      if (closedDate) {
+        if (!dailyMap[closedDate]) dailyMap[closedDate] = { date: closedDate, created: 0, booked: 0, closed: 0 };
+        dailyMap[closedDate].closed++;
+      }
+    }
+
+    const days = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+    res.json({ days });
+  } catch (err) {
+    console.error("Inbound daily analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch inbound daily analytics" });
+  }
+});
+
 module.exports = router;
