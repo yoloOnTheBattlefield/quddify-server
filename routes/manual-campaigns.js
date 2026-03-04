@@ -110,13 +110,15 @@ router.get("/next", async (req, res) => {
         });
       }
 
-      // Check cooldown
-      const delaySec = calculateDelay(campaign, 1, sentToday);
-      if (campaign.last_sent_at) {
-        const elapsed = (Date.now() - campaign.last_sent_at.getTime()) / 1000;
-        if (elapsed < delaySec) {
-          const wait = Math.ceil(delaySec - elapsed);
-          return res.json({ status: "wait", wait_seconds: wait });
+      // Check cooldown (skip if skip_wait_time is enabled)
+      if (!campaign.schedule.skip_wait_time) {
+        const delaySec = calculateDelay(campaign, 1, sentToday);
+        if (campaign.last_sent_at) {
+          const elapsed = (Date.now() - campaign.last_sent_at.getTime()) / 1000;
+          if (elapsed < delaySec) {
+            const wait = Math.ceil(delaySec - elapsed);
+            return res.json({ status: "wait", wait_seconds: wait });
+          }
         }
       }
     }

@@ -28,6 +28,7 @@ const DeepScrapeJobSchema = new mongoose.Schema(
     mode: { type: String, enum: ["outbound", "research"], default: "outbound" },
     scrape_type: { type: String, enum: ["reels", "posts"], default: "reels" },
     seed_usernames: [{ type: String }],
+    direct_urls: [{ type: String }], // direct reel/post URLs — skips reel scraping phase
     reel_limit: { type: Number, default: 10 },
     comment_limit: { type: Number, default: 100 },
     min_followers: { type: Number, default: 1000 },

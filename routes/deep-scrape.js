@@ -17,6 +17,7 @@ router.post("/start", async (req, res) => {
       name,
       mode,
       seed_usernames,
+      direct_urls,
       scrape_type,
       reel_limit,
       comment_limit,
@@ -30,14 +31,13 @@ router.post("/start", async (req, res) => {
 
     const jobMode = mode === "research" ? "research" : "outbound";
 
-    if (
-      !seed_usernames ||
-      !Array.isArray(seed_usernames) ||
-      seed_usernames.length === 0
-    ) {
+    const hasSeeds = Array.isArray(seed_usernames) && seed_usernames.length > 0;
+    const hasDirectUrls = Array.isArray(direct_urls) && direct_urls.length > 0;
+
+    if (!hasSeeds && !hasDirectUrls) {
       return res
         .status(400)
-        .json({ error: "seed_usernames is required (array of usernames)" });
+        .json({ error: "Provide seed_usernames or direct_urls" });
     }
 
     // Validate Apify token (multi-token or legacy)
@@ -52,13 +52,20 @@ router.post("/start", async (req, res) => {
       });
     }
 
-    // Clean usernames
-    const cleaned = seed_usernames
-      .map((u) => u.replace(/^@/, "").trim())
-      .filter(Boolean);
+    // Clean usernames (may be empty for direct URL jobs)
+    const cleaned = hasSeeds
+      ? seed_usernames.map((u) => u.replace(/^@/, "").trim()).filter(Boolean)
+      : [];
 
-    if (cleaned.length === 0) {
-      return res.status(400).json({ error: "No valid usernames provided" });
+    // Validate & clean direct URLs
+    const cleanedUrls = hasDirectUrls
+      ? direct_urls
+          .map((u) => u.trim())
+          .filter((u) => /instagram\.com\/(?:.*\/)?(reel|p)\/[^/?#&]+/.test(u))
+      : [];
+
+    if (cleaned.length === 0 && cleanedUrls.length === 0) {
+      return res.status(400).json({ error: "No valid usernames or URLs provided" });
     }
 
     // Resolve prompt (only for outbound mode)
@@ -80,6 +87,7 @@ router.post("/start", async (req, res) => {
       mode: jobMode,
       scrape_type: scrape_type === "posts" ? "posts" : "reels",
       seed_usernames: cleaned,
+      direct_urls: cleanedUrls,
       reel_limit: reel_limit || 10,
       comment_limit: comment_limit || 100,
       min_followers: min_followers ?? 1000,

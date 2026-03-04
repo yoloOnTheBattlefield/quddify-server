@@ -288,9 +288,28 @@ async function processJob(jobId) {
 
     const contentLabel = job.scrape_type === "posts" ? "posts" : "reels";
     const contentActor = job.scrape_type === "posts" ? POST_SCRAPER : REEL_SCRAPER;
+    const isDirectUrlJob = Array.isArray(job.direct_urls) && job.direct_urls.length > 0;
+
+    // ── Direct URL mode: pre-populate reel URLs, skip reel scraping ──
+    if (isDirectUrlJob && !seedsWithReels.has("__direct__")) {
+      emitLog(accountId, jobId, `Direct URL mode: ${job.direct_urls.length} URL(s) provided, skipping ${contentLabel} scraping`);
+      for (const url of job.direct_urls) {
+        allReelUrls.push(url);
+        allReelSeeds.push("__direct__");
+      }
+      job.stats.reels_scraped += job.direct_urls.length;
+      job.reel_urls = allReelUrls;
+      job.reel_seeds = allReelSeeds;
+      await job.save();
+      emitProgress(accountId, jobId, job.stats);
+    }
+
+    // Build seeds list — include "__direct__" marker if direct URLs were provided
+    const seedsList = [...job.seed_usernames];
+    if (isDirectUrlJob) seedsList.push("__direct__");
 
     // ── Pipeline: for each seed, scrape reels/posts then process each ──
-    for (const seed of job.seed_usernames) {
+    for (const seed of seedsList) {
       if (handle.cancelled || handle.paused) break;
 
       // ── Scrape reels/posts for this seed (skip if already done) ──
@@ -426,7 +445,7 @@ async function processJob(jobId) {
         job.status = "scraping_comments";
         await job.save();
         emitStatus(accountId, jobId, "scraping_comments");
-        emitLog(accountId, jobId, `Scraping comments for reel ${i + 1}/${allReelUrls.length} (@${seed})`);
+        emitLog(accountId, jobId, `Scraping comments for ${contentLabel === "posts" ? "post" : "reel"} ${i + 1}/${allReelUrls.length}${seed !== "__direct__" ? ` (@${seed})` : ""}`);
 
         const { run: commentRun, tokenValue: commentToken } = await startApifyRunWithRotation(
           COMMENT_SCRAPER,
@@ -500,6 +519,7 @@ async function processJob(jobId) {
         emitLog(accountId, jobId, `Reel ${i + 1}: ${comments.length} comments, ${reelCommenters.size} commenters`);
 
         // ── 2. Dedup commenters, enrich profiles, qualify (outbound only) ──
+        let processedCount = 0;
         if (!isResearch) {
         let usernamesToProcess = [...reelCommenters];
         if (!job.force_reprocess) {
@@ -522,8 +542,10 @@ async function processJob(jobId) {
           }
         }
 
-        if (usernamesToProcess.length > 0) {
-          // ── 3. Enrich profiles + qualify ──
+        processedCount = usernamesToProcess.length;
+
+        if (usernamesToProcess.length > 0 && job.promptId) {
+          // ── 3. Enrich profiles + qualify (prompt provided) ──
           job.status = "scraping_profiles";
           await job.save();
           emitStatus(accountId, jobId, "scraping_profiles");
@@ -586,7 +608,7 @@ async function processJob(jobId) {
 
               job.stats.profiles_scraped++;
 
-              const userSeeds = [seed];
+              const userSeeds = seed === "__direct__" ? ["direct_url"] : [seed];
 
               // Follower filter
               if (followerCount < job.min_followers) {
@@ -648,6 +670,20 @@ async function processJob(jobId) {
               }
             }
           }
+        } else if (usernamesToProcess.length > 0) {
+          // No prompt → skip profile scraping, save commenters directly
+          for (const username of usernamesToProcess) {
+            if (handle.cancelled || handle.paused) break;
+            const userSeeds = seed === "__direct__" ? ["direct_url"] : [seed];
+            await upsertLead(job, username, {
+              qualified: true, unqualified_reason: null, ai_processed: false,
+            }, userSeeds);
+            job.stats.qualified++;
+            emitLead(accountId, jobId, username, { qualified: true });
+            emitLog(accountId, jobId, `@${username} → Saved (no enrichment)`);
+          }
+          await job.save();
+          emitProgress(accountId, jobId, job.stats);
         }
         } // end outbound-only block
 
@@ -662,7 +698,7 @@ async function processJob(jobId) {
         emitLog(
           accountId,
           jobId,
-          `Reel ${i + 1}/${allReelUrls.length} pipeline complete — ${usernamesToProcess.length} new profiles processed`,
+          `Reel ${i + 1}/${allReelUrls.length} pipeline complete — ${processedCount} new profiles processed`,
           "success",
         );
       }
