@@ -11,6 +11,11 @@ const igConversationSchema = new mongoose.Schema(
       type: [String],
       required: true,
     },
+    participant_usernames: {
+      type: Map,
+      of: String,
+      default: {},
+    },
     last_message_at: {
       type: Date,
       default: null,

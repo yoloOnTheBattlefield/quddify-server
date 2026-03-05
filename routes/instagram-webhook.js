@@ -5,6 +5,8 @@ const router = express.Router();
 const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const IgAttachment = require("../models/IgAttachment");
+const Account = require("../models/Account");
+const OutboundAccount = require("../models/OutboundAccount");
 
 // ─── Signature verification ─────────────────────────────────────────────────
 function verifySignature(req, res, next) {
@@ -88,6 +90,33 @@ async function processWebhookEvent(body) {
   }
 }
 
+// ─── Resolve IG username from scoped user ID ────────────────────────────────
+async function resolveUsername(igScopedId, pageAccessToken) {
+  try {
+    const r = await fetch(
+      `https://graph.facebook.com/v21.0/${igScopedId}?fields=name,username&access_token=${pageAccessToken}`,
+    );
+    const data = await r.json();
+    return data.username || data.name || null;
+  } catch (err) {
+    console.warn(`[ig-webhook] Failed to resolve username for ${igScopedId}:`, err.message);
+    return null;
+  }
+}
+
+// ─── Find page access token for an IG user ID (recipient) ───────────────────
+async function findPageAccessToken(igUserId) {
+  // Check main accounts first
+  const account = await Account.findOne({ "ig_oauth.ig_user_id": igUserId });
+  if (account?.ig_oauth?.page_access_token) return account.ig_oauth.page_access_token;
+
+  // Check outbound accounts
+  const outbound = await OutboundAccount.findOne({ "ig_oauth.ig_user_id": igUserId });
+  if (outbound?.ig_oauth?.page_access_token) return outbound.ig_oauth.page_access_token;
+
+  return null;
+}
+
 // ─── Handle incoming/outgoing message ────────────────────────────────────────
 async function handleMessage(event, senderId, recipientId) {
   const msg = event.message;
@@ -104,6 +133,27 @@ async function handleMessage(event, senderId, recipientId) {
     },
     { upsert: true, new: true },
   );
+
+  // Resolve participant usernames if not already known
+  const knownUsernames = conversation.participant_usernames || new Map();
+  const unknownIds = [senderId, recipientId].filter((id) => !knownUsernames.get(id));
+
+  if (unknownIds.length > 0) {
+    const pageAccessToken = await findPageAccessToken(recipientId) || await findPageAccessToken(senderId);
+    if (pageAccessToken) {
+      const usernameUpdates = {};
+      for (const id of unknownIds) {
+        const username = await resolveUsername(id, pageAccessToken);
+        if (username) {
+          usernameUpdates[`participant_usernames.${id}`] = username;
+        }
+      }
+      if (Object.keys(usernameUpdates).length > 0) {
+        await IgConversation.findByIdAndUpdate(conversation._id, { $set: usernameUpdates });
+        console.log("[ig-webhook] Resolved usernames:", usernameUpdates);
+      }
+    }
+  }
 
   // Deduplicate on message_id
   const existing = await IgMessage.findOne({ message_id: msg.mid });

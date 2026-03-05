@@ -115,11 +115,13 @@ router.post("/callback", async (req, res) => {
   }
 
   try {
-    const { accessToken, igUserId, igUsername } = await exchangeCodeForToken(code);
+    const { accessToken, igUserId, igUsername, pageId, pageAccessToken } = await exchangeCodeForToken(code);
 
     await Account.findByIdAndUpdate(req.account._id, {
       $set: {
         "ig_oauth.access_token": accessToken,
+        "ig_oauth.page_access_token": pageAccessToken,
+        "ig_oauth.page_id": pageId,
         "ig_oauth.ig_user_id": igUserId,
         "ig_oauth.ig_username": igUsername,
         "ig_oauth.connected_at": new Date(),
@@ -171,11 +173,13 @@ router.post("/outbound/:id/callback", async (req, res) => {
       return res.status(404).json({ error: "Outbound account not found" });
     }
 
-    const { accessToken, igUserId, igUsername } = await exchangeCodeForToken(code);
+    const { accessToken, igUserId, igUsername, pageId, pageAccessToken } = await exchangeCodeForToken(code);
 
     await OutboundAccount.findByIdAndUpdate(outboundAccount._id, {
       $set: {
         "ig_oauth.access_token": accessToken,
+        "ig_oauth.page_access_token": pageAccessToken,
+        "ig_oauth.page_id": pageId,
         "ig_oauth.ig_user_id": igUserId,
         "ig_oauth.ig_username": igUsername,
         "ig_oauth.connected_at": new Date(),

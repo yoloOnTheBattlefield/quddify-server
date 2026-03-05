@@ -26,6 +26,8 @@ const OutboundAccountSchema = new mongoose.Schema(
     browser_token: { type: String, default: null },
     ig_oauth: {
       access_token: { type: String, default: null },
+      page_access_token: { type: String, default: null },
+      page_id: { type: String, default: null },
       ig_user_id: { type: String, default: null },
       ig_username: { type: String, default: null },
       connected_at: { type: Date, default: null },
