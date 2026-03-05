@@ -7,6 +7,21 @@ const igMessageSchema = new mongoose.Schema(
       ref: "IgConversation",
       required: true,
     },
+    account_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Account",
+      default: null,
+    },
+    outbound_account_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "OutboundAccount",
+      default: null,
+    },
+    direction: {
+      type: String,
+      enum: ["inbound", "outbound"],
+      default: null,
+    },
     sender_id: {
       type: String,
       required: true,
@@ -46,5 +61,7 @@ const igMessageSchema = new mongoose.Schema(
 
 igMessageSchema.index({ conversation_id: 1, timestamp: 1 });
 igMessageSchema.index({ sender_id: 1 });
+igMessageSchema.index({ account_id: 1, timestamp: -1 });
+igMessageSchema.index({ outbound_account_id: 1, timestamp: -1 });
 
 module.exports = mongoose.model("IgMessage", igMessageSchema);

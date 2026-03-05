@@ -7,6 +7,20 @@ const igConversationSchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
+    account_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Account",
+      default: null,
+    },
+    outbound_account_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "OutboundAccount",
+      default: null,
+    },
+    owner_ig_user_id: {
+      type: String,
+      default: null,
+    },
     participant_ids: {
       type: [String],
       required: true,
@@ -29,5 +43,7 @@ const igConversationSchema = new mongoose.Schema(
 );
 
 igConversationSchema.index({ last_message_at: -1 });
+igConversationSchema.index({ account_id: 1, last_message_at: -1 });
+igConversationSchema.index({ outbound_account_id: 1, last_message_at: -1 });
 
 module.exports = mongoose.model("IgConversation", igConversationSchema);

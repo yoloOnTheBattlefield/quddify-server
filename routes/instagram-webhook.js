@@ -104,15 +104,25 @@ async function resolveUsername(igScopedId, pageAccessToken) {
   }
 }
 
-// ─── Find page access token for an IG user ID (recipient) ───────────────────
-async function findPageAccessToken(igUserId) {
-  // Check main accounts first
+// ─── Find the owning account/outbound for an IG user ID ─────────────────────
+async function findOwner(igUserId) {
   const account = await Account.findOne({ "ig_oauth.ig_user_id": igUserId });
-  if (account?.ig_oauth?.page_access_token) return account.ig_oauth.page_access_token;
+  if (account) {
+    return {
+      account_id: account._id,
+      outbound_account_id: null,
+      pageAccessToken: account.ig_oauth?.page_access_token || null,
+    };
+  }
 
-  // Check outbound accounts
   const outbound = await OutboundAccount.findOne({ "ig_oauth.ig_user_id": igUserId });
-  if (outbound?.ig_oauth?.page_access_token) return outbound.ig_oauth.page_access_token;
+  if (outbound) {
+    return {
+      account_id: outbound.account_id,
+      outbound_account_id: outbound._id,
+      pageAccessToken: outbound.ig_oauth?.page_access_token || null,
+    };
+  }
 
   return null;
 }
@@ -123,14 +133,34 @@ async function handleMessage(event, senderId, recipientId) {
   const threadId = buildThreadId(senderId, recipientId);
   const messageTimestamp = new Date(parseInt(event.timestamp, 10));
 
+  // Resolve which account owns this conversation (sender or recipient is our IG account)
+  const owner = (await findOwner(recipientId)) || (await findOwner(senderId));
+  const ownerIgUserId = owner
+    ? (await findOwner(recipientId)) ? recipientId : senderId
+    : null;
+
+  // direction: "inbound" = someone DM'd our account, "outbound" = our account sent a DM
+  const direction = owner && ownerIgUserId === senderId ? "outbound" : "inbound";
+
   // Upsert conversation
+  const conversationUpdate = {
+    $set: { last_message_at: messageTimestamp },
+    $addToSet: { participant_ids: { $each: [senderId, recipientId] } },
+    $setOnInsert: { instagram_thread_id: threadId },
+  };
+
+  // Set account ownership on first insert or if missing
+  if (owner) {
+    conversationUpdate.$set.account_id = owner.account_id;
+    conversationUpdate.$set.owner_ig_user_id = ownerIgUserId;
+    if (owner.outbound_account_id) {
+      conversationUpdate.$set.outbound_account_id = owner.outbound_account_id;
+    }
+  }
+
   const conversation = await IgConversation.findOneAndUpdate(
     { instagram_thread_id: threadId },
-    {
-      $set: { last_message_at: messageTimestamp },
-      $addToSet: { participant_ids: { $each: [senderId, recipientId] } },
-      $setOnInsert: { instagram_thread_id: threadId },
-    },
+    conversationUpdate,
     { upsert: true, new: true },
   );
 
@@ -139,7 +169,7 @@ async function handleMessage(event, senderId, recipientId) {
   const unknownIds = [senderId, recipientId].filter((id) => !knownUsernames.get(id));
 
   if (unknownIds.length > 0) {
-    const pageAccessToken = await findPageAccessToken(recipientId) || await findPageAccessToken(senderId);
+    const pageAccessToken = owner?.pageAccessToken || null;
     if (pageAccessToken) {
       const usernameUpdates = {};
       for (const id of unknownIds) {
@@ -163,8 +193,11 @@ async function handleMessage(event, senderId, recipientId) {
   }
 
   // Insert message
-  const newMessage = await IgMessage.create({
+  await IgMessage.create({
     conversation_id: conversation._id,
+    account_id: owner?.account_id || null,
+    outbound_account_id: owner?.outbound_account_id || null,
+    direction,
     sender_id: senderId,
     recipient_id: recipientId,
     message_text: msg.text || null,
@@ -185,7 +218,7 @@ async function handleMessage(event, senderId, recipientId) {
   }
 
   console.log(
-    `[ig-webhook] Message stored: ${msg.mid} in thread ${threadId}`,
+    `[ig-webhook] Message stored: ${msg.mid} in thread ${threadId} (${direction}, account: ${owner?.account_id || "unknown"})`,
   );
 }
 
