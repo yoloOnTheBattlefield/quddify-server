@@ -37,6 +37,8 @@ async function exchangeCodeForToken(code) {
 
   let igUserId = null;
   let igUsername = null;
+  let pageId = null;
+  let pageAccessToken = null;
 
   // Find the Instagram account linked to any of the user's pages
   for (const page of pagesData.data || []) {
@@ -47,6 +49,8 @@ async function exchangeCodeForToken(code) {
 
     if (igData.instagram_business_account) {
       igUserId = igData.instagram_business_account.id;
+      pageId = page.id;
+      pageAccessToken = page.access_token;
 
       // Get IG username
       const profileResponse = await fetch(
@@ -54,7 +58,7 @@ async function exchangeCodeForToken(code) {
       );
       const profileData = await profileResponse.json();
       igUsername = profileData.username || null;
-      console.log(`[ig-oauth] Found IG account: @${igUsername} (${igUserId})`);
+      console.log(`[ig-oauth] Found IG account: @${igUsername} (${igUserId}) on page ${pageId}`);
       break;
     }
   }
@@ -63,7 +67,22 @@ async function exchangeCodeForToken(code) {
     throw new Error("No Instagram Business account found linked to your Facebook pages");
   }
 
-  return { accessToken, igUserId, igUsername };
+  // 3. Subscribe the page to the app's webhooks (required for DM webhooks to fire)
+  const subscribeResponse = await fetch(
+    `https://graph.facebook.com/v21.0/${pageId}/subscribed_apps`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subscribed_fields: "messages",
+        access_token: pageAccessToken,
+      }),
+    },
+  );
+  const subscribeData = await subscribeResponse.json();
+  console.log("[ig-oauth] Page webhook subscription:", JSON.stringify(subscribeData));
+
+  return { accessToken, igUserId, igUsername, pageId, pageAccessToken };
 }
 
 // ─── GET /api/instagram/auth-url ─────────────────────────────────────────────
