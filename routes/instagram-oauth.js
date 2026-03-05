@@ -92,7 +92,7 @@ router.get("/auth-url", (req, res) => {
     return res.status(500).json({ error: "Instagram OAuth not configured" });
   }
 
-  const scopes = "instagram_basic,instagram_manage_messages,pages_show_list,pages_read_engagement";
+  const scopes = "instagram_basic,instagram_manage_messages,pages_show_list,pages_read_engagement,pages_messaging";
   const outboundId = req.query.outbound_account_id;
   const state = outboundId ? `oa:${outboundId}` : `acct:${req.account._id}`;
 
