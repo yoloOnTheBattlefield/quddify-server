@@ -68,7 +68,7 @@ router.get("/auth-url", (req, res) => {
   const state = outboundId ? `oa:${outboundId}` : `acct:${req.account._id}`;
 
   const url =
-    `https://api.instagram.com/oauth/authorize` +
+    `https://www.instagram.com/oauth/authorize` +
     `?client_id=${IG_APP_ID}` +
     `&redirect_uri=${encodeURIComponent(IG_REDIRECT_URI)}` +
     `&scope=${encodeURIComponent(scopes)}` +
