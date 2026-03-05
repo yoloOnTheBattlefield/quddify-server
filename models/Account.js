@@ -31,6 +31,12 @@ const AccountSchema = new mongoose.Schema(
         added_at: { type: Date, default: Date.now },
       },
     ],
+    ig_oauth: {
+      access_token: { type: String, default: null },
+      ig_user_id: { type: String, default: null },
+      ig_username: { type: String, default: null },
+      connected_at: { type: Date, default: null },
+    },
     ig_proxy: { type: String, default: null },
     apify_token: { type: String, default: null },
     deleted: { type: Boolean, default: false },

@@ -40,6 +40,7 @@ const researchRoutes = require("./routes/research");
 const manychatRoutes = require("./routes/manychat");
 const igWebhookRoutes = require("./routes/instagram-webhook");
 const igConversationRoutes = require("./routes/ig-conversations");
+const igOAuthRoutes = require("./routes/instagram-oauth");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -193,6 +194,7 @@ app.use("/api/ai-prompts", aiPromptRoutes);
 app.use("/api/research", researchRoutes);
 app.use("/api/manychat", manychatRoutes);
 app.use("/api/ig-conversations", igConversationRoutes);
+app.use("/api/instagram", igOAuthRoutes);
 app.use("/tracking", trackingRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass

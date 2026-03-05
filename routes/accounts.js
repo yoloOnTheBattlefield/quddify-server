@@ -65,6 +65,13 @@ router.get("/me", async (req, res) => {
       claude_token: account.claude_token || null,
       gemini_token: account.gemini_token || null,
       calendly_token: account.calendly_token || null,
+      ig_oauth: account.ig_oauth?.access_token
+        ? {
+            ig_username: account.ig_oauth.ig_username,
+            ig_user_id: account.ig_oauth.ig_user_id,
+            connected_at: account.ig_oauth.connected_at,
+          }
+        : null,
     });
   } catch (error) {
     console.error("Get account me error:", error);

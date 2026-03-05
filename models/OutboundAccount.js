@@ -24,6 +24,12 @@ const OutboundAccountSchema = new mongoose.Schema(
     twoFA: { type: String, default: null },
     hidemyacc_profile_id: { type: String, default: null },
     browser_token: { type: String, default: null },
+    ig_oauth: {
+      access_token: { type: String, default: null },
+      ig_user_id: { type: String, default: null },
+      ig_username: { type: String, default: null },
+      connected_at: { type: Date, default: null },
+    },
     // Sending streak tracking — enforces rest days
     // 1 day break after every 5 consecutive sending days
     // 2 day break after every 10 consecutive sending days (cycle resets)
