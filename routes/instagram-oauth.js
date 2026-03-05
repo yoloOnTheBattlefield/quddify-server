@@ -9,7 +9,8 @@ const FB_APP_SECRET = process.env.FB_APP_SECRET;
 const IG_REDIRECT_URI = process.env.IG_REDIRECT_URI;
 
 // ─── Shared: exchange code for token + fetch IG profile ─────────────────────
-async function exchangeCodeForToken(code) {
+// targetUsername: if provided, selects the IG account matching this username
+async function exchangeCodeForToken(code, targetUsername = null) {
   // 1. Exchange code for access token via Facebook Graph API
   const tokenUrl =
     `https://graph.facebook.com/v21.0/oauth/access_token` +
@@ -28,19 +29,15 @@ async function exchangeCodeForToken(code) {
 
   const accessToken = tokenData.access_token;
 
-  // 2. Get the user's Instagram Business account via their Facebook pages
+  // 2. Discover ALL Instagram Business accounts across the user's Facebook pages
   const pagesResponse = await fetch(
     `https://graph.facebook.com/v21.0/me/accounts?access_token=${accessToken}`,
   );
   const pagesData = await pagesResponse.json();
   console.log("[ig-oauth] Pages response:", JSON.stringify(pagesData));
 
-  let igUserId = null;
-  let igUsername = null;
-  let pageId = null;
-  let pageAccessToken = null;
+  const allIgAccounts = [];
 
-  // Find the Instagram account linked to any of the user's pages
   for (const page of pagesData.data || []) {
     const igResponse = await fetch(
       `https://graph.facebook.com/v21.0/${page.id}?fields=instagram_business_account&access_token=${accessToken}`,
@@ -48,41 +45,59 @@ async function exchangeCodeForToken(code) {
     const igData = await igResponse.json();
 
     if (igData.instagram_business_account) {
-      igUserId = igData.instagram_business_account.id;
-      pageId = page.id;
-      pageAccessToken = page.access_token;
-
-      // Get IG username
+      const igId = igData.instagram_business_account.id;
       const profileResponse = await fetch(
-        `https://graph.facebook.com/v21.0/${igUserId}?fields=username&access_token=${accessToken}`,
+        `https://graph.facebook.com/v21.0/${igId}?fields=username&access_token=${accessToken}`,
       );
       const profileData = await profileResponse.json();
-      igUsername = profileData.username || null;
-      console.log(`[ig-oauth] Found IG account: @${igUsername} (${igUserId}) on page ${pageId}`);
-      break;
+      const username = profileData.username || null;
+
+      console.log(`[ig-oauth] Found IG account: @${username} (${igId}) on page ${page.id}`);
+      allIgAccounts.push({
+        igUserId: igId,
+        igUsername: username,
+        pageId: page.id,
+        pageAccessToken: page.access_token,
+      });
     }
   }
 
-  if (!igUserId) {
+  if (allIgAccounts.length === 0) {
     throw new Error("No Instagram Business account found linked to your Facebook pages");
   }
 
-  // 3. Subscribe the page to the app's webhooks (required for DM webhooks to fire)
+  console.log(`[ig-oauth] Found ${allIgAccounts.length} IG account(s): ${allIgAccounts.map(a => `@${a.igUsername}`).join(", ")}`);
+
+  // 3. Select the right IG account
+  let selected;
+  if (targetUsername) {
+    const target = targetUsername.toLowerCase().replace(/^@/, "");
+    selected = allIgAccounts.find(a => a.igUsername?.toLowerCase() === target);
+    if (!selected) {
+      const available = allIgAccounts.map(a => `@${a.igUsername}`).join(", ");
+      throw new Error(`No IG account matching @${targetUsername} found. Available: ${available}`);
+    }
+    console.log(`[ig-oauth] Matched target @${targetUsername} → @${selected.igUsername} (${selected.igUserId})`);
+  } else {
+    selected = allIgAccounts[0];
+  }
+
+  // 4. Subscribe the page to the app's webhooks (required for DM webhooks to fire)
   const subscribeResponse = await fetch(
-    `https://graph.facebook.com/v21.0/${pageId}/subscribed_apps`,
+    `https://graph.facebook.com/v21.0/${selected.pageId}/subscribed_apps`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         subscribed_fields: "messages",
-        access_token: pageAccessToken,
+        access_token: selected.pageAccessToken,
       }),
     },
   );
   const subscribeData = await subscribeResponse.json();
   console.log("[ig-oauth] Page webhook subscription:", JSON.stringify(subscribeData));
 
-  return { accessToken, igUserId, igUsername, pageId, pageAccessToken };
+  return { accessToken, ...selected };
 }
 
 // ─── GET /api/instagram/auth-url ─────────────────────────────────────────────
@@ -173,7 +188,7 @@ router.post("/outbound/:id/callback", async (req, res) => {
       return res.status(404).json({ error: "Outbound account not found" });
     }
 
-    const { accessToken, igUserId, igUsername, pageId, pageAccessToken } = await exchangeCodeForToken(code);
+    const { accessToken, igUserId, igUsername, pageId, pageAccessToken } = await exchangeCodeForToken(code, outboundAccount.username);
 
     await OutboundAccount.findByIdAndUpdate(outboundAccount._id, {
       $set: {
