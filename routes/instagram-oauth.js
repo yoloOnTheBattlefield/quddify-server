@@ -5,53 +5,63 @@ const OutboundAccount = require("../models/OutboundAccount");
 
 const IG_APP_ID = process.env.IG_APP_ID;
 const IG_APP_SECRET = process.env.IG_APP_SECRET;
+const FB_APP_SECRET = process.env.FB_APP_SECRET;
 const IG_REDIRECT_URI = process.env.IG_REDIRECT_URI;
 
-// ─── Shared: exchange code for long-lived token + fetch profile ─────────────
+// ─── Shared: exchange code for token + fetch IG profile ─────────────────────
 async function exchangeCodeForToken(code) {
-  // 1. Exchange code for short-lived token
-  const tokenResponse = await fetch(
-    "https://api.instagram.com/oauth/access_token",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: IG_APP_ID,
-        client_secret: IG_APP_SECRET,
-        grant_type: "authorization_code",
-        redirect_uri: IG_REDIRECT_URI,
-        code,
-      }),
-    },
-  );
+  // 1. Exchange code for access token via Facebook Graph API
+  const tokenUrl =
+    `https://graph.facebook.com/v21.0/oauth/access_token` +
+    `?client_id=${IG_APP_ID}` +
+    `&client_secret=${FB_APP_SECRET || IG_APP_SECRET}` +
+    `&redirect_uri=${encodeURIComponent(IG_REDIRECT_URI)}` +
+    `&code=${code}`;
 
+  const tokenResponse = await fetch(tokenUrl);
   const tokenData = await tokenResponse.json();
-  if (tokenData.error_message || tokenData.error) {
-    throw new Error(
-      tokenData.error_message || tokenData.error?.message || "Token exchange failed",
-    );
+  console.log("[ig-oauth] Token exchange response:", JSON.stringify(tokenData));
+
+  if (tokenData.error) {
+    throw new Error(tokenData.error.message || "Token exchange failed");
   }
 
-  const shortLivedToken = tokenData.access_token;
-  const igUserId = String(tokenData.user_id);
+  const accessToken = tokenData.access_token;
 
-  // 2. Exchange for long-lived token (60 days)
-  const longTokenResponse = await fetch(
-    `https://graph.instagram.com/access_token` +
-      `?grant_type=ig_exchange_token` +
-      `&client_secret=${IG_APP_SECRET}` +
-      `&access_token=${shortLivedToken}`,
+  // 2. Get the user's Instagram Business account via their Facebook pages
+  const pagesResponse = await fetch(
+    `https://graph.facebook.com/v21.0/me/accounts?access_token=${accessToken}`,
   );
+  const pagesData = await pagesResponse.json();
+  console.log("[ig-oauth] Pages response:", JSON.stringify(pagesData));
 
-  const longTokenData = await longTokenResponse.json();
-  const accessToken = longTokenData.access_token || shortLivedToken;
+  let igUserId = null;
+  let igUsername = null;
 
-  // 3. Fetch IG username
-  const profileResponse = await fetch(
-    `https://graph.instagram.com/v21.0/me?fields=user_id,username&access_token=${accessToken}`,
-  );
-  const profileData = await profileResponse.json();
-  const igUsername = profileData.username || null;
+  // Find the Instagram account linked to any of the user's pages
+  for (const page of pagesData.data || []) {
+    const igResponse = await fetch(
+      `https://graph.facebook.com/v21.0/${page.id}?fields=instagram_business_account&access_token=${accessToken}`,
+    );
+    const igData = await igResponse.json();
+
+    if (igData.instagram_business_account) {
+      igUserId = igData.instagram_business_account.id;
+
+      // Get IG username
+      const profileResponse = await fetch(
+        `https://graph.facebook.com/v21.0/${igUserId}?fields=username&access_token=${accessToken}`,
+      );
+      const profileData = await profileResponse.json();
+      igUsername = profileData.username || null;
+      console.log(`[ig-oauth] Found IG account: @${igUsername} (${igUserId})`);
+      break;
+    }
+  }
+
+  if (!igUserId) {
+    throw new Error("No Instagram Business account found linked to your Facebook pages");
+  }
 
   return { accessToken, igUserId, igUsername };
 }
@@ -63,12 +73,12 @@ router.get("/auth-url", (req, res) => {
     return res.status(500).json({ error: "Instagram OAuth not configured" });
   }
 
-  const scopes = "instagram_business_basic,instagram_business_manage_messages";
+  const scopes = "instagram_business_basic,instagram_business_manage_messages,pages_show_list,pages_read_engagement";
   const outboundId = req.query.outbound_account_id;
   const state = outboundId ? `oa:${outboundId}` : `acct:${req.account._id}`;
 
   const url =
-    `https://www.instagram.com/oauth/authorize` +
+    `https://www.facebook.com/v21.0/dialog/oauth` +
     `?client_id=${IG_APP_ID}` +
     `&redirect_uri=${encodeURIComponent(IG_REDIRECT_URI)}` +
     `&scope=${encodeURIComponent(scopes)}` +
