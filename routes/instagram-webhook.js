@@ -14,9 +14,10 @@ function verifySignature(req, res, next) {
     return res.status(401).json({ error: "Missing signature" });
   }
 
-  const appSecret = process.env.IG_APP_SECRET;
+  // Meta signs webhooks with the Facebook App Secret, not the Instagram App Secret
+  const appSecret = process.env.FB_APP_SECRET || process.env.IG_APP_SECRET;
   if (!appSecret) {
-    console.error("[ig-webhook] IG_APP_SECRET not configured");
+    console.error("[ig-webhook] FB_APP_SECRET/IG_APP_SECRET not configured");
     return res.status(500).json({ error: "Server misconfigured" });
   }
 
@@ -54,6 +55,8 @@ router.get("/", (req, res) => {
 
 // ─── POST /instagram-webhook — receive events ───────────────────────────────
 router.post("/", verifySignature, (req, res) => {
+  console.log("[ig-webhook] POST received:", JSON.stringify(req.body, null, 2));
+
   // Always respond 200 to Meta immediately
   res.status(200).json({ status: "ok" });
 
