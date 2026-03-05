@@ -21,6 +21,16 @@ const igConversationSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    lead_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Lead",
+      default: null,
+    },
+    outbound_lead_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "OutboundLead",
+      default: null,
+    },
     participant_ids: {
       type: [String],
       required: true,

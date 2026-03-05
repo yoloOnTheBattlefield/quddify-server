@@ -7,6 +7,8 @@ const IgMessage = require("../models/IgMessage");
 const IgAttachment = require("../models/IgAttachment");
 const Account = require("../models/Account");
 const OutboundAccount = require("../models/OutboundAccount");
+const Lead = require("../models/Lead");
+const OutboundLead = require("../models/OutboundLead");
 
 // ─── Signature verification ─────────────────────────────────────────────────
 function verifySignature(req, res, next) {
@@ -134,10 +136,10 @@ async function handleMessage(event, senderId, recipientId) {
   const messageTimestamp = new Date(parseInt(event.timestamp, 10));
 
   // Resolve which account owns this conversation (sender or recipient is our IG account)
-  const owner = (await findOwner(recipientId)) || (await findOwner(senderId));
-  const ownerIgUserId = owner
-    ? (await findOwner(recipientId)) ? recipientId : senderId
-    : null;
+  const recipientOwner = await findOwner(recipientId);
+  const senderOwner = recipientOwner ? null : await findOwner(senderId);
+  const owner = recipientOwner || senderOwner;
+  const ownerIgUserId = owner ? (recipientOwner ? recipientId : senderId) : null;
 
   // direction: "inbound" = someone DM'd our account, "outbound" = our account sent a DM
   const direction = owner && ownerIgUserId === senderId ? "outbound" : "inbound";
@@ -181,6 +183,53 @@ async function handleMessage(event, senderId, recipientId) {
       if (Object.keys(usernameUpdates).length > 0) {
         await IgConversation.findByIdAndUpdate(conversation._id, { $set: usernameUpdates });
         console.log("[ig-webhook] Resolved usernames:", usernameUpdates);
+      }
+    }
+  }
+
+  // Link conversation to leads (match the non-owner participant's username)
+  if (owner && !conversation.lead_id && !conversation.outbound_lead_id) {
+    const contactIgId = ownerIgUserId === senderId ? recipientId : senderId;
+    const updatedConv = await IgConversation.findById(conversation._id);
+    const contactUsername = updatedConv?.participant_usernames?.get(contactIgId) || knownUsernames.get(contactIgId);
+
+    if (contactUsername) {
+      const leadUpdates = {};
+
+      // Check OutboundLead first (more specific)
+      const outboundLead = await OutboundLead.findOne({
+        username: { $regex: new RegExp(`^${contactUsername}$`, "i") },
+        account_id: owner.account_id,
+      });
+      if (outboundLead) {
+        leadUpdates.outbound_lead_id = outboundLead._id;
+        await OutboundLead.findByIdAndUpdate(outboundLead._id, {
+          $set: { ig_thread_id: threadId },
+        });
+        // Mark replied if this is an inbound message (lead responded)
+        if (direction === "inbound" && !outboundLead.replied) {
+          await OutboundLead.findByIdAndUpdate(outboundLead._id, {
+            $set: { replied: true, replied_at: messageTimestamp },
+          });
+          console.log(`[ig-webhook] OutboundLead @${contactUsername} marked as replied`);
+        }
+      }
+
+      // Check Lead
+      const lead = await Lead.findOne({
+        ig_username: { $regex: new RegExp(`^${contactUsername}$`, "i") },
+        account_id: String(owner.account_id),
+      });
+      if (lead) {
+        leadUpdates.lead_id = lead._id;
+        await Lead.findByIdAndUpdate(lead._id, {
+          $set: { ig_thread_id: threadId },
+        });
+      }
+
+      if (Object.keys(leadUpdates).length > 0) {
+        await IgConversation.findByIdAndUpdate(conversation._id, { $set: leadUpdates });
+        console.log(`[ig-webhook] Linked conversation to leads:`, leadUpdates);
       }
     }
   }
