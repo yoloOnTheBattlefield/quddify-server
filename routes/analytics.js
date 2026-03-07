@@ -10,6 +10,12 @@ const Campaign = require("../models/Campaign");
 
 const router = express.Router();
 
+// Cache analytics responses for 2 minutes (browser + shared caches)
+router.use((req, res, next) => {
+  res.setHeader("Cache-Control", "private, max-age=120");
+  next();
+});
+
 // Helper: Calculate median of an array
 function median(arr) {
   if (arr.length === 0) return 0;

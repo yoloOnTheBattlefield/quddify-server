@@ -2,90 +2,117 @@ const escapeRegex = require("../utils/escapeRegex");
 const logger = require("../utils/logger").child({ module: "leads" });
 const express = require("express");
 const Lead = require("../models/Lead");
+const validate = require("../middleware/validate");
+const { leadCreateSchema, leadUpdateSchema } = require("../schemas/leads");
 
 const router = express.Router();
 
 // get all leads (optionally filter by account_id/ghl, status, date range, search, and paginate)
 router.get("/", async (req, res) => {
-  const { status, start_date, end_date, search, page, limit, account_id, sort_by, sort_order } = req.query;
-  const filter = {};
-  // Admins (role 0) can filter by any account or see all; others see only their own
-  if (account_id && req.user?.role === 0) {
-    if (account_id !== "all") {
-      filter.account_id = account_id;
+  try {
+    const { status, start_date, end_date, search, page, limit, account_id, sort_by, sort_order } = req.query;
+    const filter = {};
+    // Admins (role 0) can filter by any account or see all; others see only their own
+    if (account_id && req.user?.role === 0) {
+      if (account_id !== "all") {
+        filter.account_id = account_id;
+      }
+      // account_id === "all" → no filter = all accounts
+    } else if (req.account.ghl) {
+      filter.account_id = req.account.ghl;
     }
-    // account_id === "all" → no filter = all accounts
-  } else if (req.account.ghl) {
-    filter.account_id = req.account.ghl;
-  }
-  if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
-  if (status) {
-    const statuses = Array.isArray(status) ? status : status.split(",");
-    const statusConditions = statuses.map((s) => {
-      const field = `${s}_at`;
-      return { [field]: { $ne: null } };
+    if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
+    if (status) {
+      const statuses = Array.isArray(status) ? status : status.split(",");
+      const statusConditions = statuses.map((s) => {
+        const field = `${s}_at`;
+        return { [field]: { $ne: null } };
+      });
+      filter.$or = statusConditions;
+    }
+    if (start_date || end_date) {
+      filter.date_created = {};
+      if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
+      if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
+    }
+
+    // Sorting
+    const allowedSortFields = ["date_created", "link_sent_at", "booked_at"];
+    const sortField = allowedSortFields.includes(sort_by) ? sort_by : "date_created";
+    const sortDir = sort_order === "asc" ? 1 : -1;
+
+    // Pagination
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 20;
+    const skip = (pageNum - 1) * limitNum;
+
+    const [leads, total] = await Promise.all([
+      Lead.find(filter).sort({ [sortField]: sortDir }).skip(skip).limit(limitNum).lean(),
+      Lead.countDocuments(filter),
+    ]);
+
+    res.json({
+      leads,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
     });
-    filter.$or = statusConditions;
+  } catch (error) {
+    logger.error("List leads error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
-  if (start_date || end_date) {
-    filter.date_created = {};
-    if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
-    if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
-  }
-
-  // Sorting
-  const allowedSortFields = ["date_created", "link_sent_at", "booked_at"];
-  const sortField = allowedSortFields.includes(sort_by) ? sort_by : "date_created";
-  const sortDir = sort_order === "asc" ? 1 : -1;
-
-  // Pagination
-  const pageNum = parseInt(page, 10) || 1;
-  const limitNum = parseInt(limit, 10) || 20;
-  const skip = (pageNum - 1) * limitNum;
-
-  const [leads, total] = await Promise.all([
-    Lead.find(filter).sort({ [sortField]: sortDir }).skip(skip).limit(limitNum).lean(),
-    Lead.countDocuments(filter),
-  ]);
-
-  res.json({
-    leads,
-    pagination: {
-      page: pageNum,
-      limit: limitNum,
-      total,
-      totalPages: Math.ceil(total / limitNum),
-    },
-  });
 });
 
 // get lead by id
 router.get("/:id", async (req, res) => {
-  const lead = await Lead.findById(req.params.id).lean();
-  if (!lead) return res.status(404).json({ error: "Not found" });
-  res.json(lead);
+  try {
+    const lead = await Lead.findById(req.params.id).lean();
+    if (!lead) return res.status(404).json({ error: "Not found" });
+    res.json(lead);
+  } catch (error) {
+    logger.error("Get lead error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // create lead
-router.post("/", async (req, res) => {
-  const lead = await Lead.create(req.body);
-  res.status(201).json(lead);
+router.post("/", validate(leadCreateSchema), async (req, res) => {
+  try {
+    const lead = await Lead.create(req.body);
+    res.status(201).json(lead);
+  } catch (error) {
+    logger.error("Create lead error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // update lead
-router.patch("/:id", async (req, res) => {
-  const lead = await Lead.findByIdAndUpdate(req.params.id, req.body, {
-    new: true,
-  }).lean();
+router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
+  try {
+    const lead = await Lead.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+    }).lean();
 
-  if (!lead) return res.status(404).json({ error: "Not found" });
-  res.json(lead);
+    if (!lead) return res.status(404).json({ error: "Not found" });
+    res.json(lead);
+  } catch (error) {
+    logger.error("Update lead error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // delete lead
 router.delete("/:id", async (req, res) => {
-  await Lead.findByIdAndDelete(req.params.id);
-  res.json({ deleted: true });
+  try {
+    await Lead.findByIdAndDelete(req.params.id);
+    res.json({ deleted: true });
+  } catch (error) {
+    logger.error("Delete lead error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // POST /leads/generate - Generate mock leads

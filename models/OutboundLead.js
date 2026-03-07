@@ -46,6 +46,9 @@ const OutboundLeadSchema = new mongoose.Schema(
 
 OutboundLeadSchema.index({ username: 1, account_id: 1 }, { unique: true });
 OutboundLeadSchema.index({ account_id: 1 });
+OutboundLeadSchema.index({ account_id: 1, createdAt: -1 });
+OutboundLeadSchema.index({ account_id: 1, isMessaged: 1 });
+OutboundLeadSchema.index({ account_id: 1, replied: 1 });
 OutboundLeadSchema.index({ promptId: 1 });
 
 module.exports = mongoose.model("OutboundLead", OutboundLeadSchema);

@@ -47,6 +47,7 @@ const followUpRoutes = require("./routes/follow-ups");
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
 const { authLimiter, apiLimiter, webhookLimiter } = require("./middleware/rateLimiter");
+const requestId = require("./middleware/requestId");
 const socketManager = require("./services/socketManager");
 const jobQueue = require("./services/jobQueue");
 const jobWorker = require("./services/jobWorker");
@@ -71,6 +72,9 @@ app.use(
 );
 
 app.use(express.json());
+
+// Assign a unique request ID to every request
+app.use(requestId);
 
 // Public tracking routes — registered before global CORS so any origin can call them
 app.use("/t", cors({ origin: true, credentials: false }), trackingPublicRoutes);
@@ -142,6 +146,8 @@ const connectDB = async () => {
     await IgConversation.syncIndexes();
     const IgMessage = require("./models/IgMessage");
     await IgMessage.syncIndexes();
+    const Lead = require("./models/Lead");
+    await Lead.syncIndexes();
   }
 
   return cachedConnection;

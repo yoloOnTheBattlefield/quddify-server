@@ -37,4 +37,9 @@ const LeadSchema = new mongoose.Schema(
   },
 );
 
+LeadSchema.index({ account_id: 1, date_created: -1 });
+LeadSchema.index({ account_id: 1, link_sent_at: -1 });
+LeadSchema.index({ account_id: 1, booked_at: -1 });
+LeadSchema.index({ ig_username: 1, account_id: 1 });
+
 module.exports = mongoose.model("Lead", LeadSchema);
