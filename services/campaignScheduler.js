@@ -343,8 +343,8 @@ async function processTick() {
       // Test mode: any online sender with test_mode skips all pacing/limit checks
       const isTestMode = onlineSenders.some((s) => s.test_mode);
 
-      // Check time window (skip in test mode)
-      if (!isTestMode && !isWithinActiveHours(campaign.schedule)) continue;
+      // Check time window (skip in test mode or if skip_active_hours is enabled)
+      if (!isTestMode && !campaign.schedule.skip_active_hours && !isWithinActiveHours(campaign.schedule)) continue;
 
       // Burst mode: check if we're on a group break
       if (!isTestMode && campaign.schedule.burst_enabled && campaign.burst_break_until) {

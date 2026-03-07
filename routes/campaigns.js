@@ -121,7 +121,7 @@ router.get("/:id/next-send", async (req, res) => {
     let nextSendAt = null;
     let reason = null;
 
-    if (!isTestMode && !withinHours) {
+    if (!isTestMode && !campaign.schedule.skip_active_hours && !withinHours) {
       reason = "Outside active hours";
     } else if (onlineSenders.length === 0) {
       reason = "No senders online";
@@ -143,7 +143,7 @@ router.get("/:id/next-send", async (req, res) => {
       next_send_at: nextSendAt,
       delay_seconds: delaySec,
       last_sent_at: campaign.last_sent_at || null,
-      within_active_hours: isTestMode || withinHours,
+      within_active_hours: isTestMode || campaign.schedule.skip_active_hours || withinHours,
       online_senders: onlineSenders.length,
       total_senders: senders.length,
       pending_leads: campaign.stats.pending,

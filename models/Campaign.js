@@ -36,6 +36,7 @@ const CampaignSchema = new mongoose.Schema(
       min_group_break_seconds: { type: Number, default: 600 },
       max_group_break_seconds: { type: Number, default: 1200 },
       skip_wait_time: { type: Boolean, default: false },
+      skip_active_hours: { type: Boolean, default: false },
     },
     daily_limit_per_sender: { type: Number, default: 50 },
     warmup_days: { type: Number, default: 0 },
