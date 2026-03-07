@@ -28,6 +28,7 @@ const FollowUpSchema = new mongoose.Schema(
         "no_response",
         "ghosted",
         "hot_lead",
+        "disqualified",
       ],
       default: "new",
     },

@@ -165,6 +165,7 @@ router.get("/stats", async (req, res) => {
       no_response: 0,
       ghosted: 0,
       hot_lead: 0,
+      disqualified: 0,
     };
 
     if (stats) {
