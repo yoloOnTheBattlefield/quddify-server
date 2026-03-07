@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "instagram-webhook" });
 const express = require("express");
 const crypto = require("crypto");
 const router = express.Router();
@@ -7,6 +8,7 @@ const IgMessage = require("../models/IgMessage");
 const IgAttachment = require("../models/IgAttachment");
 const Account = require("../models/Account");
 const OutboundAccount = require("../models/OutboundAccount");
+const { decrypt } = require("../utils/crypto");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
 
@@ -14,14 +16,14 @@ const OutboundLead = require("../models/OutboundLead");
 function verifySignature(req, res, next) {
   const signature = req.headers["x-hub-signature-256"];
   if (!signature) {
-    console.warn("[ig-webhook] Missing x-hub-signature-256");
+    logger.warn("[ig-webhook] Missing x-hub-signature-256");
     return res.status(401).json({ error: "Missing signature" });
   }
 
   // Meta signs webhooks with the Facebook App Secret, not the Instagram App Secret
   const appSecret = process.env.FB_APP_SECRET || process.env.IG_APP_SECRET;
   if (!appSecret) {
-    console.error("[ig-webhook] FB_APP_SECRET/IG_APP_SECRET not configured");
+    logger.error("[ig-webhook] FB_APP_SECRET/IG_APP_SECRET not configured");
     return res.status(500).json({ error: "Server misconfigured" });
   }
 
@@ -30,7 +32,7 @@ function verifySignature(req, res, next) {
     crypto.createHmac("sha256", appSecret).update(req.rawBody).digest("hex");
 
   if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
-    console.warn("[ig-webhook] Invalid signature");
+    logger.warn("[ig-webhook] Invalid signature");
     return res.status(401).json({ error: "Invalid signature" });
   }
 
@@ -49,24 +51,24 @@ router.get("/", (req, res) => {
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === process.env.IG_VERIFY_TOKEN) {
-    console.log("[ig-webhook] Verification successful");
+    logger.info("[ig-webhook] Verification successful");
     return res.type("text/plain").status(200).send(challenge);
   }
 
-  console.warn("[ig-webhook] Verification failed", { mode, token });
+  logger.warn("[ig-webhook] Verification failed", { mode, token });
   return res.status(403).json({ error: "Verification failed" });
 });
 
 // ─── POST /instagram-webhook — receive events ───────────────────────────────
 router.post("/", verifySignature, (req, res) => {
-  console.log("[ig-webhook] POST received:", JSON.stringify(req.body, null, 2));
+  logger.info("[ig-webhook] POST received:", JSON.stringify(req.body, null, 2));
 
   // Always respond 200 to Meta immediately
   res.status(200).json({ status: "ok" });
 
   // Process async
   processWebhookEvent(req.body).catch((err) => {
-    console.error("[ig-webhook] Processing error:", err);
+    logger.error("[ig-webhook] Processing error:", err);
   });
 });
 
@@ -86,7 +88,7 @@ async function processWebhookEvent(body) {
         await handleReadReceipt(event, senderId, recipientId);
       } else if (event.delivery) {
         // Delivery receipts — logged but no DB action needed
-        console.log("[ig-webhook] Delivery event:", event.delivery?.mids);
+        logger.info("[ig-webhook] Delivery event:", event.delivery?.mids);
       }
     }
   }
@@ -101,7 +103,7 @@ async function resolveUsername(igScopedId, pageAccessToken) {
     const data = await r.json();
     return data.username || data.name || null;
   } catch (err) {
-    console.warn(`[ig-webhook] Failed to resolve username for ${igScopedId}:`, err.message);
+    logger.warn(`[ig-webhook] Failed to resolve username for ${igScopedId}:`, err.message);
     return null;
   }
 }
@@ -113,7 +115,7 @@ async function findOwner(igUserId) {
     return {
       account_id: account._id,
       outbound_account_id: null,
-      pageAccessToken: account.ig_oauth?.page_access_token || null,
+      pageAccessToken: decrypt(account.ig_oauth?.page_access_token) || null,
     };
   }
 
@@ -122,7 +124,7 @@ async function findOwner(igUserId) {
     return {
       account_id: outbound.account_id,
       outbound_account_id: outbound._id,
-      pageAccessToken: outbound.ig_oauth?.page_access_token || null,
+      pageAccessToken: decrypt(outbound.ig_oauth?.page_access_token) || null,
     };
   }
 
@@ -182,7 +184,7 @@ async function handleMessage(event, senderId, recipientId) {
       }
       if (Object.keys(usernameUpdates).length > 0) {
         await IgConversation.findByIdAndUpdate(conversation._id, { $set: usernameUpdates });
-        console.log("[ig-webhook] Resolved usernames:", usernameUpdates);
+        logger.info("[ig-webhook] Resolved usernames:", usernameUpdates);
       }
     }
   }
@@ -211,7 +213,7 @@ async function handleMessage(event, senderId, recipientId) {
           await OutboundLead.findByIdAndUpdate(outboundLead._id, {
             $set: { replied: true, replied_at: messageTimestamp },
           });
-          console.log(`[ig-webhook] OutboundLead @${contactUsername} marked as replied`);
+          logger.info(`[ig-webhook] OutboundLead @${contactUsername} marked as replied`);
         }
       }
 
@@ -229,7 +231,7 @@ async function handleMessage(event, senderId, recipientId) {
 
       if (Object.keys(leadUpdates).length > 0) {
         await IgConversation.findByIdAndUpdate(conversation._id, { $set: leadUpdates });
-        console.log(`[ig-webhook] Linked conversation to leads:`, leadUpdates);
+        logger.info(`[ig-webhook] Linked conversation to leads:`, leadUpdates);
       }
     }
   }
@@ -237,7 +239,7 @@ async function handleMessage(event, senderId, recipientId) {
   // Deduplicate on message_id
   const existing = await IgMessage.findOne({ message_id: msg.mid });
   if (existing) {
-    console.log("[ig-webhook] Duplicate message skipped:", msg.mid);
+    logger.info("[ig-webhook] Duplicate message skipped:", msg.mid);
     return;
   }
 
@@ -266,7 +268,7 @@ async function handleMessage(event, senderId, recipientId) {
     await IgAttachment.insertMany(attachmentDocs);
   }
 
-  console.log(
+  logger.info(
     `[ig-webhook] Message stored: ${msg.mid} in thread ${threadId} (${direction}, account: ${owner?.account_id || "unknown"})`,
   );
 }
@@ -294,7 +296,7 @@ async function handleReadReceipt(event, senderId, recipientId) {
   );
 
   if (result.modifiedCount > 0) {
-    console.log(
+    logger.info(
       `[ig-webhook] Marked ${result.modifiedCount} message(s) as read in ${threadId}`,
     );
   }

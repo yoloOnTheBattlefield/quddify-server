@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "tracking" });
 const express = require("express");
 const Account = require("../models/Account");
 const TrackingEvent = require("../models/TrackingEvent");
@@ -20,7 +21,7 @@ router.get("/settings", async (req, res) => {
       tracking_conversion_rules: account.tracking_conversion_rules || [],
     });
   } catch (err) {
-    console.error("Tracking settings error:", err);
+    logger.error("Tracking settings error:", err);
     res.status(500).json({ error: "Failed to fetch tracking settings" });
   }
 });
@@ -49,7 +50,7 @@ router.patch("/settings", async (req, res) => {
       tracking_conversion_rules: account.tracking_conversion_rules || [],
     });
   } catch (err) {
-    console.error("Update tracking settings error:", err);
+    logger.error("Update tracking settings error:", err);
     res.status(500).json({ error: "Failed to update tracking settings" });
   }
 });
@@ -81,7 +82,7 @@ router.get("/events", async (req, res) => {
 
     res.json({ events });
   } catch (err) {
-    console.error("Tracking events error:", err);
+    logger.error("Tracking events error:", err);
     res.status(500).json({ error: "Failed to fetch tracking events" });
   }
 });

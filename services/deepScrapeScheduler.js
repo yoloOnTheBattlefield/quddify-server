@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "deepScrapeScheduler" });
 const DeepScrapeJob = require("../models/DeepScrapeJob");
 const deepScraper = require("./deepScraper");
 
@@ -12,7 +13,7 @@ async function processTick() {
     }).lean();
 
     for (const job of dueJobs) {
-      console.log(
+      logger.info(
         `[deep-scrape-scheduler] Creating recurring job for seeds: ${job.seed_usernames.join(", ")}`,
       );
 
@@ -43,13 +44,13 @@ async function processTick() {
       deepScraper.processJob(newJob._id.toString());
     }
   } catch (err) {
-    console.error("[deep-scrape-scheduler] Tick failed:", err);
+    logger.error("[deep-scrape-scheduler] Tick failed:", err);
   }
 }
 
 function start() {
   tickInterval = setInterval(processTick, 60000); // check every 60 seconds
-  console.log("[deep-scrape-scheduler] Started");
+  logger.info("[deep-scrape-scheduler] Started");
 }
 
 function stop() {

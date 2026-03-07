@@ -1,3 +1,5 @@
+const escapeRegex = require("../utils/escapeRegex");
+const logger = require("../utils/logger").child({ module: "research" });
 const express = require("express");
 const ResearchPost = require("../models/ResearchPost");
 const ResearchComment = require("../models/ResearchComment");
@@ -49,7 +51,7 @@ router.get("/overview-kpis", async (req, res) => {
       newPostsSinceLogin,
     });
   } catch (err) {
-    console.error("Research overview KPIs error:", err);
+    logger.error("Research overview KPIs error:", err);
     res.status(500).json({ error: "Failed to fetch overview KPIs" });
   }
 });
@@ -99,7 +101,7 @@ router.get("/engagement-trend", async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error("Research engagement trend error:", err);
+    logger.error("Research engagement trend error:", err);
     res.status(500).json({ error: "Failed to fetch engagement trend" });
   }
 });
@@ -131,7 +133,7 @@ router.get("/top-posts", async (req, res) => {
       })),
     );
   } catch (err) {
-    console.error("Research top posts error:", err);
+    logger.error("Research top posts error:", err);
     res.status(500).json({ error: "Failed to fetch top posts" });
   }
 });
@@ -168,7 +170,7 @@ router.get("/competitors", async (req, res) => {
       })),
     );
   } catch (err) {
-    console.error("Research competitors error:", err);
+    logger.error("Research competitors error:", err);
     res.status(500).json({ error: "Failed to fetch competitors" });
   }
 });
@@ -207,7 +209,7 @@ router.get("/competitors/:handle", async (req, res) => {
       trackingStatus: "active",
     });
   } catch (err) {
-    console.error("Research competitor detail error:", err);
+    logger.error("Research competitor detail error:", err);
     res.status(500).json({ error: "Failed to fetch competitor" });
   }
 });
@@ -232,7 +234,7 @@ router.get("/posts", async (req, res) => {
     if (competitor) filter.competitor_handle = competitor;
     if (post_type) filter.post_type = post_type;
     if (search) {
-      filter.caption = { $regex: search.trim(), $options: "i" };
+      filter.caption = { $regex: escapeRegex(search.trim()), $options: "i" };
     }
 
     let sortObj = { posted_at: -1 };
@@ -273,7 +275,7 @@ router.get("/posts", async (req, res) => {
       page: pageNum,
     });
   } catch (err) {
-    console.error("Research posts error:", err);
+    logger.error("Research posts error:", err);
     res.status(500).json({ error: "Failed to fetch posts" });
   }
 });
@@ -307,7 +309,7 @@ router.get("/commenters", async (req, res) => {
       })),
     );
   } catch (err) {
-    console.error("Research commenters error:", err);
+    logger.error("Research commenters error:", err);
     res.status(500).json({ error: "Failed to fetch commenters" });
   }
 });

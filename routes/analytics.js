@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "analytics" });
 const express = require("express");
 const mongoose = require("mongoose");
 const Lead = require("../models/Lead");
@@ -549,7 +550,7 @@ router.get("/", async (req, res) => {
       radar,
     });
   } catch (error) {
-    console.error("Analytics error:", error);
+    logger.error("Analytics error:", error);
     res.status(500).json({
       error: "Internal server error",
       message: "Failed to calculate analytics",
@@ -601,7 +602,7 @@ router.get("/outbound", async (req, res) => {
       close_rate: booked > 0 ? round2((contractData.count / booked) * 100) : 0,
     });
   } catch (err) {
-    console.error("Outbound analytics error:", err);
+    logger.error("Outbound analytics error:", err);
     res.status(500).json({ error: "Failed to fetch outbound analytics" });
   }
 });
@@ -655,7 +656,7 @@ router.get("/messages", async (req, res) => {
 
     res.json({ messages: results });
   } catch (err) {
-    console.error("Message analytics error:", err);
+    logger.error("Message analytics error:", err);
     res.status(500).json({ error: "Failed to fetch message analytics" });
   }
 });
@@ -730,7 +731,7 @@ router.get("/senders", async (req, res) => {
     results.sort((a, b) => b.sent - a.sent);
     res.json({ senders: results });
   } catch (err) {
-    console.error("Sender analytics error:", err);
+    logger.error("Sender analytics error:", err);
     res.status(500).json({ error: "Failed to fetch sender analytics" });
   }
 });
@@ -794,7 +795,7 @@ router.get("/campaigns", async (req, res) => {
 
     res.json({ campaigns: results });
   } catch (err) {
-    console.error("Campaign analytics error:", err);
+    logger.error("Campaign analytics error:", err);
     res.status(500).json({ error: "Failed to fetch campaign analytics" });
   }
 });
@@ -868,7 +869,7 @@ router.get("/outbound/daily", async (req, res) => {
 
     res.json({ days });
   } catch (err) {
-    console.error("Daily activity error:", err);
+    logger.error("Daily activity error:", err);
     res.status(500).json({ error: "Failed to fetch daily activity" });
   }
 });
@@ -949,7 +950,7 @@ router.get("/outbound/response-speed", async (req, res) => {
       avg_waiting_time_min: round2(average(waitingTimes)),
     });
   } catch (err) {
-    console.error("Response speed error:", err);
+    logger.error("Response speed error:", err);
     res.status(500).json({ error: "Failed to fetch response speed analytics" });
   }
 });
@@ -1017,7 +1018,7 @@ router.get("/outbound/conversation-depth", async (req, res) => {
       booking_rate_by_depth: bookingByDepth,
     });
   } catch (err) {
-    console.error("Conversation depth error:", err);
+    logger.error("Conversation depth error:", err);
     res.status(500).json({ error: "Failed to fetch conversation depth analytics" });
   }
 });
@@ -1100,7 +1101,7 @@ router.get("/outbound/ai-models", async (req, res) => {
     results.sort((a, b) => b.messages_sent - a.messages_sent);
     res.json({ models: results });
   } catch (err) {
-    console.error("AI model analytics error:", err);
+    logger.error("AI model analytics error:", err);
     res.status(500).json({ error: "Failed to fetch AI model analytics" });
   }
 });
@@ -1159,7 +1160,7 @@ router.get("/outbound/edited-comparison", async (req, res) => {
 
     res.json({ ai_generated: aiStats, edited: editedStats });
   } catch (err) {
-    console.error("Edited comparison error:", err);
+    logger.error("Edited comparison error:", err);
     res.status(500).json({ error: "Failed to fetch edited comparison analytics" });
   }
 });
@@ -1202,7 +1203,7 @@ router.get("/outbound/time-of-day", async (req, res) => {
     results.sort((a, b) => a.hour - b.hour);
     res.json({ hours: results });
   } catch (err) {
-    console.error("Time of day error:", err);
+    logger.error("Time of day error:", err);
     res.status(500).json({ error: "Failed to fetch time of day analytics" });
   }
 });
@@ -1224,7 +1225,7 @@ router.get("/outbound/effort-outcome", async (req, res) => {
       replies_per_booking: booked > 0 ? round2(replied / booked) : 0,
     });
   } catch (err) {
-    console.error("Effort outcome error:", err);
+    logger.error("Effort outcome error:", err);
     res.status(500).json({ error: "Failed to fetch effort outcome analytics" });
   }
 });
@@ -1276,7 +1277,7 @@ router.get("/outbound/trends", async (req, res) => {
 
     res.json({ trends });
   } catch (err) {
-    console.error("Trends error:", err);
+    logger.error("Trends error:", err);
     res.status(500).json({ error: "Failed to fetch trend analytics" });
   }
 });
@@ -1335,7 +1336,7 @@ router.get("/inbound", async (req, res) => {
       sources,
     });
   } catch (err) {
-    console.error("Inbound analytics error:", err);
+    logger.error("Inbound analytics error:", err);
     res.status(500).json({ error: "Failed to fetch inbound analytics" });
   }
 });
@@ -1366,7 +1367,7 @@ router.get("/inbound/posts", async (req, res) => {
 
     res.json({ posts });
   } catch (err) {
-    console.error("Inbound posts analytics error:", err);
+    logger.error("Inbound posts analytics error:", err);
     res.status(500).json({ error: "Failed to fetch inbound posts analytics" });
   }
 });
@@ -1400,7 +1401,7 @@ router.get("/inbound/daily", async (req, res) => {
     const days = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
     res.json({ days });
   } catch (err) {
-    console.error("Inbound daily analytics error:", err);
+    logger.error("Inbound daily analytics error:", err);
     res.status(500).json({ error: "Failed to fetch inbound daily analytics" });
   }
 });
@@ -1454,7 +1455,7 @@ router.get("/outbound/follower-tiers", async (req, res) => {
 
     res.json({ tiers });
   } catch (err) {
-    console.error("Follower tier analytics error:", err);
+    logger.error("Follower tier analytics error:", err);
     res.status(500).json({ error: "Failed to fetch follower tier analytics" });
   }
 });
@@ -1494,7 +1495,7 @@ router.get("/outbound/prompt-labels", async (req, res) => {
 
     res.json({ labels });
   } catch (err) {
-    console.error("Prompt label analytics error:", err);
+    logger.error("Prompt label analytics error:", err);
     res.status(500).json({ error: "Failed to fetch prompt label analytics" });
   }
 });
@@ -1539,7 +1540,7 @@ router.get("/outbound/question-types", async (req, res) => {
     types.sort((a, b) => b.sent - a.sent);
     res.json({ types });
   } catch (err) {
-    console.error("Question type analytics error:", err);
+    logger.error("Question type analytics error:", err);
     res.status(500).json({ error: "Failed to fetch question type analytics" });
   }
 });

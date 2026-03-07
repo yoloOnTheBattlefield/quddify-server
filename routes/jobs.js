@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "jobs" });
 const express = require("express");
 const multer = require("multer");
 const QualificationJob = require("../models/QualificationJob");
@@ -69,7 +70,7 @@ router.post("/", upload.array("files"), async (req, res) => {
       status: "queued",
     });
   } catch (err) {
-    console.error("Job creation error:", err);
+    logger.error("Job creation error:", err);
     res.status(500).json({ error: "Failed to create job" });
   }
 });
@@ -103,7 +104,7 @@ router.get("/", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("List jobs error:", err);
+    logger.error("List jobs error:", err);
     res.status(500).json({ error: "Failed to list jobs" });
   }
 });
@@ -115,7 +116,7 @@ router.get("/:id", async (req, res) => {
     if (!job) return res.status(404).json({ error: "Job not found" });
     res.json(job);
   } catch (err) {
-    console.error("Get job error:", err);
+    logger.error("Get job error:", err);
     res.status(500).json({ error: "Failed to get job" });
   }
 });
@@ -141,7 +142,7 @@ router.post("/:id/cancel", async (req, res) => {
 
     res.json({ jobId: job._id, cancelRequested: true });
   } catch (err) {
-    console.error("Cancel job error:", err);
+    logger.error("Cancel job error:", err);
     res.status(500).json({ error: "Failed to cancel job" });
   }
 });

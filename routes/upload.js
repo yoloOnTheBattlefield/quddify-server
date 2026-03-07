@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "upload" });
 const express = require("express");
 const multer = require("multer");
 const QualificationJob = require("../models/QualificationJob");
@@ -49,7 +50,7 @@ router.post("/upload-xlsx", upload.array("files"), async (req, res) => {
 
     res.status(202).json({ jobId: job._id, status: "queued" });
   } catch (error) {
-    console.error("Upload error:", error);
+    logger.error("Upload error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

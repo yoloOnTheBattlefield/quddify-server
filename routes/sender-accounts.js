@@ -1,3 +1,5 @@
+const escapeRegex = require("../utils/escapeRegex");
+const logger = require("../utils/logger").child({ module: "sender-accounts" });
 const express = require("express");
 const mongoose = require("mongoose");
 const SenderAccount = require("../models/SenderAccount");
@@ -12,7 +14,7 @@ router.get("/", async (req, res) => {
     const filter = { account_id: req.account._id };
 
     if (status) filter.status = status;
-    if (search) filter.ig_username = { $regex: search, $options: "i" };
+    if (search) filter.ig_username = { $regex: escapeRegex(search), $options: "i" };
 
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = Math.min(parseInt(limit, 10) || 50, 100);
@@ -79,7 +81,7 @@ router.get("/", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("List senders error:", err);
+    logger.error("List senders error:", err);
     res.status(500).json({ error: "Failed to list senders" });
   }
 });
@@ -117,7 +119,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(sender.toObject());
   } catch (err) {
-    console.error("Create sender error:", err);
+    logger.error("Create sender error:", err);
     res.status(500).json({ error: "Failed to create sender" });
   }
 });
@@ -143,7 +145,7 @@ router.post("/heartbeat", async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
-    console.error("Heartbeat error:", err);
+    logger.error("Heartbeat error:", err);
     res.status(500).json({ error: "Heartbeat failed" });
   }
 });
@@ -166,7 +168,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(sender);
   } catch (err) {
-    console.error("Get sender error:", err);
+    logger.error("Get sender error:", err);
     res.status(500).json({ error: "Failed to get sender" });
   }
 });
@@ -198,7 +200,7 @@ router.patch("/:id", async (req, res) => {
 
     res.json(sender);
   } catch (err) {
-    console.error("Update sender error:", err);
+    logger.error("Update sender error:", err);
     res.status(500).json({ error: "Failed to update sender" });
   }
 });
@@ -221,7 +223,7 @@ router.delete("/:id", async (req, res) => {
 
     res.json({ deleted: true });
   } catch (err) {
-    console.error("Delete sender error:", err);
+    logger.error("Delete sender error:", err);
     res.status(500).json({ error: "Failed to delete sender" });
   }
 });

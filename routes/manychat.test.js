@@ -66,7 +66,7 @@ describe("POST /api/manychat/webhook", () => {
       .send({ trigger_type: "dm" });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/ig_username/i);
+    expect(res.body.error).toMatch(/validation failed/i);
   });
 
   it("returns 400 when ig_username is empty after sanitizing", async () => {

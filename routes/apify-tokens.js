@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "apify-tokens" });
 const express = require("express");
 const mongoose = require("mongoose");
 const ApifyToken = require("../models/ApifyToken");
@@ -148,7 +149,7 @@ router.get("/usage", async (req, res) => {
 
     res.json({ usage: results });
   } catch (err) {
-    console.error("Apify usage fetch error:", err);
+    logger.error("Apify usage fetch error:", err);
     res.status(500).json({ error: "Failed to fetch usage" });
   }
 });

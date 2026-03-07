@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "tracking-public" });
 const express = require("express");
 const mongoose = require("mongoose");
 const Account = require("../models/Account");
@@ -119,7 +120,7 @@ router.get("/config/:accountId", async (req, res) => {
       conversion_rules: account.tracking_conversion_rules || [],
     });
   } catch (err) {
-    console.error("Tracking config error:", err);
+    logger.error("Tracking config error:", err);
     res.json({ enabled: false });
   }
 });
@@ -185,7 +186,7 @@ router.post("/event", async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
-    console.error("Tracking event error:", err);
+    logger.error("Tracking event error:", err);
     res.status(500).json({ error: "Failed to store event" });
   }
 });

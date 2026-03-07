@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "uploadService" });
 const XLSX = require("xlsx");
 const OpenAI = require("openai");
 const OutboundLead = require("../models/OutboundLead");
@@ -144,7 +145,7 @@ async function processUpload(fileBuffer, filename, promptId, accountId) {
     try {
       qualification = await qualifyBio(bio, promptText);
     } catch (err) {
-      console.error(
+      logger.error(
         `OpenAI error for ${row["Username"]}, skipping:`,
         err.message,
       );

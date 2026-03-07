@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "manual-campaigns" });
 const express = require("express");
 const mongoose = require("mongoose");
 const Campaign = require("../models/Campaign");
@@ -204,7 +205,7 @@ router.get("/next", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Manual campaign next error:", err);
+    logger.error("Manual campaign next error:", err);
     res.status(500).json({ error: "Failed to get next lead" });
   }
 });
@@ -268,7 +269,7 @@ router.post("/confirm", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("Manual campaign confirm error:", err);
+    logger.error("Manual campaign confirm error:", err);
     res.status(500).json({ error: "Failed to confirm" });
   }
 });
@@ -315,7 +316,7 @@ router.post("/skip", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("Manual campaign skip error:", err);
+    logger.error("Manual campaign skip error:", err);
     res.status(500).json({ error: "Failed to skip" });
   }
 });

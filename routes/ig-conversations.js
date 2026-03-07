@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "ig-conversations" });
 const express = require("express");
 const router = express.Router();
 
@@ -22,7 +23,7 @@ router.get("/", async (req, res) => {
 
     res.json({ conversations, total, page, limit });
   } catch (err) {
-    console.error("[ig-conversations] List error:", err);
+    logger.error("[ig-conversations] List error:", err);
     res.status(500).json({ error: "Failed to fetch conversations" });
   }
 });
@@ -50,7 +51,7 @@ router.get("/:id/messages", async (req, res) => {
 
     res.json({ conversation, messages, total, page, limit });
   } catch (err) {
-    console.error("[ig-conversations] Messages error:", err);
+    logger.error("[ig-conversations] Messages error:", err);
     res.status(500).json({ error: "Failed to fetch messages" });
   }
 });

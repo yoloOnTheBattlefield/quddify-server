@@ -199,7 +199,7 @@ describe("PATCH /api/campaigns/:id", () => {
       .send({ schedule: { min_delay_seconds: 5 } });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/min_delay_seconds/);
+    expect(res.body.error).toMatch(/validation failed/i);
   });
 
   it("validates max_delay >= min_delay", async () => {

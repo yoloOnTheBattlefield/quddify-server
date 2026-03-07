@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "campaignScheduler" });
 const Campaign = require("../models/Campaign");
 const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
@@ -157,11 +158,11 @@ async function updateSendingStreak(outboundAccountId) {
     // 2 days rest after 10 consecutive sending days, then reset cycle
     update.streak_rest_until = new Date(todayMidnight.getTime() + 3 * 86400000);
     update.sending_streak = 0;
-    console.log(`[scheduler] Account ${acct.username} hit 10-day streak — resting 2 days (until ${update.streak_rest_until.toISOString().split("T")[0]})`);
+    logger.info(`[scheduler] Account ${acct.username} hit 10-day streak — resting 2 days (until ${update.streak_rest_until.toISOString().split("T")[0]})`);
   } else if (newStreak === 5) {
     // 1 day rest after 5 consecutive sending days (streak continues through rest)
     update.streak_rest_until = new Date(todayMidnight.getTime() + 2 * 86400000);
-    console.log(`[scheduler] Account ${acct.username} hit 5-day streak — resting 1 day (until ${update.streak_rest_until.toISOString().split("T")[0]})`);
+    logger.info(`[scheduler] Account ${acct.username} hit 5-day streak — resting 1 day (until ${update.streak_rest_until.toISOString().split("T")[0]})`);
   }
 
   await OutboundAccount.findByIdAndUpdate(outboundAccountId, { $set: update });
@@ -174,7 +175,7 @@ async function checkStaleSenders() {
     { $set: { status: "offline", socket_id: null } },
   );
   if (stale.modifiedCount > 0) {
-    console.log(`[scheduler] Marked ${stale.modifiedCount} stale sender(s) offline`);
+    logger.info(`[scheduler] Marked ${stale.modifiedCount} stale sender(s) offline`);
   }
 
   // Auto-complete warmup for accounts past day 14
@@ -199,7 +200,7 @@ async function checkStaleSenders() {
       performedBy: "system",
     }));
     await WarmupLog.insertMany(logEntries);
-    console.log(`[scheduler] Auto-completed warmup for ${warmupToComplete.length} account(s)`);
+    logger.info(`[scheduler] Auto-completed warmup for ${warmupToComplete.length} account(s)`);
   }
 
 }
@@ -227,10 +228,10 @@ async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, send
   const delivered = emitToSender(sender_id, "task:new", task);
 
   if (!delivered) {
-    console.warn(`[scheduler] No connected socket for sender ${sender_id} — task ${task._id} will be retried by stale cleanup`);
+    logger.warn(`[scheduler] No connected socket for sender ${sender_id} — task ${task._id} will be retried by stale cleanup`);
   }
 
-  console.log(`[scheduler] Task created for ${target} → sender ${sender_id} (delivered: ${delivered})`);
+  logger.info(`[scheduler] Task created for ${target} → sender ${sender_id} (delivered: ${delivered})`);
 }
 
 async function processTick() {
@@ -250,7 +251,7 @@ async function processTick() {
       await Campaign.findByIdAndUpdate(mc._id, {
         $inc: { "stats.queued": -result.modifiedCount, "stats.pending": result.modifiedCount },
       });
-      console.log(`[scheduler] Reset ${result.modifiedCount} stale queued lead(s) for manual campaign ${mc.name}`);
+      logger.info(`[scheduler] Reset ${result.modifiedCount} stale queued lead(s) for manual campaign ${mc.name}`);
     }
   }
 
@@ -266,7 +267,7 @@ async function processTick() {
       await Campaign.findByIdAndUpdate(ac._id, {
         $inc: { "stats.queued": -result.modifiedCount, "stats.pending": result.modifiedCount },
       });
-      console.log(`[scheduler] Reset ${result.modifiedCount} stale queued lead(s) for auto campaign ${ac.name}`);
+      logger.info(`[scheduler] Reset ${result.modifiedCount} stale queued lead(s) for auto campaign ${ac.name}`);
     }
   }
 
@@ -300,7 +301,7 @@ async function processTick() {
       }
     }
 
-    console.log(`[scheduler] Auto-failed stale task ${staleTask._id} (created ${staleTask.createdAt})`);
+    logger.info(`[scheduler] Auto-failed stale task ${staleTask._id} (created ${staleTask.createdAt})`);
   }
 
   const campaigns = await Campaign.find({ status: "active", mode: { $ne: "manual" } });
@@ -511,7 +512,7 @@ async function processTick() {
         if (remaining === 0) {
           campaign.status = "completed";
           await campaign.save();
-          console.log(`[scheduler] Campaign ${campaign.name} completed — no pending leads`);
+          logger.info(`[scheduler] Campaign ${campaign.name} completed — no pending leads`);
         }
         continue;
       }
@@ -594,7 +595,7 @@ async function processTick() {
                 burst_break_until: new Date(Date.now() + breakSeconds * 1000),
               },
             });
-            console.log(`[scheduler] Campaign ${campaign.name} burst group done (${groupSize} msgs) — breaking for ${breakSeconds}s`);
+            logger.info(`[scheduler] Campaign ${campaign.name} burst group done (${groupSize} msgs) — breaking for ${breakSeconds}s`);
           }
         }
       }
@@ -614,7 +615,7 @@ async function processTick() {
       // Update sending streak for this outbound account (idempotent per day)
       if (sender.outbound_account_id) {
         await updateSendingStreak(sender.outbound_account_id).catch((err) =>
-          console.error("[scheduler] Streak update error:", err.message),
+          logger.error("[scheduler] Streak update error:", err.message),
         );
       }
 
@@ -640,11 +641,11 @@ async function processTick() {
         });
       }
 
-      console.log(
+      logger.info(
         `[scheduler] Queued DM to ${outboundLead.username} via ${sender.ig_username} (next in ~${baseEta}s, ${pendingRemaining} remaining)${isTestMode ? " [TEST MODE]" : ""}`,
       );
     } catch (err) {
-      console.error(`[scheduler] Error processing campaign ${campaign._id}:`, err);
+      logger.error(`[scheduler] Error processing campaign ${campaign._id}:`, err);
     }
   }
 }
@@ -655,11 +656,11 @@ function start() {
     try {
       await processTick();
     } catch (err) {
-      console.error("[scheduler] Tick failed:", err);
+      logger.error("[scheduler] Tick failed:", err);
     }
   }, 30000);
 
-  console.log("[scheduler] Campaign scheduler started");
+  logger.info("[scheduler] Campaign scheduler started");
 }
 
 function stop() {
@@ -667,7 +668,7 @@ function stop() {
     clearInterval(tickInterval);
     tickInterval = null;
   }
-  console.log("[scheduler] Campaign scheduler stopped");
+  logger.info("[scheduler] Campaign scheduler stopped");
 }
 
 module.exports = { start, stop, resolveTemplate, isWithinActiveHours, calculateDelay, isAccountResting, updateSendingStreak, getEffectiveDailyLimit };

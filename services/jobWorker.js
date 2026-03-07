@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "jobWorker" });
 const OpenAI = require("openai");
 const QualificationJob = require("../models/QualificationJob");
 const Account = require("../models/Account");
@@ -29,7 +30,7 @@ function emitToAccount(accountId, event, data) {
 async function processJob(jobId) {
   const job = await QualificationJob.findById(jobId);
   if (!job) {
-    console.error(`[jobWorker] Job ${jobId} not found`);
+    logger.error(`[jobWorker] Job ${jobId} not found`);
     return;
   }
 
@@ -192,7 +193,7 @@ async function processJob(jobId) {
           try {
             qualification = await qualifyBio(bio, promptText, openaiClient);
           } catch (err) {
-            console.error(
+            logger.error(
               `OpenAI error for ${mapped.username || "unknown"}, skipping:`,
               err.message,
             );
@@ -313,7 +314,7 @@ async function processJob(jobId) {
         });
       } catch (fileErr) {
         // File-level failure: mark file failed, continue with other files
-        console.error(
+        logger.error(
           `[jobWorker] File ${fileEntry.filename} failed:`,
           fileErr,
         );
@@ -340,7 +341,7 @@ async function processJob(jobId) {
     });
   } catch (criticalErr) {
     // Critical failure: mark entire job failed
-    console.error(`[jobWorker] Critical error on job ${jobId}:`, criticalErr);
+    logger.error(`[jobWorker] Critical error on job ${jobId}:`, criticalErr);
     job.status = "failed";
     job.error = criticalErr.message;
     job.completedAt = new Date();

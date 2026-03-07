@@ -1,11 +1,12 @@
 require("dotenv").config();
+const logger = require("./utils/logger").child({ module: "index" });
 
 // Catch unhandled errors so the process doesn't silently die
 process.on("uncaughtException", (err) => {
-  console.error("[FATAL] Uncaught Exception:", err);
+  logger.error("[FATAL] Uncaught Exception:", err);
 });
 process.on("unhandledRejection", (err) => {
-  console.error("[FATAL] Unhandled Rejection:", err);
+  logger.error("[FATAL] Unhandled Rejection:", err);
 });
 
 const express = require("express");
@@ -45,6 +46,7 @@ const followUpRoutes = require("./routes/follow-ups");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
+const { authLimiter, apiLimiter, webhookLimiter } = require("./middleware/rateLimiter");
 const socketManager = require("./services/socketManager");
 const jobQueue = require("./services/jobQueue");
 const jobWorker = require("./services/jobWorker");
@@ -58,6 +60,7 @@ const server = http.createServer(app);
 // Instagram webhook — registered BEFORE express.json() so we can capture raw body for signature verification
 app.use(
   "/instagram-webhook",
+  webhookLimiter,
   cors({ origin: true, credentials: false }),
   express.json({
     verify: (req, _res, buf) => {
@@ -122,7 +125,7 @@ const connectDB = async () => {
     serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,
   });
-  console.log("MongoDB connected");
+  logger.info("MongoDB connected");
 
   // Sync indexes once per process
   if (!indexesFixed) {
@@ -155,21 +158,23 @@ app.use(async (req, res, next) => {
     await connectDB();
     next();
   } catch (err) {
-    console.error("MongoDB connection error:", err);
+    logger.error("MongoDB connection error:", err);
     res.status(500).json({ error: "Database connection failed" });
   }
 });
 
-// Public routes (no auth)
-app.post("/login", accountRoutes);
-app.post("/register", accountRoutes);
-app.post("/accounts/login", accountRoutes);
-app.post("/accounts/register", accountRoutes);
-app.use("/api/calendly", calendlyRoutes);
+// Public routes (no auth) — rate-limit login/register to prevent brute force
+app.post("/login", authLimiter, accountRoutes);
+app.post("/register", authLimiter, accountRoutes);
+app.post("/accounts/login", authLimiter, accountRoutes);
+app.post("/accounts/register", authLimiter, accountRoutes);
+app.use("/api/calendly", webhookLimiter, calendlyRoutes);
 app.get("/api/health", healthRoutes);
 app.get("/api/debug", healthRoutes);
 // Auth middleware — everything below requires JWT or API key
 app.use(auth);
+// General rate limit for all authenticated routes
+app.use(apiLimiter);
 
 // Protected routes
 app.use("/accounts", accountRoutes);
@@ -193,7 +198,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/reply-checks", requireOutbound, replyCheckRoutes);
 app.use("/api/ai-prompts", aiPromptRoutes);
 app.use("/api/research", researchRoutes);
-app.use("/api/manychat", manychatRoutes);
+app.use("/api/manychat", webhookLimiter, manychatRoutes);
 app.use("/api/ig-conversations", igConversationRoutes);
 app.use("/api/instagram", igOAuthRoutes);
 app.use("/api/follow-ups", requireOutbound, followUpRoutes);
@@ -202,7 +207,7 @@ app.use("/tracking", trackingRoutes);
 // Start listening IMMEDIATELY so Railway health checks pass
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on 0.0.0.0:${PORT}`);
+  logger.info(`Server running on 0.0.0.0:${PORT}`);
 });
 
 // Connect to DB and run recovery in the background
@@ -218,7 +223,7 @@ connectDB()
       { $set: { status: "pending", startedAt: null } },
     );
     if (stuckResult.modifiedCount > 0) {
-      console.log(`[taskRecovery] Reset ${stuckResult.modifiedCount} stuck task(s) to pending`);
+      logger.info(`[taskRecovery] Reset ${stuckResult.modifiedCount} stuck task(s) to pending`);
     }
 
     // Clear any senders stuck in "restricted" status (restriction mechanism removed)
@@ -228,15 +233,15 @@ connectDB()
       { $set: { status: "offline", restricted_until: null, restriction_reason: null } },
     );
     if (restrictedResult.modifiedCount > 0) {
-      console.log(`[startup] Unrestricted ${restrictedResult.modifiedCount} sender(s)`);
+      logger.info(`[startup] Unrestricted ${restrictedResult.modifiedCount} sender(s)`);
     }
 
     // Start schedulers
     campaignScheduler.start();
     deepScrapeScheduler.start();
 
-    console.log("Startup complete");
+    logger.info("Startup complete");
   })
   .catch((err) => {
-    console.error("Failed to initialize:", err);
+    logger.error("Failed to initialize:", err);
   });

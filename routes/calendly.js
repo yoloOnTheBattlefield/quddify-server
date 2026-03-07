@@ -1,6 +1,8 @@
+const logger = require("../utils/logger").child({ module: "calendly" });
 const express = require("express");
 const Lead = require("../models/Lead");
 const Account = require("../models/Account");
+const { encrypt } = require("../utils/crypto");
 
 const router = express.Router();
 
@@ -11,7 +13,7 @@ router.post("/add", async (req, res) => {
       token,
       user: { ghl: accountId },
     } = req.body;
-    console.log(token, accountId);
+    logger.info(token, accountId);
 
     if (!token) {
       return res.status(400).json({ error: "Missing token" });
@@ -31,7 +33,7 @@ router.post("/add", async (req, res) => {
 
     if (!userResponse.ok) {
       const errorData = await userResponse.json();
-      console.error("Calendly user fetch error:", errorData);
+      logger.error("Calendly user fetch error:", errorData);
       return res
         .status(userResponse.status)
         .json({ error: "Failed to fetch Calendly user", details: errorData });
@@ -41,7 +43,7 @@ router.post("/add", async (req, res) => {
     const organization = userData.resource.current_organization;
     const userUri = userData.resource.uri;
 
-    console.log("Calendly user:", { organization, userUri });
+    logger.info("Calendly user:", { organization, userUri });
 
     // Step 2: Create webhook subscription
     const webhookResponse = await fetch(
@@ -65,24 +67,24 @@ router.post("/add", async (req, res) => {
     const webhookData = await webhookResponse.json();
 
     if (!webhookResponse.ok) {
-      console.error("Calendly webhook subscription error:", webhookData);
+      logger.error("Calendly webhook subscription error:", webhookData);
       return res.status(webhookResponse.status).json({
         error: "Failed to create webhook subscription",
         details: webhookData,
       });
     }
 
-    console.log("Webhook subscription created:", webhookData);
+    logger.info("Webhook subscription created:", webhookData);
 
     // Step 3: Save token to user's account
     await Account.findOneAndUpdate(
       { ghl: accountId },
-      { calendly_token: token },
+      { calendly_token: encrypt(token) },
     );
 
     res.json({ success: true, webhook: webhookData });
   } catch (error) {
-    console.error("Calendly add error:", error);
+    logger.error("Calendly add error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -90,18 +92,18 @@ router.post("/add", async (req, res) => {
 // POST /api/calendly - Calendly webhook
 router.post("/", async (req, res) => {
   try {
-    console.log(
+    logger.info(
       "Calendly webhook received:",
       JSON.stringify(req.body, null, 2),
     );
 
     const { event, payload } = req.body;
 
-    console.log("Event type:", event);
+    logger.info("Event type:", event);
 
     // Only handle invitee.created events
     if (event !== "invitee.created") {
-      console.log("Event ignored:", event);
+      logger.info("Event ignored:", event);
       return res.json({ success: true, message: "Event ignored" });
     }
 
@@ -109,16 +111,16 @@ router.post("/", async (req, res) => {
     const email = payload?.email;
     const questionsAndAnswers = payload?.questions_and_answers || [];
 
-    console.log("Extracted data:", { contactId, email, questionsAndAnswers });
-    console.log("Full tracking:", payload?.tracking);
+    logger.info("Extracted data:", { contactId, email, questionsAndAnswers });
+    logger.info("Full tracking:", payload?.tracking);
 
     if (!contactId) {
-      console.log("Missing utm_medium");
+      logger.info("Missing utm_medium");
       return res.status(400).json({ error: "Missing utm_medium (contact_id)" });
     }
 
     // Find lead by contact_id and update booked_at and email
-    console.log("Searching for lead with contact_id:", contactId);
+    logger.info("Searching for lead with contact_id:", contactId);
 
     const lead = await Lead.findOneAndUpdate(
       { contact_id: contactId },
@@ -130,27 +132,27 @@ router.post("/", async (req, res) => {
       { new: true },
     );
 
-    console.log("Update result:", lead);
+    logger.info("Update result:", lead);
 
     if (!lead) {
-      console.log("Lead not found for contact_id:", contactId);
+      logger.info("Lead not found for contact_id:", contactId);
       return res.status(404).json({ error: "Lead not found" });
     }
 
-    console.log("Lead updated successfully:", lead._id);
+    logger.info("Lead updated successfully:", lead._id);
 
     // Fetch account to get dynamic webhook URL
     const account = await Account.findOne({ ghl: lead.account_id });
 
     if (!account) {
-      console.log("Account not found for account_id:", lead.account_id);
+      logger.info("Account not found for account_id:", lead.account_id);
       return res.status(404).json({ error: "Account not found" });
     }
 
     const webhookUrl = account.ghl_lead_booked_webhook;
 
     if (!webhookUrl) {
-      console.log("No GHL webhook configured for account:", lead.account_id);
+      logger.info("No GHL webhook configured for account:", lead.account_id);
       return res.json({ success: true, lead, message: "Booked. No webhook configured." });
     }
 
@@ -161,21 +163,21 @@ router.post("/", async (req, res) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contact_id: contactId }),
       });
-      console.log("GHL webhook called:", webhookUrl, "contact_id:", contactId);
+      logger.info("GHL webhook called:", webhookUrl, "contact_id:", contactId);
     } catch (webhookError) {
-      console.error("GHL webhook error:", webhookError);
+      logger.error("GHL webhook error:", webhookError);
     }
 
     res.json({ success: true, lead });
   } catch (error) {
-    console.error("Calendly webhook error:", error);
+    logger.error("Calendly webhook error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
 router.post("/test", async (req, res) => {
   try {
-    console.log(
+    logger.info(
       "Calendly webhook received:",
       JSON.stringify(req.body, null, 2),
     );
@@ -190,9 +192,9 @@ router.post("/test", async (req, res) => {
           body: JSON.stringify({ contact_id: "WF8mVUX8DAfOH6QF1uzO" }),
         },
       );
-      console.log("External webhook called with contact_id:", contactId);
+      logger.info("External webhook called with contact_id:", contactId);
     } catch (webhookError) {
-      console.error("External webhook error:", webhookError);
+      logger.error("External webhook error:", webhookError);
     }
 
     res.json({ success: true });

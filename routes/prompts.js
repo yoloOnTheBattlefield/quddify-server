@@ -1,5 +1,6 @@
 const express = require("express");
 const Prompt = require("../models/Prompt");
+const escapeRegex = require("../utils/escapeRegex");
 
 const router = express.Router();
 
@@ -7,7 +8,7 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   const { search, page, limit } = req.query;
   const filter = { account_id: req.account._id };
-  if (search) filter.label = { $regex: search, $options: "i" };
+  if (search) filter.label = { $regex: escapeRegex(search), $options: "i" };
 
   const pageNum = parseInt(page, 10) || 1;
   const limitNum = parseInt(limit, 10) || 50;

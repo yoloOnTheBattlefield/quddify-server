@@ -1,12 +1,16 @@
+const logger = require("../utils/logger").child({ module: "accounts" });
 const express = require("express");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const Account = require("../models/Account");
+const { encrypt, decrypt } = require("../utils/crypto");
 const User = require("../models/User");
 const AccountUser = require("../models/AccountUser");
 const Lead = require("../models/Lead");
 const { generateToken, generateSelectionToken, JWT_SECRET } = require("../middleware/auth");
+const validate = require("../middleware/validate");
+const { loginSchema, registerSchema } = require("../schemas/accounts");
 
 const router = express.Router();
 
@@ -61,10 +65,10 @@ router.get("/me", async (req, res) => {
   try {
     const account = req.account;
     res.json({
-      openai_token: account.openai_token || null,
-      claude_token: account.claude_token || null,
-      gemini_token: account.gemini_token || null,
-      calendly_token: account.calendly_token || null,
+      openai_token: decrypt(account.openai_token) || null,
+      claude_token: decrypt(account.claude_token) || null,
+      gemini_token: decrypt(account.gemini_token) || null,
+      calendly_token: decrypt(account.calendly_token) || null,
       ig_oauth: account.ig_oauth?.access_token
         ? {
             ig_username: account.ig_oauth.ig_username,
@@ -74,7 +78,7 @@ router.get("/me", async (req, res) => {
         : null,
     });
   } catch (error) {
-    console.error("Get account me error:", error);
+    logger.error("Get account me error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -116,14 +120,14 @@ router.get("/analytics", async (req, res) => {
 
     res.json(results);
   } catch (error) {
-    console.error("Account analytics error:", error);
+    logger.error("Account analytics error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // ---------- register ----------
 
-router.post("/register", async (req, res) => {
+router.post("/register", validate(registerSchema), async (req, res) => {
   const { email, password, first_name, last_name, ghl } = req.body;
 
   if (!email || !password) {
@@ -172,7 +176,7 @@ router.post("/register", async (req, res) => {
 
 // ---------- login (multi-account aware) ----------
 
-router.post("/login", async (req, res) => {
+router.post("/login", validate(loginSchema), async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -239,7 +243,7 @@ router.post("/login", async (req, res) => {
       }),
     });
   } catch (error) {
-    console.error("Login error:", error);
+    logger.error("Login error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -297,7 +301,7 @@ router.post("/select-account", async (req, res) => {
       }),
     });
   } catch (error) {
-    console.error("Select account error:", error);
+    logger.error("Select account error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -341,7 +345,7 @@ router.post("/switch-account", async (req, res) => {
       }),
     });
   } catch (error) {
-    console.error("Switch account error:", error);
+    logger.error("Switch account error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -371,7 +375,7 @@ router.get("/my-accounts", async (req, res) => {
       }),
     });
   } catch (error) {
-    console.error("My accounts error:", error);
+    logger.error("My accounts error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -441,7 +445,7 @@ router.post("/team", async (req, res) => {
       has_outbound: membership.has_outbound,
     });
   } catch (error) {
-    console.error("Add team member error:", error);
+    logger.error("Add team member error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -462,7 +466,7 @@ router.get("/team/check-email", async (req, res) => {
       last_name: user.last_name,
     });
   } catch (error) {
-    console.error("Check email error:", error);
+    logger.error("Check email error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -498,7 +502,7 @@ router.get("/team", async (req, res) => {
 
     res.json(members);
   } catch (error) {
-    console.error("Get team members error:", error);
+    logger.error("Get team members error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -531,7 +535,7 @@ router.delete("/team/:id", async (req, res) => {
 
     res.json({ deleted: true });
   } catch (error) {
-    console.error("Delete team member error:", error);
+    logger.error("Delete team member error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -565,7 +569,7 @@ router.get("/ig-sessions", async (req, res) => {
 
     res.json({ ig_sessions: sessions });
   } catch (error) {
-    console.error("Get IG sessions error:", error);
+    logger.error("Get IG sessions error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -617,7 +621,7 @@ router.post("/ig-sessions", async (req, res) => {
       ig_session: { ig_username: username, has_cookies: true, added_at: entry.added_at },
     });
   } catch (error) {
-    console.error("Add IG session error:", error);
+    logger.error("Add IG session error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -652,7 +656,7 @@ router.delete("/ig-sessions/:username", async (req, res) => {
     await account.save();
     res.json({ success: true });
   } catch (error) {
-    console.error("Delete IG session error:", error);
+    logger.error("Delete IG session error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -671,10 +675,10 @@ router.patch("/:id", async (req, res) => {
     const accountUpdates = {};
     if (ghl !== undefined) accountUpdates.ghl = ghl;
     if (calendly !== undefined) accountUpdates.calendly = calendly;
-    if (openai_token !== undefined) accountUpdates.openai_token = openai_token;
-    if (claude_token !== undefined) accountUpdates.claude_token = claude_token;
-    if (gemini_token !== undefined) accountUpdates.gemini_token = gemini_token;
-    if (apify_token !== undefined) accountUpdates.apify_token = apify_token;
+    if (openai_token !== undefined) accountUpdates.openai_token = openai_token ? encrypt(openai_token) : openai_token;
+    if (claude_token !== undefined) accountUpdates.claude_token = claude_token ? encrypt(claude_token) : claude_token;
+    if (gemini_token !== undefined) accountUpdates.gemini_token = gemini_token ? encrypt(gemini_token) : gemini_token;
+    if (apify_token !== undefined) accountUpdates.apify_token = apify_token ? encrypt(apify_token) : apify_token;
     if (ig_proxy !== undefined) accountUpdates.ig_proxy = ig_proxy || null;
     if (ig_session !== undefined) {
       if (Array.isArray(ig_session)) {
@@ -754,10 +758,10 @@ router.patch("/:id", async (req, res) => {
       ghl: updatedAccount.ghl,
       calendly: updatedAccount.calendly,
       ghl_lead_booked_webhook: updatedAccount.ghl_lead_booked_webhook,
-      openai_token: updatedAccount.openai_token,
-      claude_token: updatedAccount.claude_token,
-      gemini_token: updatedAccount.gemini_token,
-      apify_token: updatedAccount.apify_token,
+      openai_token: decrypt(updatedAccount.openai_token),
+      claude_token: decrypt(updatedAccount.claude_token),
+      gemini_token: decrypt(updatedAccount.gemini_token),
+      apify_token: decrypt(updatedAccount.apify_token),
       api_key: updatedAccount.api_key,
       ig_session_set: !!(updatedAccount.ig_session?.session_id) || (updatedAccount.ig_sessions && updatedAccount.ig_sessions.length > 0),
       ig_username: updatedAccount.ig_session?.ig_username || null,
@@ -767,7 +771,7 @@ router.patch("/:id", async (req, res) => {
       })),
     });
   } catch (error) {
-    console.error("Account update error:", error);
+    logger.error("Account update error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -797,7 +801,7 @@ router.post("/:id/password", async (req, res) => {
 
     res.json({ message: "Password updated successfully" });
   } catch (error) {
-    console.error("Password update error:", error);
+    logger.error("Password update error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -821,7 +825,7 @@ router.get("/ghl-webhook", async (req, res) => {
       ghl_lead_booked_webhook: account.ghl_lead_booked_webhook || undefined,
     });
   } catch (error) {
-    console.error("GHL webhook fetch error:", error);
+    logger.error("GHL webhook fetch error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -846,7 +850,7 @@ router.post("/ghl-webhook", async (req, res) => {
 
     res.json({ message: "Webhook saved successfully" });
   } catch (error) {
-    console.error("GHL webhook update error:", error);
+    logger.error("GHL webhook update error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -869,7 +873,7 @@ router.patch("/:accountId/has-outbound", async (req, res) => {
 
     res.json({ has_outbound: account.has_outbound });
   } catch (error) {
-    console.error("Toggle has_outbound error:", error);
+    logger.error("Toggle has_outbound error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -892,7 +896,7 @@ router.patch("/:accountId/has-research", async (req, res) => {
 
     res.json({ has_research: account.has_research });
   } catch (error) {
-    console.error("Toggle has_research error:", error);
+    logger.error("Toggle has_research error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -909,7 +913,7 @@ router.patch("/:id/disable", async (req, res) => {
 
     res.json({ account_id: account._id, disabled: account.disabled });
   } catch (error) {
-    console.error("Toggle disable error:", error);
+    logger.error("Toggle disable error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -928,7 +932,7 @@ router.post("/:id/api-key", async (req, res) => {
 
     res.json({ api_key: apiKey });
   } catch (error) {
-    console.error("Generate API key error:", error);
+    logger.error("Generate API key error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -950,7 +954,7 @@ router.patch("/:id/delete", async (req, res) => {
 
     res.json({ account_id: account._id, deleted: true });
   } catch (error) {
-    console.error("Soft delete error:", error);
+    logger.error("Soft delete error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -972,7 +976,7 @@ router.patch("/:id/restore", async (req, res) => {
 
     res.json({ account_id: account._id, deleted: false });
   } catch (error) {
-    console.error("Restore account error:", error);
+    logger.error("Restore account error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

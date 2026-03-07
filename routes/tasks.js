@@ -1,3 +1,5 @@
+const escapeRegex = require("../utils/escapeRegex");
+const logger = require("../utils/logger").child({ module: "tasks" });
 const express = require("express");
 const mongoose = require("mongoose");
 const Task = require("../models/Task");
@@ -42,7 +44,7 @@ router.get("/next", async (req, res) => {
 
     res.json(task || null);
   } catch (err) {
-    console.error("Get next task error:", err);
+    logger.error("Get next task error:", err);
     res.status(500).json({ error: "Failed to get next task" });
   }
 });
@@ -83,7 +85,7 @@ router.post("/:taskId/complete", async (req, res) => {
     // Auto-update OutboundLead for send_dm tasks
     if (task.type === "send_dm" && task.outbound_lead_id) {
       if (!task.message) {
-        console.warn(`[tasks] Task ${task._id} completed with no message text — lead will be marked messaged but message is null`);
+        logger.warn(`[tasks] Task ${task._id} completed with no message text — lead will be marked messaged but message is null`);
       }
       const outboundUpdate = {
         isMessaged: true,
@@ -131,7 +133,7 @@ router.post("/:taskId/complete", async (req, res) => {
 
     res.json({ success: true, message: "Task marked as completed" });
   } catch (err) {
-    console.error("Complete task error:", err);
+    logger.error("Complete task error:", err);
     res.status(500).json({ error: "Failed to complete task" });
   }
 });
@@ -202,7 +204,7 @@ router.post("/:taskId/failed", async (req, res) => {
 
     res.json({ success: true, message: "Task marked as failed" });
   } catch (err) {
-    console.error("Fail task error:", err);
+    logger.error("Fail task error:", err);
     res.status(500).json({ error: "Failed to update task" });
   }
 });
@@ -246,7 +248,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json({ tasks: created, count: created.length });
   } catch (err) {
-    console.error("Create tasks error:", err);
+    logger.error("Create tasks error:", err);
     res.status(500).json({ error: "Failed to create tasks" });
   }
 });
@@ -259,7 +261,7 @@ router.get("/", async (req, res) => {
 
     if (status) filter.status = status;
     if (type) filter.type = type;
-    if (search) filter.target = { $regex: search, $options: "i" };
+    if (search) filter.target = { $regex: escapeRegex(search), $options: "i" };
 
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = Math.min(parseInt(limit, 10) || 20, 100);
@@ -280,7 +282,7 @@ router.get("/", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("List tasks error:", err);
+    logger.error("List tasks error:", err);
     res.status(500).json({ error: "Failed to list tasks" });
   }
 });
@@ -322,7 +324,7 @@ router.post("/reset-stuck", async (req, res) => {
 
     res.json({ reset: resetCount, message: `Reset ${resetCount} stuck task(s)` });
   } catch (err) {
-    console.error("Reset stuck tasks error:", err);
+    logger.error("Reset stuck tasks error:", err);
     res.status(500).json({ error: "Failed to reset stuck tasks" });
   }
 });

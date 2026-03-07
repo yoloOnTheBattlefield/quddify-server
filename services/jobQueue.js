@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "jobQueue" });
 let queue = [];
 let isProcessing = false;
 let processFn = null;
@@ -20,7 +21,7 @@ async function drain() {
   try {
     await processFn(jobId);
   } catch (err) {
-    console.error(`[jobQueue] Unhandled error processing job ${jobId}:`, err);
+    logger.error(`[jobQueue] Unhandled error processing job ${jobId}:`, err);
   } finally {
     isProcessing = false;
     drain();

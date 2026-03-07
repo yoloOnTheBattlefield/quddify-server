@@ -1,11 +1,15 @@
+const logger = require("../utils/logger").child({ module: "manychat" });
 const express = require("express");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
 
+const validate = require("../middleware/validate");
+const { webhookSchema } = require("../schemas/manychat");
+
 const router = express.Router();
 
 // POST /api/manychat/webhook — ManyChat External Request webhook
-router.post("/webhook", async (req, res) => {
+router.post("/webhook", validate(webhookSchema), async (req, res) => {
   try {
     const {
       ig_username,
@@ -64,13 +68,13 @@ router.post("/webhook", async (req, res) => {
           { $set: { outbound_lead_id: obLead._id } },
         );
         crossChannel = true;
-        console.log(`[manychat] Cross-channel link: ${username} → OutboundLead ${obLead._id}`);
+        logger.info(`[manychat] Cross-channel link: ${username} → OutboundLead ${obLead._id}`);
       }
     } else {
       crossChannel = true;
     }
 
-    console.log(
+    logger.info(
       `[manychat] Lead upserted: ${username} (trigger: ${trigger_type || "unknown"}, cross: ${crossChannel})`,
     );
 
@@ -81,7 +85,7 @@ router.post("/webhook", async (req, res) => {
       cross_channel: crossChannel,
     });
   } catch (err) {
-    console.error("[manychat] Webhook error:", err);
+    logger.error("[manychat] Webhook error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "deepScraper" });
 const OpenAI = require("openai");
 const DeepScrapeJob = require("../models/DeepScrapeJob");
 const ApifyToken = require("../models/ApifyToken");
@@ -106,7 +107,7 @@ async function startApifyRunWithRotation(actorId, input, accountId, legacyToken,
       return { run, tokenValue: picked.tokenValue, tokenDocId: picked.tokenDocId };
     } catch (err) {
       if (err instanceof ApifyLimitError) {
-        console.log(`[deep-scraper] Token ${picked.tokenDocId || "legacy"} hit 403 limit: ${err.message}`);
+        logger.info(`[deep-scraper] Token ${picked.tokenDocId || "legacy"} hit 403 limit: ${err.message}`);
         if (picked.tokenDocId) {
           await markTokenLimitReached(picked.tokenDocId, err.message);
           emitLog(accountIdStr, jobId, `Apify token "${picked.tokenDocId}" hit limit — rotating to next token`, "warn");
@@ -135,7 +136,7 @@ async function pollApifyRun(runId, token) {
       // Retry on transient errors (5xx, 429)
       if ((res.status >= 500 || res.status === 429) && attempt < MAX_RETRIES) {
         const delay = Math.min(5000 * Math.pow(2, attempt), 30000);
-        console.log(`[deep-scraper] Poll got ${res.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        logger.info(`[deep-scraper] Poll got ${res.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -143,7 +144,7 @@ async function pollApifyRun(runId, token) {
     } catch (err) {
       if (attempt < MAX_RETRIES && err.message && !err.message.startsWith("Apify poll failed")) {
         const delay = Math.min(5000 * Math.pow(2, attempt), 30000);
-        console.log(`[deep-scraper] Poll network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}):`, err.message);
+        logger.info(`[deep-scraper] Poll network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}):`, err.message);
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -235,7 +236,7 @@ function emitLead(accountId, jobId, username, data) {
 async function processJob(jobId) {
   const job = await DeepScrapeJob.findById(jobId);
   if (!job) {
-    console.error(`[deep-scraper] Job ${jobId} not found`);
+    logger.error(`[deep-scraper] Job ${jobId} not found`);
     return;
   }
 
@@ -357,8 +358,8 @@ async function processJob(jobId) {
         emitLog(accountId, jobId, `Scraped ${reels.length} ${contentLabel} from @${seed}`, "success");
 
         if (reels.length > 0) {
-          console.log(`[deep-scraper] Sample ${contentLabel} keys:`, Object.keys(reels[0]));
-          console.log(`[deep-scraper] Sample ${contentLabel} data:`, JSON.stringify(reels[0]).substring(0, 500));
+          logger.info(`[deep-scraper] Sample ${contentLabel} keys:`, Object.keys(reels[0]));
+          logger.info(`[deep-scraper] Sample ${contentLabel} data:`, JSON.stringify(reels[0]).substring(0, 500));
         }
 
         for (const reel of reels) {
@@ -374,7 +375,7 @@ async function processJob(jobId) {
           }
 
           if (!reelUrl) {
-            console.log(`[deep-scraper] Could not construct URL for ${contentLabel}:`, { shortCode, rawUrl, reelId });
+            logger.info(`[deep-scraper] Could not construct URL for ${contentLabel}:`, { shortCode, rawUrl, reelId });
             emitLog(accountId, jobId, `Warning: Could not construct URL for a ${contentLabel === "posts" ? "post" : "reel"} (id: ${reelId || "unknown"})`, "warn");
           }
 
@@ -404,7 +405,7 @@ async function processJob(jobId) {
               { upsert: true },
             );
           } catch (err) {
-            console.error(`[deep-scraper] ResearchPost upsert error:`, err.message);
+            logger.error(`[deep-scraper] ResearchPost upsert error:`, err.message);
           }
         }
 
@@ -415,7 +416,7 @@ async function processJob(jobId) {
         await job.save();
         emitProgress(accountId, jobId, job.stats);
 
-        console.log(`[deep-scraper] ${contentLabel} for @${seed}: ${reels.length} URLs collected`);
+        logger.info(`[deep-scraper] ${contentLabel} for @${seed}: ${reels.length} URLs collected`);
         if (reels.length > 0 && allReelUrls.filter((_, idx) => allReelSeeds[idx] === seed).length === 0) {
           emitLog(accountId, jobId, `Warning: ${reels.length} ${contentLabel} scraped for @${seed} but no valid URLs constructed. Check server logs.`, "error");
         }
@@ -468,7 +469,7 @@ async function processJob(jobId) {
         }
 
         const comments = await getDatasetItems(completedCommentRun.defaultDatasetId, currentToken);
-        console.log(`[deep-scraper] Reel ${i + 1}: got ${comments.length} comments`);
+        logger.info(`[deep-scraper] Reel ${i + 1}: got ${comments.length} comments`);
 
         if (comments.length === 0 && completedCommentRun.status === "FAILED") {
           emitLog(accountId, jobId, `Reel ${i + 1}: comment scraper failed with no data, skipping reel`, "error");
@@ -506,7 +507,7 @@ async function processJob(jobId) {
             await ResearchComment.insertMany(commentDocs, { ordered: false });
           } catch (err) {
             if (err.code !== 11000) {
-              console.error(`[deep-scraper] Comment insert error:`, err.message);
+              logger.error(`[deep-scraper] Comment insert error:`, err.message);
             }
           }
         }
@@ -645,7 +646,7 @@ async function processJob(jobId) {
                     emitLog(accountId, jobId, `@${username} → Rejected by AI`, "warn");
                   }
                 } catch (err) {
-                  console.error(`[deep-scraper] AI error for @${username}:`, err.message);
+                  logger.error(`[deep-scraper] AI error for @${username}:`, err.message);
                   await upsertLead(job, username, {
                     fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
                     qualified: null, unqualified_reason: null, ai_processed: false,
@@ -736,12 +737,12 @@ async function processJob(jobId) {
       ? `Job completed — ${job.stats.reels_scraped} posts, ${job.stats.comments_scraped} comments collected`
       : `Job completed — ${job.stats.qualified} qualified, ${job.stats.filtered_low_followers} filtered, ${job.stats.rejected} rejected`;
     emitLog(accountId, jobId, completionMsg, "success");
-    console.log(`[deep-scraper] Job ${jobId} complete (${job.mode || "outbound"}). ${completionMsg}`);
+    logger.info(`[deep-scraper] Job ${jobId} complete (${job.mode || "outbound"}). ${completionMsg}`);
   } catch (err) {
     if (!handle.paused && !handle.cancelled) {
       // 403 / token exhaustion → pause (not fail) so user can add tokens and resume
       if (err instanceof ApifyLimitError) {
-        console.log(`[deep-scraper] Job ${jobId} paused — Apify limit: ${err.message}`);
+        logger.info(`[deep-scraper] Job ${jobId} paused — Apify limit: ${err.message}`);
         if (job.current_apify_run_id && currentToken) {
           await abortApifyRun(job.current_apify_run_id, currentToken).catch(() => {});
         }
@@ -752,7 +753,7 @@ async function processJob(jobId) {
         emitStatus(accountId, jobId, "paused", { error: job.error });
         emitLog(accountId, jobId, job.error, "error");
       } else {
-        console.error(`[deep-scraper] Job ${jobId} failed:`, err.message);
+        logger.error(`[deep-scraper] Job ${jobId} failed:`, err.message);
         job.status = "failed";
         job.error = err.message;
         job.completed_at = new Date();
@@ -836,13 +837,13 @@ async function handleInterrupt(job, handle, accountId, jobId, apifyToken) {
     await job.save();
     emitStatus(accountId, jobId, "cancelled");
     emitLog(accountId, jobId, "Job cancelled", "warn");
-    console.log(`[deep-scraper] Job ${jobId} cancelled.`);
+    logger.info(`[deep-scraper] Job ${jobId} cancelled.`);
   } else if (handle.paused) {
     job.status = "paused";
     await job.save();
     emitStatus(accountId, jobId, "paused");
     emitLog(accountId, jobId, "Job paused", "warn");
-    console.log(`[deep-scraper] Job ${jobId} paused.`);
+    logger.info(`[deep-scraper] Job ${jobId} paused.`);
   }
 
   activeJobs.delete(jobId);

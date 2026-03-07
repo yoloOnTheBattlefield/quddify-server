@@ -1,3 +1,5 @@
+const escapeRegex = require("../utils/escapeRegex");
+const logger = require("../utils/logger").child({ module: "outbound-leads" });
 const express = require("express");
 const multer = require("multer");
 const OutboundLead = require("../models/OutboundLead");
@@ -7,6 +9,8 @@ const Prompt = require("../models/Prompt");
 const { parseXlsx } = require("../services/uploadService");
 const { toBoolean } = require("../utils/normalize");
 const { applyColumnMapping, DEFAULT_COLUMN_MAPPING } = require("../utils/columnMapping");
+const validate = require("../middleware/validate");
+const { bulkDeleteSchema, patchLeadSchema } = require("../schemas/outbound-leads");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -104,7 +108,7 @@ async function processImportJob(jobId, rows, { promptDoc, campaign, accountId, c
             job.campaignLeadsCreated++;
           } catch (clErr) {
             if (clErr.code !== 11000) {
-              console.error("CampaignLead create error:", clErr.message);
+              logger.error("CampaignLead create error:", clErr.message);
             }
           }
         }
@@ -140,7 +144,7 @@ async function processImportJob(jobId, rows, { promptDoc, campaign, accountId, c
     job.step = "Done";
     job.completedAt = Date.now();
   } catch (err) {
-    console.error("Import job error:", err);
+    logger.error("Import job error:", err);
     job.status = "error";
     job.step = err.message || "Unknown error";
     job.completedAt = Date.now();
@@ -191,8 +195,8 @@ router.get("/", async (req, res) => {
   if (search) {
     const searchCondition = {
       $or: [
-        { username: { $regex: search, $options: "i" } },
-        { fullName: { $regex: search, $options: "i" } },
+        { username: { $regex: escapeRegex(search), $options: "i" } },
+        { fullName: { $regex: escapeRegex(search), $options: "i" } },
       ],
     };
     filter.$and = filter.$and || [];
@@ -241,7 +245,7 @@ router.get("/sources", async (req, res) => {
     }
     res.json({ sources: [...normalized].sort() });
   } catch (err) {
-    console.error("Sources error:", err);
+    logger.error("Sources error:", err);
     res.status(500).json({ error: "Failed to fetch sources" });
   }
 });
@@ -276,7 +280,7 @@ router.get("/stats", async (req, res) => {
       contract_value: contractData.total,
     });
   } catch (err) {
-    console.error("Stats error:", err);
+    logger.error("Stats error:", err);
     res.status(500).json({ error: "Failed to fetch stats" });
   }
 });
@@ -341,7 +345,7 @@ router.post("/import-xlsx", upload.single("file"), async (req, res) => {
     // Process in background
     processImportJob(jobId, rows, { promptDoc, campaign, accountId, columnMapping });
   } catch (err) {
-    console.error("Import XLSX error:", err);
+    logger.error("Import XLSX error:", err);
     res.status(500).json({ error: "Failed to import XLSX" });
   }
 });
@@ -365,7 +369,7 @@ router.get("/import-xlsx/status/:jobId", (req, res) => {
 });
 
 // POST /outbound-leads/bulk-delete — delete multiple leads by IDs or by filter
-router.post("/bulk-delete", async (req, res) => {
+router.post("/bulk-delete", validate(bulkDeleteSchema), async (req, res) => {
   try {
     const { ids, all, filters } = req.body;
     const accountId = req.account._id;
@@ -386,8 +390,8 @@ router.post("/bulk-delete", async (req, res) => {
       else if (filters.qualified === "false") deleteFilter.qualified = false;
       if (filters.search) {
         deleteFilter.$or = [
-          { username: { $regex: filters.search, $options: "i" } },
-          { fullName: { $regex: filters.search, $options: "i" } },
+          { username: { $regex: escapeRegex(filters.search), $options: "i" } },
+          { fullName: { $regex: escapeRegex(filters.search), $options: "i" } },
         ];
       }
     } else if (ids && Array.isArray(ids) && ids.length > 0) {
@@ -407,7 +411,7 @@ router.post("/bulk-delete", async (req, res) => {
 
     res.json({ deleted: result.deletedCount });
   } catch (err) {
-    console.error("Bulk delete error:", err);
+    logger.error("Bulk delete error:", err);
     res.status(500).json({ error: "Failed to delete leads" });
   }
 });
@@ -420,7 +424,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // PATCH /outbound-leads/:id
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", validate(patchLeadSchema), async (req, res) => {
   // Auto-set timestamps when boolean flags are toggled
   if (req.body.link_sent === true && !req.body.link_sent_at) req.body.link_sent_at = new Date();
   if (req.body.link_sent === false) req.body.link_sent_at = null;

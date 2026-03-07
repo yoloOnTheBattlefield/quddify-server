@@ -1,3 +1,5 @@
+const escapeRegex = require("../utils/escapeRegex");
+const logger = require("../utils/logger").child({ module: "outbound-accounts" });
 const express = require("express");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
@@ -18,10 +20,10 @@ router.get("/", async (req, res) => {
     if (assignedTo) filter.assignedTo = { $regex: assignedTo, $options: "i" };
     if (search) {
       filter.$or = [
-        { username: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { assignedTo: { $regex: search, $options: "i" } },
-        { proxy: { $regex: search, $options: "i" } },
+        { username: { $regex: escapeRegex(search), $options: "i" } },
+        { email: { $regex: escapeRegex(search), $options: "i" } },
+        { assignedTo: { $regex: escapeRegex(search), $options: "i" } },
+        { proxy: { $regex: escapeRegex(search), $options: "i" } },
       ];
     }
 
@@ -66,7 +68,7 @@ router.get("/", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("List outbound accounts error:", err);
+    logger.error("List outbound accounts error:", err);
     res.status(500).json({ error: "Failed to list outbound accounts" });
   }
 });
@@ -111,7 +113,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(account.toObject());
   } catch (err) {
-    console.error("Create outbound account error:", err);
+    logger.error("Create outbound account error:", err);
     res.status(500).json({ error: "Failed to create outbound account" });
   }
 });
@@ -134,7 +136,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(account);
   } catch (err) {
-    console.error("Get outbound account error:", err);
+    logger.error("Get outbound account error:", err);
     res.status(500).json({ error: "Failed to get outbound account" });
   }
 });
@@ -183,7 +185,7 @@ router.patch("/:id", async (req, res) => {
     if (err.code === 11000) {
       return res.status(409).json({ error: "This username already exists" });
     }
-    console.error("Update outbound account error:", err);
+    logger.error("Update outbound account error:", err);
     res.status(500).json({ error: "Failed to update outbound account" });
   }
 });
@@ -209,7 +211,7 @@ router.post("/:id/token", async (req, res) => {
 
     res.json({ browser_token: token });
   } catch (err) {
-    console.error("Generate token error:", err);
+    logger.error("Generate token error:", err);
     res.status(500).json({ error: "Failed to generate token" });
   }
 });
@@ -246,7 +248,7 @@ router.delete("/:id/token", async (req, res) => {
 
     res.json({ revoked: true });
   } catch (err) {
-    console.error("Revoke token error:", err);
+    logger.error("Revoke token error:", err);
     res.status(500).json({ error: "Failed to revoke token" });
   }
 });
@@ -277,7 +279,7 @@ router.patch("/me/status", async (req, res) => {
 
     res.json(account);
   } catch (err) {
-    console.error("Extension set status error:", err);
+    logger.error("Extension set status error:", err);
     res.status(500).json({ error: "Failed to update status" });
   }
 });
@@ -300,7 +302,7 @@ router.delete("/:id", async (req, res) => {
 
     res.json({ deleted: true });
   } catch (err) {
-    console.error("Delete outbound account error:", err);
+    logger.error("Delete outbound account error:", err);
     res.status(500).json({ error: "Failed to delete outbound account" });
   }
 });

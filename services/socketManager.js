@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "socketManager" });
 const { Server } = require("socket.io");
 const Account = require("../models/Account");
 const SenderAccount = require("../models/SenderAccount");
@@ -24,13 +25,13 @@ function init(httpServer, allowedOrigins) {
   });
 
   io.on("connection", (socket) => {
-    console.log(`[socket] Client connected: ${socket.id}`);
+    logger.info(`[socket] Client connected: ${socket.id}`);
 
     // Dashboard joins by account_id directly
     socket.on("join:account", (accountId) => {
       if (accountId) {
         socket.join(`account:${accountId}`);
-        console.log(`[socket] ${socket.id} joined account:${accountId}`);
+        logger.info(`[socket] ${socket.id} joined account:${accountId}`);
       }
     });
 
@@ -95,7 +96,7 @@ function init(httpServer, allowedOrigins) {
             ig_username: outbound.username,
           });
 
-          console.log(
+          logger.info(
             `[socket] ${socket.id} authed via token → sender ${outbound.username} → account:${account._id}`,
           );
           return;
@@ -142,17 +143,17 @@ function init(httpServer, allowedOrigins) {
             ig_username: igUsername,
           });
 
-          console.log(
+          logger.info(
             `[socket] ${socket.id} authed as sender ${igUsername} → account:${account._id}`,
           );
         } else {
           socket.emit("auth:ok", { account_id: account._id });
-          console.log(
+          logger.info(
             `[socket] ${socket.id} authed via API key → account:${account._id}`,
           );
         }
       } catch (err) {
-        console.error("[socket] auth:apikey error:", err);
+        logger.error("[socket] auth:apikey error:", err);
         socket.emit("auth:error", { error: "Auth failed" });
       }
     });
@@ -163,12 +164,12 @@ function init(httpServer, allowedOrigins) {
       const accountRoom = rooms.find((r) => r.startsWith("account:"));
       if (accountRoom) {
         io.to(accountRoom).emit("ext:pong", data);
-        console.log(`[socket] ext:pong from ${socket.id} → ${accountRoom}`);
+        logger.info(`[socket] ext:pong from ${socket.id} → ${accountRoom}`);
       }
     });
 
     socket.on("disconnect", async () => {
-      console.log(`[socket] Client disconnected: ${socket.id}`);
+      logger.info(`[socket] Client disconnected: ${socket.id}`);
 
       const senderInfo = senderSockets.get(socket.id);
       if (senderInfo) {
@@ -187,7 +188,7 @@ function init(httpServer, allowedOrigins) {
             sender_id: senderInfo.senderId,
           });
         } catch (err) {
-          console.error("[socket] disconnect sender update error:", err);
+          logger.error("[socket] disconnect sender update error:", err);
         }
       }
     });
@@ -206,7 +207,7 @@ function emitToAccount(accountId, event, data) {
   io.to(room).emit(event, data);
 
   if (memberCount === 0) {
-    console.warn(`[socket] emitToAccount: no sockets in room ${room} for event ${event}`);
+    logger.warn(`[socket] emitToAccount: no sockets in room ${room} for event ${event}`);
     return false;
   }
 
@@ -222,7 +223,7 @@ function emitToSender(senderId, event, data) {
       return true;
     }
   }
-  console.warn(`[socket] emitToSender: no socket found for sender ${sid} (event: ${event})`);
+  logger.warn(`[socket] emitToSender: no socket found for sender ${sid} (event: ${event})`);
   return false;
 }
 

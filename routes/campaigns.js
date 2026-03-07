@@ -1,3 +1,5 @@
+const escapeRegex = require("../utils/escapeRegex");
+const logger = require("../utils/logger").child({ module: "campaigns" });
 const express = require("express");
 const mongoose = require("mongoose");
 const OpenAI = require("openai");
@@ -9,8 +11,11 @@ const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
 const OutboundAccount = require("../models/OutboundAccount");
 const Account = require("../models/Account");
+const { decrypt } = require("../utils/crypto");
 const { emitToAccount } = require("../services/socketManager");
 const { isWithinActiveHours, calculateDelay } = require("../services/campaignScheduler");
+const validate = require("../middleware/validate");
+const { createCampaignSchema, patchCampaignSchema } = require("../schemas/campaigns");
 const router = express.Router();
 
 // Model IDs used per AI provider
@@ -51,7 +56,7 @@ router.get("/", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("List campaigns error:", err);
+    logger.error("List campaigns error:", err);
     res.status(500).json({ error: "Failed to list campaigns" });
   }
 });
@@ -152,7 +157,7 @@ router.get("/:id/next-send", async (req, res) => {
         : null,
     });
   } catch (err) {
-    console.error("Next send estimate error:", err);
+    logger.error("Next send estimate error:", err);
     res.status(500).json({ error: "Failed to compute next send estimate" });
   }
 });
@@ -333,7 +338,7 @@ router.get("/:id/senders", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Campaign senders error:", err);
+    logger.error("Campaign senders error:", err);
     res.status(500).json({ error: "Failed to get sender details" });
   }
 });
@@ -356,13 +361,13 @@ router.get("/:id", async (req, res) => {
 
     res.json(campaign);
   } catch (err) {
-    console.error("Get campaign error:", err);
+    logger.error("Get campaign error:", err);
     res.status(500).json({ error: "Failed to get campaign" });
   }
 });
 
 // POST /api/campaigns — create campaign (starts as draft)
-router.post("/", async (req, res) => {
+router.post("/", validate(createCampaignSchema), async (req, res) => {
   try {
     const { name, mode, messages, outbound_account_ids, schedule, daily_limit_per_sender } = req.body;
 
@@ -386,13 +391,13 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(campaign);
   } catch (err) {
-    console.error("Create campaign error:", err);
+    logger.error("Create campaign error:", err);
     res.status(500).json({ error: "Failed to create campaign" });
   }
 });
 
 // PATCH /api/campaigns/:id — update settings (only draft/paused)
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", validate(patchCampaignSchema), async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ error: "Invalid campaign ID" });
@@ -445,7 +450,7 @@ router.patch("/:id", async (req, res) => {
     await campaign.save();
     res.json(campaign);
   } catch (err) {
-    console.error("Update campaign error:", err);
+    logger.error("Update campaign error:", err);
     res.status(500).json({ error: "Failed to update campaign" });
   }
 });
@@ -475,7 +480,7 @@ router.delete("/:id", async (req, res) => {
 
     res.json({ deleted: true });
   } catch (err) {
-    console.error("Delete campaign error:", err);
+    logger.error("Delete campaign error:", err);
     res.status(500).json({ error: "Failed to delete campaign" });
   }
 });
@@ -536,7 +541,7 @@ router.post("/:id/start", async (req, res) => {
 
     res.json({ success: true, status: "active" });
   } catch (err) {
-    console.error("Start campaign error:", err);
+    logger.error("Start campaign error:", err);
     res.status(500).json({ error: "Failed to start campaign" });
   }
 });
@@ -568,7 +573,7 @@ router.post("/:id/pause", async (req, res) => {
 
     res.json({ success: true, status: "paused" });
   } catch (err) {
-    console.error("Pause campaign error:", err);
+    logger.error("Pause campaign error:", err);
     res.status(500).json({ error: "Failed to pause campaign" });
   }
 });
@@ -603,7 +608,7 @@ router.get("/:id/stats", async (req, res) => {
 
     res.json({ ...campaign.stats, replied: repliedCount, booked: bookedCount, without_message: withoutMessageCount });
   } catch (err) {
-    console.error("Campaign stats error:", err);
+    logger.error("Campaign stats error:", err);
     res.status(500).json({ error: "Failed to get stats" });
   }
 });
@@ -655,7 +660,7 @@ router.post("/:id/recalc-stats", async (req, res) => {
 
     res.json(stats);
   } catch (err) {
-    console.error("Campaign recalc-stats error:", err);
+    logger.error("Campaign recalc-stats error:", err);
     res.status(500).json({ error: "Failed to recalculate stats" });
   }
 });
@@ -743,7 +748,7 @@ router.post("/:id/leads/retry", async (req, res) => {
 
     res.json({ retried: totalRetried, statusChanged: campaign.status === "completed" ? "paused" : null });
   } catch (err) {
-    console.error("Retry campaign leads error:", err);
+    logger.error("Retry campaign leads error:", err);
     res.status(500).json({ error: "Failed to retry leads" });
   }
 });
@@ -828,7 +833,7 @@ router.patch("/:id/leads/:leadId/status", async (req, res) => {
 
     res.json(updated);
   } catch (err) {
-    console.error("Manual status override error:", err);
+    logger.error("Manual status override error:", err);
     res.status(500).json({ error: "Failed to update lead status" });
   }
 });
@@ -884,7 +889,7 @@ router.post("/:id/leads", async (req, res) => {
 
     res.status(201).json({ added: inserted, duplicates_skipped: lead_ids.length - inserted });
   } catch (err) {
-    console.error("Add campaign leads error:", err);
+    logger.error("Add campaign leads error:", err);
     res.status(500).json({ error: "Failed to add leads" });
   }
 });
@@ -920,7 +925,7 @@ router.delete("/:id/leads", async (req, res) => {
 
     res.json({ removed: result.deletedCount });
   } catch (err) {
-    console.error("Remove campaign leads error:", err);
+    logger.error("Remove campaign leads error:", err);
     res.status(500).json({ error: "Failed to remove leads" });
   }
 });
@@ -981,7 +986,7 @@ router.post("/:id/leads/remove", async (req, res) => {
 
     res.json({ removed: result.deletedCount });
   } catch (err) {
-    console.error("Remove selected campaign leads error:", err);
+    logger.error("Remove selected campaign leads error:", err);
     res.status(500).json({ error: "Failed to remove leads" });
   }
 });
@@ -1017,7 +1022,7 @@ router.get("/:id/leads", async (req, res) => {
     // Search by outbound lead username or fullName
     if (search) {
       const matchingLeadIds = await OutboundLead.find(
-        { $or: [{ username: { $regex: search, $options: "i" } }, { fullName: { $regex: search, $options: "i" } }] },
+        { $or: [{ username: { $regex: escapeRegex(search), $options: "i" } }, { fullName: { $regex: escapeRegex(search), $options: "i" } }] },
         { _id: 1 },
       ).lean();
       filter.outbound_lead_id = { $in: matchingLeadIds.map((l) => l._id) };
@@ -1048,7 +1053,7 @@ router.get("/:id/leads", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("List campaign leads error:", err);
+    logger.error("List campaign leads error:", err);
     res.status(500).json({ error: "Failed to list leads" });
   }
 });
@@ -1129,7 +1134,7 @@ router.post("/:id/duplicate", async (req, res) => {
       leads_copied: leadsCopied,
     });
   } catch (err) {
-    console.error("Duplicate campaign error:", err);
+    logger.error("Duplicate campaign error:", err);
     res.status(500).json({ error: "Failed to duplicate campaign" });
   }
 });
@@ -1158,7 +1163,7 @@ router.patch("/:id/ai-prompt", async (req, res) => {
 
     res.json({ prompt: campaign.ai_personalization?.prompt || null });
   } catch (err) {
-    console.error("Save AI prompt error:", err);
+    logger.error("Save AI prompt error:", err);
     res.status(500).json({ error: "Failed to save prompt" });
   }
 });
@@ -1207,14 +1212,14 @@ router.post("/:id/preview-message", async (req, res) => {
     let generatedMessage;
 
     if (provider === "gemini") {
-      const apiKey = (account && account.gemini_token) || process.env.GEMINI;
+      const apiKey = (account && decrypt(account.gemini_token)) || process.env.GEMINI;
       if (!apiKey) return res.status(400).json({ error: "No Gemini API key configured" });
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: prompt.trim() });
       const result = await model.generateContent(leadContext);
       generatedMessage = result.response.text()?.trim();
     } else if (provider === "claude") {
-      const apiKey = (account && account.claude_token) || process.env.CLAUDE;
+      const apiKey = (account && decrypt(account.claude_token)) || process.env.CLAUDE;
       if (!apiKey) return res.status(400).json({ error: "No Claude API key configured" });
       const anthropic = new Anthropic({ apiKey });
       const response = await anthropic.messages.create({
@@ -1225,7 +1230,7 @@ router.post("/:id/preview-message", async (req, res) => {
       });
       generatedMessage = response.content[0]?.text?.trim();
     } else {
-      const apiKey = (account && account.openai_token) || process.env.OPENAI;
+      const apiKey = (account && decrypt(account.openai_token)) || process.env.OPENAI;
       if (!apiKey) return res.status(400).json({ error: "No OpenAI API key configured" });
       const openai = new OpenAI({ apiKey });
       const response = await openai.chat.completions.create({
@@ -1245,7 +1250,7 @@ router.post("/:id/preview-message", async (req, res) => {
       generated_message: generatedMessage || null,
     });
   } catch (err) {
-    console.error("Preview message error:", err);
+    logger.error("Preview message error:", err);
     res.status(500).json({ error: err.message || "Failed to generate preview" });
   }
 });
@@ -1321,7 +1326,7 @@ router.post("/:id/generate-messages", async (req, res) => {
         const useClaude = provider === "claude";
 
         if (useGemini) {
-          const apiKey = (account && account.gemini_token) || process.env.GEMINI;
+          const apiKey = (account && decrypt(account.gemini_token)) || process.env.GEMINI;
           if (!apiKey) {
             await Campaign.findByIdAndUpdate(campaign._id, {
               $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No Gemini API key configured" },
@@ -1334,7 +1339,7 @@ router.post("/:id/generate-messages", async (req, res) => {
           }
           aiClient = new GoogleGenerativeAI(apiKey);
         } else if (useClaude) {
-          const apiKey = (account && account.claude_token) || process.env.CLAUDE;
+          const apiKey = (account && decrypt(account.claude_token)) || process.env.CLAUDE;
           if (!apiKey) {
             await Campaign.findByIdAndUpdate(campaign._id, {
               $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No Claude API key configured" },
@@ -1347,7 +1352,7 @@ router.post("/:id/generate-messages", async (req, res) => {
           }
           aiClient = new Anthropic({ apiKey });
         } else {
-          const apiKey = (account && account.openai_token) || process.env.OPENAI;
+          const apiKey = (account && decrypt(account.openai_token)) || process.env.OPENAI;
           if (!apiKey) {
             await Campaign.findByIdAndUpdate(campaign._id, {
               $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No OpenAI API key configured" },
@@ -1438,9 +1443,9 @@ router.post("/:id/generate-messages", async (req, res) => {
           campaignId: campaign._id.toString(),
         });
 
-        console.log(`[ai-gen] Campaign ${campaign.name}: generated ${processed} messages`);
+        logger.info(`[ai-gen] Campaign ${campaign.name}: generated ${processed} messages`);
       } catch (err) {
-        console.error("[ai-gen] Generation error:", err);
+        logger.error("[ai-gen] Generation error:", err);
         await Campaign.findByIdAndUpdate(campaign._id, {
           $set: {
             "ai_personalization.status": "failed",
@@ -1455,7 +1460,7 @@ router.post("/:id/generate-messages", async (req, res) => {
       }
     })();
   } catch (err) {
-    console.error("Generate messages error:", err);
+    logger.error("Generate messages error:", err);
     res.status(500).json({ error: "Failed to start message generation" });
   }
 });
@@ -1506,7 +1511,7 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
     const leadContext = `Username: ${outboundLead.username || "N/A"}\nFull Name: ${fullName}\nBio: ${outboundLead.bio || "N/A"}`;
 
     if (useGemini) {
-      const apiKey = (account && account.gemini_token) || process.env.GEMINI;
+      const apiKey = (account && decrypt(account.gemini_token)) || process.env.GEMINI;
       if (!apiKey) return res.status(400).json({ error: "No Gemini API key configured" });
 
       const genAI = new GoogleGenerativeAI(apiKey);
@@ -1514,7 +1519,7 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
       const result = await model.generateContent(leadContext);
       generatedMessage = result.response.text()?.trim();
     } else if (useClaude) {
-      const apiKey = (account && account.claude_token) || process.env.CLAUDE;
+      const apiKey = (account && decrypt(account.claude_token)) || process.env.CLAUDE;
       if (!apiKey) return res.status(400).json({ error: "No Claude API key configured" });
 
       const anthropic = new Anthropic({ apiKey });
@@ -1526,7 +1531,7 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
       });
       generatedMessage = response.content[0]?.text?.trim();
     } else {
-      const apiKey = (account && account.openai_token) || process.env.OPENAI;
+      const apiKey = (account && decrypt(account.openai_token)) || process.env.OPENAI;
       if (!apiKey) return res.status(400).json({ error: "No OpenAI API key configured" });
 
       const openai = new OpenAI({ apiKey });
@@ -1556,7 +1561,7 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
 
     res.json(updated);
   } catch (err) {
-    console.error("Regenerate lead message error:", err);
+    logger.error("Regenerate lead message error:", err);
     res.status(500).json({ error: "Failed to regenerate message" });
   }
 });
@@ -1604,7 +1609,7 @@ router.patch("/:id/leads/:leadId/message", async (req, res) => {
 
     res.json(updated);
   } catch (err) {
-    console.error("Edit lead message error:", err);
+    logger.error("Edit lead message error:", err);
     res.status(500).json({ error: "Failed to edit message" });
   }
 });
@@ -1642,7 +1647,7 @@ router.post("/:id/clear-messages", async (req, res) => {
 
     res.json({ cleared: result.modifiedCount });
   } catch (err) {
-    console.error("Clear messages error:", err);
+    logger.error("Clear messages error:", err);
     res.status(500).json({ error: "Failed to clear messages" });
   }
 });

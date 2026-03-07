@@ -62,19 +62,19 @@ describe("POST /api/accounts/register", () => {
       .send({ email: "nopass@test.com" });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/missing/i);
+    expect(res.body.error).toMatch(/validation failed/i);
   });
 
   it("returns 400 for duplicate email", async () => {
     await User.create({
       email: "dupe@test.com",
-      password: await bcrypt.hash("pass", 10),
+      password: await bcrypt.hash("password123", 10),
       account_id: accountId,
     });
 
     const res = await request(app)
       .post("/api/accounts/register")
-      .send({ email: "dupe@test.com", password: "pass" });
+      .send({ email: "dupe@test.com", password: "password123" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/already exists/i);

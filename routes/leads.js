@@ -1,3 +1,5 @@
+const escapeRegex = require("../utils/escapeRegex");
+const logger = require("../utils/logger").child({ module: "leads" });
 const express = require("express");
 const Lead = require("../models/Lead");
 
@@ -16,7 +18,7 @@ router.get("/", async (req, res) => {
   } else if (req.account.ghl) {
     filter.account_id = req.account.ghl;
   }
-  if (search) filter.first_name = { $regex: search, $options: "i" };
+  if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
   if (status) {
     const statuses = Array.isArray(status) ? status : status.split(",");
     const statusConditions = statuses.map((s) => {
@@ -293,7 +295,7 @@ router.post("/generate", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Generate leads error:", error);
+    logger.error("Generate leads error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

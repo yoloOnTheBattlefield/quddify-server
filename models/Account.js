@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { encrypt, decrypt } = require("../utils/crypto");
 
 const AccountSchema = new mongoose.Schema(
   {
@@ -46,5 +47,36 @@ const AccountSchema = new mongoose.Schema(
   },
   { collection: "accounts", versionKey: false },
 );
+
+// ---------- Encryption helpers for sensitive tokens ----------
+
+const ENCRYPTED_FIELDS = [
+  "openai_token",
+  "claude_token",
+  "gemini_token",
+  "apify_token",
+  "calendly_token",
+  "ig_oauth.access_token",
+  "ig_oauth.page_access_token",
+];
+
+/**
+ * Encrypts a plaintext value for storage.
+ */
+AccountSchema.statics.encryptField = function (value) {
+  return encrypt(value);
+};
+
+/**
+ * Decrypts an encrypted value (returns plaintext if not encrypted).
+ */
+AccountSchema.statics.decryptField = function (value) {
+  return decrypt(value);
+};
+
+/**
+ * Returns the list of field paths that should be encrypted.
+ */
+AccountSchema.statics.ENCRYPTED_FIELDS = ENCRYPTED_FIELDS;
 
 module.exports = mongoose.model("Account", AccountSchema);

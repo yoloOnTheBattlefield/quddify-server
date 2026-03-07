@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "logs" });
 const express = require("express");
 const ExtensionLog = require("../models/ExtensionLog");
 const router = express.Router();
@@ -22,7 +23,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json({ success: true });
   } catch (err) {
-    console.error("Create log error:", err);
+    logger.error("Create log error:", err);
     res.status(500).json({ error: "Failed to create log" });
   }
 });
@@ -48,7 +49,7 @@ router.post("/batch", async (req, res) => {
     const created = await ExtensionLog.insertMany(docs);
     res.status(201).json({ success: true, count: created.length });
   } catch (err) {
-    console.error("Batch log error:", err);
+    logger.error("Batch log error:", err);
     res.status(500).json({ error: "Failed to create logs" });
   }
 });

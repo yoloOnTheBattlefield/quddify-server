@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "reply-checks" });
 const express = require("express");
 const OutboundLead = require("../models/OutboundLead");
 
@@ -29,7 +30,7 @@ router.get("/pending", async (req, res) => {
 
     res.json({ leads, count: leads.length });
   } catch (err) {
-    console.error("Reply checks pending error:", err);
+    logger.error("Reply checks pending error:", err);
     res.status(500).json({ error: "Failed to get pending reply checks" });
   }
 });
@@ -68,7 +69,7 @@ router.post("/results", async (req, res) => {
 
     res.json({ success: true, updated });
   } catch (err) {
-    console.error("Reply checks results error:", err);
+    logger.error("Reply checks results error:", err);
     res.status(500).json({ error: "Failed to update reply results" });
   }
 });

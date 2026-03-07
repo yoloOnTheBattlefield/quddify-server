@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "auth" });
 const jwt = require("jsonwebtoken");
 const Account = require("../models/Account");
 const OutboundAccount = require("../models/OutboundAccount");
@@ -99,7 +100,7 @@ async function auth(req, res, next) {
     if (err.name === "JsonWebTokenError" || err.name === "TokenExpiredError") {
       return res.status(401).json({ error: "Invalid or expired token" });
     }
-    console.error("Auth error:", err);
+    logger.error("Auth error:", err);
     res.status(500).json({ error: "Authentication failed" });
   }
 }

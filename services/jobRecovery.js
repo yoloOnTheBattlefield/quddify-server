@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "jobRecovery" });
 const QualificationJob = require("../models/QualificationJob");
 
 async function recoverStuckJobs() {
@@ -13,7 +14,7 @@ async function recoverStuckJobs() {
   );
 
   if (runningResult.modifiedCount > 0) {
-    console.log(
+    logger.info(
       `[jobRecovery] Marked ${runningResult.modifiedCount} stuck running job(s) as failed`,
     );
   }
@@ -31,7 +32,7 @@ async function recoverStuckJobs() {
   );
 
   if (queuedResult.modifiedCount > 0) {
-    console.log(
+    logger.info(
       `[jobRecovery] Marked ${queuedResult.modifiedCount} orphaned queued job(s) as failed`,
     );
   }

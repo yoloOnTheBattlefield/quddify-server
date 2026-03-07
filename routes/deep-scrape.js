@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "deep-scrape" });
 const express = require("express");
 const mongoose = require("mongoose");
 const DeepScrapeJob = require("../models/DeepScrapeJob");
@@ -7,11 +8,13 @@ const ResearchPost = require("../models/ResearchPost");
 const ResearchComment = require("../models/ResearchComment");
 const Prompt = require("../models/Prompt");
 const deepScraper = require("../services/deepScraper");
+const validate = require("../middleware/validate");
+const { startDeepScrapeSchema } = require("../schemas/deep-scrape");
 
 const router = express.Router();
 
 // POST /api/deep-scrape/start
-router.post("/start", async (req, res) => {
+router.post("/start", validate(startDeepScrapeSchema), async (req, res) => {
   try {
     const {
       name,
@@ -104,7 +107,7 @@ router.post("/start", async (req, res) => {
 
     res.status(201).json({ jobId: job._id, status: job.status });
   } catch (err) {
-    console.error("Deep scrape start error:", err);
+    logger.error("Deep scrape start error:", err);
     res.status(500).json({ error: "Failed to start deep scrape job" });
   }
 });
@@ -214,7 +217,7 @@ router.get("/target-stats", async (req, res) => {
       })),
     });
   } catch (err) {
-    console.error("Target stats error:", err);
+    logger.error("Target stats error:", err);
     res.status(500).json({ error: "Failed to compute target stats" });
   }
 });
@@ -544,7 +547,7 @@ router.patch("/:id", async (req, res) => {
 
     res.json(updated);
   } catch (err) {
-    console.error("Edit deep scrape job error:", err);
+    logger.error("Edit deep scrape job error:", err);
     res.status(500).json({ error: "Failed to update job" });
   }
 });

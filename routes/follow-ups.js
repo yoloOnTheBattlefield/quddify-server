@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "follow-ups" });
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
@@ -127,7 +128,7 @@ router.get("/", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("GET /api/follow-ups error:", err);
+    logger.error("GET /api/follow-ups error:", err);
     res.status(500).json({ error: "Failed to fetch follow-ups" });
   }
 });
@@ -175,7 +176,7 @@ router.get("/stats", async (req, res) => {
 
     res.json(counts);
   } catch (err) {
-    console.error("GET /api/follow-ups/stats error:", err);
+    logger.error("GET /api/follow-ups/stats error:", err);
     res.status(500).json({ error: "Failed to fetch stats" });
   }
 });
@@ -261,7 +262,7 @@ router.post("/sync", async (req, res) => {
 
     res.json({ synced: docs.length });
   } catch (err) {
-    console.error("POST /api/follow-ups/sync error:", err);
+    logger.error("POST /api/follow-ups/sync error:", err);
     res.status(500).json({ error: "Failed to sync follow-ups" });
   }
 });
@@ -288,7 +289,7 @@ router.patch("/:id", async (req, res) => {
 
     res.json(followUp);
   } catch (err) {
-    console.error("PATCH /api/follow-ups/:id error:", err);
+    logger.error("PATCH /api/follow-ups/:id error:", err);
     res.status(500).json({ error: "Failed to update follow-up" });
   }
 });

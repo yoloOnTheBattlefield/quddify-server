@@ -1,7 +1,9 @@
+const logger = require("../utils/logger").child({ module: "instagram-oauth" });
 const express = require("express");
 const router = express.Router();
 const Account = require("../models/Account");
 const OutboundAccount = require("../models/OutboundAccount");
+const { encrypt } = require("../utils/crypto");
 
 const IG_APP_ID = process.env.IG_APP_ID;
 const IG_APP_SECRET = process.env.IG_APP_SECRET;
@@ -21,7 +23,7 @@ async function exchangeCodeForToken(code, targetUsername = null) {
 
   const tokenResponse = await fetch(tokenUrl);
   const tokenData = await tokenResponse.json();
-  console.log("[ig-oauth] Token exchange response:", JSON.stringify(tokenData));
+  logger.info("[ig-oauth] Token exchange response:", JSON.stringify(tokenData));
 
   if (tokenData.error) {
     throw new Error(tokenData.error.message || "Token exchange failed");
@@ -34,7 +36,7 @@ async function exchangeCodeForToken(code, targetUsername = null) {
     `https://graph.facebook.com/v21.0/me/accounts?access_token=${accessToken}`,
   );
   const pagesData = await pagesResponse.json();
-  console.log("[ig-oauth] Pages response:", JSON.stringify(pagesData));
+  logger.info("[ig-oauth] Pages response:", JSON.stringify(pagesData));
 
   const allIgAccounts = [];
 
@@ -52,7 +54,7 @@ async function exchangeCodeForToken(code, targetUsername = null) {
       const profileData = await profileResponse.json();
       const username = profileData.username || null;
 
-      console.log(`[ig-oauth] Found IG account: @${username} (${igId}) on page ${page.id}`);
+      logger.info(`[ig-oauth] Found IG account: @${username} (${igId}) on page ${page.id}`);
       allIgAccounts.push({
         igUserId: igId,
         igUsername: username,
@@ -66,7 +68,7 @@ async function exchangeCodeForToken(code, targetUsername = null) {
     throw new Error("No Instagram Business account found linked to your Facebook pages");
   }
 
-  console.log(`[ig-oauth] Found ${allIgAccounts.length} IG account(s): ${allIgAccounts.map(a => `@${a.igUsername}`).join(", ")}`);
+  logger.info(`[ig-oauth] Found ${allIgAccounts.length} IG account(s): ${allIgAccounts.map(a => `@${a.igUsername}`).join(", ")}`);
 
   // 3. Select the right IG account
   let selected;
@@ -77,7 +79,7 @@ async function exchangeCodeForToken(code, targetUsername = null) {
       const available = allIgAccounts.map(a => `@${a.igUsername}`).join(", ");
       throw new Error(`No IG account matching @${targetUsername} found. Available: ${available}`);
     }
-    console.log(`[ig-oauth] Matched target @${targetUsername} → @${selected.igUsername} (${selected.igUserId})`);
+    logger.info(`[ig-oauth] Matched target @${targetUsername} → @${selected.igUsername} (${selected.igUserId})`);
   } else {
     selected = allIgAccounts[0];
   }
@@ -95,7 +97,7 @@ async function exchangeCodeForToken(code, targetUsername = null) {
     },
   );
   const subscribeData = await subscribeResponse.json();
-  console.log("[ig-oauth] Page webhook subscription:", JSON.stringify(subscribeData));
+  logger.info("[ig-oauth] Page webhook subscription:", JSON.stringify(subscribeData));
 
   return { accessToken, ...selected };
 }
@@ -134,8 +136,8 @@ router.post("/callback", async (req, res) => {
 
     await Account.findByIdAndUpdate(req.account._id, {
       $set: {
-        "ig_oauth.access_token": accessToken,
-        "ig_oauth.page_access_token": pageAccessToken,
+        "ig_oauth.access_token": encrypt(accessToken),
+        "ig_oauth.page_access_token": encrypt(pageAccessToken),
         "ig_oauth.page_id": pageId,
         "ig_oauth.ig_user_id": igUserId,
         "ig_oauth.ig_username": igUsername,
@@ -143,10 +145,10 @@ router.post("/callback", async (req, res) => {
       },
     });
 
-    console.log(`[ig-oauth] Connected @${igUsername} (${igUserId}) to account ${req.account._id}`);
+    logger.info(`[ig-oauth] Connected @${igUsername} (${igUserId}) to account ${req.account._id}`);
     res.json({ success: true, ig_username: igUsername, ig_user_id: igUserId });
   } catch (err) {
-    console.error("[ig-oauth] Callback error:", err);
+    logger.error("[ig-oauth] Callback error:", err);
     res.status(400).json({ error: err.message || "Failed to complete Instagram authorization" });
   }
 });
@@ -163,10 +165,10 @@ router.delete("/disconnect", async (req, res) => {
       },
     });
 
-    console.log(`[ig-oauth] Disconnected Instagram from account ${req.account._id}`);
+    logger.info(`[ig-oauth] Disconnected Instagram from account ${req.account._id}`);
     res.json({ success: true });
   } catch (err) {
-    console.error("[ig-oauth] Disconnect error:", err);
+    logger.error("[ig-oauth] Disconnect error:", err);
     res.status(500).json({ error: "Failed to disconnect Instagram" });
   }
 });
@@ -192,8 +194,8 @@ router.post("/outbound/:id/callback", async (req, res) => {
 
     await OutboundAccount.findByIdAndUpdate(outboundAccount._id, {
       $set: {
-        "ig_oauth.access_token": accessToken,
-        "ig_oauth.page_access_token": pageAccessToken,
+        "ig_oauth.access_token": encrypt(accessToken),
+        "ig_oauth.page_access_token": encrypt(pageAccessToken),
         "ig_oauth.page_id": pageId,
         "ig_oauth.ig_user_id": igUserId,
         "ig_oauth.ig_username": igUsername,
@@ -201,12 +203,12 @@ router.post("/outbound/:id/callback", async (req, res) => {
       },
     });
 
-    console.log(
+    logger.info(
       `[ig-oauth] Connected @${igUsername} to outbound account ${outboundAccount._id} (${outboundAccount.username})`,
     );
     res.json({ success: true, ig_username: igUsername, ig_user_id: igUserId });
   } catch (err) {
-    console.error("[ig-oauth] Outbound callback error:", err);
+    logger.error("[ig-oauth] Outbound callback error:", err);
     res.status(400).json({ error: err.message || "Failed to complete Instagram authorization" });
   }
 });
@@ -230,10 +232,10 @@ router.delete("/outbound/:id/disconnect", async (req, res) => {
       return res.status(404).json({ error: "Outbound account not found" });
     }
 
-    console.log(`[ig-oauth] Disconnected Instagram from outbound account ${req.params.id}`);
+    logger.info(`[ig-oauth] Disconnected Instagram from outbound account ${req.params.id}`);
     res.json({ success: true });
   } catch (err) {
-    console.error("[ig-oauth] Outbound disconnect error:", err);
+    logger.error("[ig-oauth] Outbound disconnect error:", err);
     res.status(500).json({ error: "Failed to disconnect Instagram" });
   }
 });

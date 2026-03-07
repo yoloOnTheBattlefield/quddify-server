@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "warmup" });
 const express = require("express");
 const mongoose = require("mongoose");
 const OutboundAccount = require("../models/OutboundAccount");
@@ -84,7 +85,7 @@ router.get("/:outboundAccountId", async (req, res) => {
       checklistProgress: { completed, total: checklist.length },
     });
   } catch (err) {
-    console.error("Get warmup status error:", err);
+    logger.error("Get warmup status error:", err);
     res.status(500).json({ error: "Failed to get warmup status" });
   }
 });
@@ -136,7 +137,7 @@ router.post("/:outboundAccountId/start", async (req, res) => {
 
     res.json(account.toObject());
   } catch (err) {
-    console.error("Start warmup error:", err);
+    logger.error("Start warmup error:", err);
     res.status(500).json({ error: "Failed to start warmup" });
   }
 });
@@ -176,7 +177,7 @@ router.post("/:outboundAccountId/stop", async (req, res) => {
 
     res.json(account);
   } catch (err) {
-    console.error("Stop warmup error:", err);
+    logger.error("Stop warmup error:", err);
     res.status(500).json({ error: "Failed to stop warmup" });
   }
 });
@@ -227,7 +228,7 @@ router.patch("/:outboundAccountId/checklist/:key", async (req, res) => {
 
     res.json(account.toObject());
   } catch (err) {
-    console.error("Toggle checklist error:", err);
+    logger.error("Toggle checklist error:", err);
     res.status(500).json({ error: "Failed to toggle checklist item" });
   }
 });
@@ -272,7 +273,7 @@ router.get("/:outboundAccountId/logs", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Get warmup logs error:", err);
+    logger.error("Get warmup logs error:", err);
     res.status(500).json({ error: "Failed to get warmup logs" });
   }
 });

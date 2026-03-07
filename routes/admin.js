@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "admin" });
 const express = require("express");
 const mongoose = require("mongoose");
 
@@ -67,7 +68,7 @@ router.post("/migration-counts", async (req, res) => {
 
     res.json({ counts });
   } catch (err) {
-    console.error("[admin] Migration counts failed:", err);
+    logger.error("[admin] Migration counts failed:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -370,7 +371,7 @@ router.post("/migrate-scrape-data", async (req, res) => {
 
     res.json({ success: true, summary });
   } catch (err) {
-    console.error("[admin] Migration failed:", err);
+    logger.error("[admin] Migration failed:", err);
     res.status(500).json({ error: err.message, summary });
   } finally {
     if (targetConn && !useSameDb) {

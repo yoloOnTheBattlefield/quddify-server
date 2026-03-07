@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "health" });
 const express = require("express");
 const mongoose = require("mongoose");
 const Task = require("../models/Task");
@@ -49,7 +50,7 @@ router.get("/stats", async (req, res) => {
       stats || { total: 0, pending: 0, in_progress: 0, completed: 0, failed: 0 },
     );
   } catch (err) {
-    console.error("Stats error:", err);
+    logger.error("Stats error:", err);
     res.status(500).json({ error: "Failed to get stats" });
   }
 });

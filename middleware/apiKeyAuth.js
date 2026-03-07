@@ -1,3 +1,4 @@
+const logger = require("../utils/logger").child({ module: "apiKeyAuth" });
 const Account = require("../models/Account");
 
 async function apiKeyAuth(req, res, next) {
@@ -30,7 +31,7 @@ async function apiKeyAuth(req, res, next) {
     req.account = account;
     next();
   } catch (err) {
-    console.error("API key auth error:", err);
+    logger.error("API key auth error:", err);
     res.status(500).json({ error: "Authentication failed" });
   }
 }
