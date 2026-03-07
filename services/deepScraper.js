@@ -15,6 +15,8 @@ const REEL_SCRAPER = "apify~instagram-reel-scraper";
 const POST_SCRAPER = "apify~instagram-post-scraper";
 const COMMENT_SCRAPER = "SbK00X0JYCPblD2wp";
 const PROFILE_SCRAPER = "dSCLg0C3YEZ83HzYX";
+const LIKER_SCRAPER = "datadoping~instagram-likes-scraper";
+const FOLLOWERS_SCRAPER = "scraping_solutions~instagram-scraper-followers-following-no-cookies";
 
 const APIFY_BASE = "https://api.apify.com/v2";
 
@@ -290,9 +292,10 @@ async function processJob(jobId) {
     const contentLabel = job.scrape_type === "posts" ? "posts" : "reels";
     const contentActor = job.scrape_type === "posts" ? POST_SCRAPER : REEL_SCRAPER;
     const isDirectUrlJob = Array.isArray(job.direct_urls) && job.direct_urls.length > 0;
+    const hasPostBasedSources = job.scrape_comments !== false || job.scrape_likers;
 
     // ── Direct URL mode: pre-populate reel URLs, skip reel scraping ──
-    if (isDirectUrlJob && !seedsWithReels.has("__direct__")) {
+    if (hasPostBasedSources && isDirectUrlJob && !seedsWithReels.has("__direct__")) {
       emitLog(accountId, jobId, `Direct URL mode: ${job.direct_urls.length} URL(s) provided, skipping ${contentLabel} scraping`);
       for (const url of job.direct_urls) {
         allReelUrls.push(url);
@@ -313,8 +316,8 @@ async function processJob(jobId) {
     for (const seed of seedsList) {
       if (handle.cancelled || handle.paused) break;
 
-      // ── Scrape reels/posts for this seed (skip if already done) ──
-      if (!seedsWithReels.has(seed)) {
+      // ── Scrape reels/posts for this seed (skip if already done or no post-based sources) ──
+      if (hasPostBasedSources && !seedsWithReels.has(seed)) {
         job.status = "scraping_reels";
         await job.save();
         emitStatus(accountId, jobId, "scraping_reels");
@@ -426,7 +429,8 @@ async function processJob(jobId) {
 
       if (handle.cancelled || handle.paused) break;
 
-      // ── Pipeline: process each reel belonging to this seed ──
+      // ── Pipeline: process each reel belonging to this seed (skip if no post-based sources) ──
+      if (hasPostBasedSources)
       for (let i = 0; i < allReelUrls.length; i++) {
         if (allReelSeeds[i] !== seed) continue;
         if (i < (job.comments_fetched_index || 0)) continue; // Already processed
@@ -442,7 +446,11 @@ async function processJob(jobId) {
           continue;
         }
 
-        // ── 1. Scrape comments for this reel ──
+        // Unified set of usernames from comments + likers for this reel
+        const reelUsers = new Set();
+
+        // ── 1a. Scrape comments for this reel (if enabled) ──
+        if (job.scrape_comments !== false) {
         job.status = "scraping_comments";
         await job.save();
         emitStatus(accountId, jobId, "scraping_comments");
@@ -472,11 +480,8 @@ async function processJob(jobId) {
         logger.info(`[deep-scraper] Reel ${i + 1}: got ${comments.length} comments`);
 
         if (comments.length === 0 && completedCommentRun.status === "FAILED") {
-          emitLog(accountId, jobId, `Reel ${i + 1}: comment scraper failed with no data, skipping reel`, "error");
-          job.comments_fetched_index = i + 1;
-          await job.save();
-          continue;
-        }
+          emitLog(accountId, jobId, `Reel ${i + 1}: comment scraper failed with no data`, "error");
+        } else {
 
         // Find the ResearchPost for this reel
         const researchPost = await ResearchPost.findOne({
@@ -485,12 +490,11 @@ async function processJob(jobId) {
         }).lean();
 
         // Save comments + collect unique commenters
-        const reelCommenters = new Set();
         const commentDocs = [];
         for (const c of comments) {
           const username = c.ownerUsername || c.username || c.owner?.username || "";
           if (!username) continue;
-          reelCommenters.add(username);
+          reelUsers.add(username);
           commentDocs.push({
             account_id: job.account_id,
             research_post_id: researchPost?._id || null,
@@ -512,17 +516,76 @@ async function processJob(jobId) {
           }
         }
 
-        // Update unique commenter tracking
-        for (const u of reelCommenters) seenCommenters.add(u);
-
         job.stats.comments_scraped += comments.length;
-        job.stats.unique_commenters = seenCommenters.size;
-        emitLog(accountId, jobId, `Reel ${i + 1}: ${comments.length} comments, ${reelCommenters.size} commenters`);
+        job.stats.unique_commenters = reelUsers.size;
+        emitLog(accountId, jobId, `Reel ${i + 1}: ${comments.length} comments, ${reelUsers.size} commenters`);
+        } // end comment data block
+        } // end scrape_comments
 
-        // ── 2. Dedup commenters, enrich profiles, qualify (outbound only) ──
+        if (handle.cancelled || handle.paused) break;
+
+        // ── 1b. Scrape likers for this reel (if enabled) ──
+        if (job.scrape_likers) {
+          job.status = "scraping_likers";
+          await job.save();
+          emitStatus(accountId, jobId, "scraping_likers");
+          emitLog(accountId, jobId, `Scraping likers for ${contentLabel === "posts" ? "post" : "reel"} ${i + 1}/${allReelUrls.length}${seed !== "__direct__" ? ` (@${seed})` : ""}`);
+
+          const { run: likerRun, tokenValue: likerToken } = await startApifyRunWithRotation(
+            LIKER_SCRAPER,
+            { urls: [reelUrl] },
+            job.account_id,
+            legacyToken,
+            jobId,
+            accountId,
+          );
+          currentToken = likerToken;
+
+          job.current_apify_run_id = likerRun.id;
+          await job.save();
+
+          const completedLikerRun = await waitForApifyRun(likerRun.id, currentToken, jobId, handle);
+          if (!completedLikerRun) break;
+
+          if (completedLikerRun.status !== "SUCCEEDED") {
+            emitLog(accountId, jobId, `Reel ${i + 1}: liker scraper ${completedLikerRun.status} — collecting partial data`, "warn");
+          }
+
+          const likers = await getDatasetItems(completedLikerRun.defaultDatasetId, currentToken);
+          logger.info(`[deep-scraper] Reel ${i + 1}: got ${likers.length} likers`);
+
+          if (likers.length === 0 && completedLikerRun.status === "FAILED") {
+            emitLog(accountId, jobId, `Reel ${i + 1}: liker scraper failed with no data`, "error");
+          } else {
+            const seenLikers = new Set();
+            for (const l of likers) {
+              const username = l.username || l.ownerUsername || l.owner?.username || "";
+              if (!username) continue;
+              seenLikers.add(username);
+              reelUsers.add(username);
+            }
+
+            job.stats.likers_scraped += likers.length;
+            job.stats.unique_likers = (job.stats.unique_likers || 0) + seenLikers.size;
+            emitLog(accountId, jobId, `Reel ${i + 1}: ${likers.length} likers, ${seenLikers.size} unique`);
+          }
+        } // end scrape_likers
+
+        // Update global unique user tracking
+        for (const u of reelUsers) seenCommenters.add(u);
+        job.stats.unique_commenters = seenCommenters.size;
+
+        // If neither source produced usernames, skip to next reel
+        if (reelUsers.size === 0) {
+          job.comments_fetched_index = i + 1;
+          await job.save();
+          continue;
+        }
+
+        // ── 2. Dedup users, enrich profiles, qualify (outbound only) ──
         let processedCount = 0;
         if (!isResearch) {
-        let usernamesToProcess = [...reelCommenters];
+        let usernamesToProcess = [...reelUsers];
         if (!job.force_reprocess) {
           const existing = await OutboundLead.find(
             {
@@ -702,6 +765,198 @@ async function processJob(jobId) {
           `Reel ${i + 1}/${allReelUrls.length} pipeline complete — ${processedCount} new profiles processed`,
           "success",
         );
+      }
+
+      if (handle.cancelled || handle.paused) break;
+
+      // ── Scrape followers for this seed (if enabled, per-account not per-reel) ──
+      if (job.scrape_followers && seed !== "__direct__") {
+        const scrapedSeeds = new Set(job.followers_scraped_seeds || []);
+        if (!scrapedSeeds.has(seed)) {
+          job.status = "scraping_followers";
+          await job.save();
+          emitStatus(accountId, jobId, "scraping_followers");
+          emitLog(accountId, jobId, `Scraping followers of @${seed}`);
+
+          const { run: followerRun, tokenValue: followerToken } = await startApifyRunWithRotation(
+            FOLLOWERS_SCRAPER,
+            { usernames: [seed], scrapeFollowers: true, scrapeFollowing: false },
+            job.account_id,
+            legacyToken,
+            jobId,
+            accountId,
+          );
+          currentToken = followerToken;
+
+          job.current_apify_run_id = followerRun.id;
+          await job.save();
+
+          const completedFollowerRun = await waitForApifyRun(followerRun.id, currentToken, jobId, handle);
+          if (!completedFollowerRun) break;
+
+          if (completedFollowerRun.status !== "SUCCEEDED") {
+            emitLog(accountId, jobId, `@${seed}: follower scraper ${completedFollowerRun.status} — collecting partial data`, "warn");
+          }
+
+          const followers = await getDatasetItems(completedFollowerRun.defaultDatasetId, currentToken);
+          logger.info(`[deep-scraper] @${seed}: got ${followers.length} followers`);
+
+          if (followers.length === 0 && completedFollowerRun.status === "FAILED") {
+            emitLog(accountId, jobId, `@${seed}: follower scraper failed with no data`, "error");
+          } else {
+            const followerUsernames = [];
+            for (const f of followers) {
+              const username = f.username || f.ownerUsername || f.login || "";
+              if (username) followerUsernames.push(username);
+            }
+
+            job.stats.followers_scraped += followerUsernames.length;
+            emitLog(accountId, jobId, `@${seed}: ${followerUsernames.length} followers scraped`, "success");
+
+            // Process followers through the same enrichment pipeline (outbound only)
+            if (!isResearch && followerUsernames.length > 0) {
+              let toProcess = followerUsernames;
+              if (!job.force_reprocess) {
+                const existing = await OutboundLead.find(
+                  {
+                    account_id: job.account_id,
+                    username: { $in: toProcess },
+                    $or: [{ ai_processed: true }, { unqualified_reason: "low_followers" }],
+                  },
+                  { username: 1 },
+                ).lean();
+                const existingSet = new Set(existing.map((e) => e.username));
+                const skippedCount = toProcess.filter((u) => existingSet.has(u)).length;
+                toProcess = toProcess.filter((u) => !existingSet.has(u));
+                if (skippedCount > 0) {
+                  job.stats.skipped_existing += skippedCount;
+                  emitLog(accountId, jobId, `Skipped ${skippedCount} already-processed followers`);
+                }
+              }
+
+              if (toProcess.length > 0 && job.promptId) {
+                job.status = "scraping_profiles";
+                await job.save();
+                emitStatus(accountId, jobId, "scraping_profiles");
+
+                const BATCH_SIZE = 50;
+                for (let batchStart = 0; batchStart < toProcess.length; batchStart += BATCH_SIZE) {
+                  if (handle.cancelled || handle.paused) break;
+
+                  const batch = toProcess.slice(batchStart, batchStart + BATCH_SIZE);
+                  emitLog(accountId, jobId, `Enriching follower profiles ${batchStart + 1}-${batchStart + batch.length} of ${toProcess.length} (@${seed})`);
+
+                  const { run: profileRun, tokenValue: profileToken } = await startApifyRunWithRotation(
+                    PROFILE_SCRAPER,
+                    { usernames: batch },
+                    job.account_id,
+                    legacyToken,
+                    jobId,
+                    accountId,
+                  );
+                  currentToken = profileToken;
+
+                  job.current_apify_run_id = profileRun.id;
+                  await job.save();
+
+                  const completedProfileRun = await waitForApifyRun(profileRun.id, currentToken, jobId, handle);
+                  if (!completedProfileRun) break;
+
+                  if (completedProfileRun.status !== "SUCCEEDED") {
+                    emitLog(accountId, jobId, `Follower profile batch: Apify run ${completedProfileRun.status} — collecting partial data`, "warn");
+                  }
+
+                  const profiles = await getDatasetItems(completedProfileRun.defaultDatasetId, currentToken);
+                  if (profiles.length === 0 && completedProfileRun.status === "FAILED") {
+                    emitLog(accountId, jobId, `Follower profile batch failed with no data, skipping ${batch.length} users`, "error");
+                    continue;
+                  }
+
+                  for (const profile of profiles) {
+                    if (handle.cancelled || handle.paused) break;
+
+                    const username = profile.username || "";
+                    if (!username) continue;
+
+                    const followerCount = profile.followersCount ?? profile.follower_count ?? 0;
+                    const bio = profile.biography ?? profile.bio ?? "";
+                    const postsCount = profile.postsCount ?? profile.mediaCount ?? profile.media_count ?? 0;
+                    const isPrivate = profile.isPrivate ?? profile.is_private ?? false;
+                    const isVerified = profile.isVerified ?? profile.is_verified ?? false;
+                    const externalUrl = profile.externalUrl ?? profile.external_url ?? null;
+                    const fullName = profile.fullName ?? profile.full_name ?? null;
+                    const email = job.scrape_emails !== false
+                      ? (profile.businessEmail ?? profile.contactEmail ?? profile.publicEmail ?? null)
+                      : null;
+
+                    job.stats.profiles_scraped++;
+                    const userSeeds = [seed];
+
+                    if (followerCount < job.min_followers) {
+                      await upsertLead(job, username, {
+                        fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
+                        qualified: false, unqualified_reason: "low_followers", ai_processed: false,
+                      }, userSeeds);
+                      job.stats.filtered_low_followers++;
+                      emitLead(accountId, jobId, username, { fullName, bio, followerCount, qualified: false, unqualified_reason: "low_followers" });
+                    } else if (openaiClient && job.promptId) {
+                      job.stats.sent_to_ai++;
+                      try {
+                        const result = await qualifyBio(bio, promptText, openaiClient);
+                        const isQualified = result === "Qualified";
+                        await upsertLead(job, username, {
+                          fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
+                          qualified: isQualified,
+                          unqualified_reason: isQualified ? null : "ai_rejected",
+                          ai_processed: true,
+                          promptId: job.promptId,
+                          promptLabel: job.promptLabel,
+                        }, userSeeds);
+                        emitLead(accountId, jobId, username, { fullName, bio, followerCount, qualified: isQualified, unqualified_reason: isQualified ? null : "ai_rejected" });
+                        if (isQualified) { job.stats.qualified++; } else { job.stats.rejected++; }
+                      } catch (err) {
+                        logger.error(`[deep-scraper] AI error for @${username}:`, err.message);
+                        await upsertLead(job, username, {
+                          fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
+                          qualified: null, unqualified_reason: null, ai_processed: false,
+                        }, userSeeds);
+                      }
+                    } else {
+                      await upsertLead(job, username, {
+                        fullName, bio, followerCount, postsCount, isPrivate, isVerified, externalUrl, email,
+                        qualified: true, unqualified_reason: null, ai_processed: false,
+                      }, userSeeds);
+                      job.stats.qualified++;
+                      emitLead(accountId, jobId, username, { fullName, bio, followerCount, qualified: true, unqualified_reason: null });
+                    }
+
+                    if (job.stats.profiles_scraped % 10 === 0) {
+                      await job.save();
+                      emitProgress(accountId, jobId, job.stats);
+                    }
+                  }
+                }
+              } else if (toProcess.length > 0) {
+                for (const username of toProcess) {
+                  if (handle.cancelled || handle.paused) break;
+                  await upsertLead(job, username, {
+                    qualified: true, unqualified_reason: null, ai_processed: false,
+                  }, [seed]);
+                  job.stats.qualified++;
+                  emitLead(accountId, jobId, username, { qualified: true });
+                }
+                await job.save();
+                emitProgress(accountId, jobId, job.stats);
+              }
+            }
+          }
+
+          // Mark this seed's followers as scraped
+          job.followers_scraped_seeds = [...(job.followers_scraped_seeds || []), seed];
+          job.current_apify_run_id = null;
+          await job.save();
+          emitProgress(accountId, jobId, job.stats);
+        }
       }
     }
 

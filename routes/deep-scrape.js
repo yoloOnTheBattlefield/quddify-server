@@ -26,6 +26,9 @@ router.post("/start", validate(startDeepScrapeSchema), async (req, res) => {
       comment_limit,
       min_followers,
       force_reprocess,
+      scrape_comments,
+      scrape_likers,
+      scrape_followers,
       scrape_emails,
       prompt_id,
       is_recurring,
@@ -95,6 +98,9 @@ router.post("/start", validate(startDeepScrapeSchema), async (req, res) => {
       comment_limit: comment_limit || 100,
       min_followers: min_followers ?? 1000,
       force_reprocess: force_reprocess || false,
+      scrape_comments: scrape_comments !== false,
+      scrape_likers: scrape_likers || false,
+      scrape_followers: scrape_followers || false,
       scrape_emails: scrape_emails !== false,
       promptId: prompt_id || null,
       promptLabel,
@@ -124,7 +130,7 @@ router.get("/", async (req, res) => {
 
     const [jobs, total] = await Promise.all([
       DeepScrapeJob.find(filter)
-        .select("-reel_urls -reel_seeds -commenter_usernames -commenter_seed_map")
+        .select("-reel_urls -reel_seeds -commenter_usernames -liker_usernames -followers_scraped_seeds -commenter_seed_map")
         .sort({ createdAt: -1 })
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
@@ -233,7 +239,7 @@ router.get("/:id", async (req, res) => {
       _id: req.params.id,
       account_id: req.account._id,
     })
-      .select("-reel_urls -reel_seeds -commenter_usernames -commenter_seed_map")
+      .select("-reel_urls -reel_seeds -commenter_usernames -liker_usernames -followers_scraped_seeds -commenter_seed_map")
       .lean();
 
     if (!job) return res.status(404).json({ error: "Job not found" });
@@ -302,6 +308,8 @@ router.post("/:id/pause", async (req, res) => {
       "pending",
       "scraping_reels",
       "scraping_comments",
+      "scraping_likers",
+      "scraping_followers",
       "scraping_profiles",
       "qualifying",
     ];
@@ -341,6 +349,8 @@ router.post("/:id/cancel", async (req, res) => {
       "pending",
       "scraping_reels",
       "scraping_comments",
+      "scraping_likers",
+      "scraping_followers",
       "scraping_profiles",
       "qualifying",
     ];
@@ -419,10 +429,10 @@ router.post("/:id/skip-comments", async (req, res) => {
 
     if (!job) return res.status(404).json({ error: "Job not found" });
 
-    if (!["scraping_comments", "scraping_profiles"].includes(job.status)) {
+    if (!["scraping_comments", "scraping_likers", "scraping_followers", "scraping_profiles"].includes(job.status)) {
       return res
         .status(400)
-        .json({ error: `Can only skip when status is scraping_comments or scraping_profiles, got: ${job.status}` });
+        .json({ error: `Can only skip when actively scraping, got: ${job.status}` });
     }
 
     const skipped = deepScraper.skipComments(job._id.toString());
@@ -505,6 +515,8 @@ router.patch("/:id", async (req, res) => {
     const activeStatuses = [
       "scraping_reels",
       "scraping_comments",
+      "scraping_likers",
+      "scraping_followers",
       "scraping_profiles",
       "qualifying",
     ];
@@ -570,6 +582,8 @@ router.delete("/:id", async (req, res) => {
       "pending",
       "scraping_reels",
       "scraping_comments",
+      "scraping_likers",
+      "scraping_followers",
       "scraping_profiles",
       "qualifying",
     ];

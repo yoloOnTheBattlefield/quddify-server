@@ -81,6 +81,99 @@ describe("POST /api/deep-scrape/start", () => {
     expect(job.direct_urls).toHaveLength(1);
   });
 
+  it("creates a job with scrape_likers enabled", async () => {
+    await seedApifyToken();
+
+    const res = await request(app)
+      .post("/api/deep-scrape/start")
+      .send({
+        seed_usernames: ["@testuser"],
+        scrape_comments: true,
+        scrape_likers: true,
+      });
+
+    expect(res.status).toBe(201);
+    const job = await DeepScrapeJob.findById(res.body.jobId);
+    expect(job.scrape_comments).toBe(true);
+    expect(job.scrape_likers).toBe(true);
+  });
+
+  it("creates a job with only likers (no comments)", async () => {
+    await seedApifyToken();
+
+    const res = await request(app)
+      .post("/api/deep-scrape/start")
+      .send({
+        seed_usernames: ["@testuser"],
+        scrape_comments: false,
+        scrape_likers: true,
+      });
+
+    expect(res.status).toBe(201);
+    const job = await DeepScrapeJob.findById(res.body.jobId);
+    expect(job.scrape_comments).toBe(false);
+    expect(job.scrape_likers).toBe(true);
+  });
+
+  it("creates a job with scrape_followers enabled", async () => {
+    await seedApifyToken();
+
+    const res = await request(app)
+      .post("/api/deep-scrape/start")
+      .send({
+        seed_usernames: ["@testuser"],
+        scrape_followers: true,
+      });
+
+    expect(res.status).toBe(201);
+    const job = await DeepScrapeJob.findById(res.body.jobId);
+    expect(job.scrape_followers).toBe(true);
+  });
+
+  it("creates a job with only followers (no comments, no likers)", async () => {
+    await seedApifyToken();
+
+    const res = await request(app)
+      .post("/api/deep-scrape/start")
+      .send({
+        seed_usernames: ["@testuser"],
+        scrape_comments: false,
+        scrape_likers: false,
+        scrape_followers: true,
+      });
+
+    expect(res.status).toBe(201);
+    const job = await DeepScrapeJob.findById(res.body.jobId);
+    expect(job.scrape_comments).toBe(false);
+    expect(job.scrape_likers).toBe(false);
+    expect(job.scrape_followers).toBe(true);
+  });
+
+  it("defaults scrape_followers to false", async () => {
+    await seedApifyToken();
+
+    const res = await request(app)
+      .post("/api/deep-scrape/start")
+      .send({ seed_usernames: ["@testuser"] });
+
+    expect(res.status).toBe(201);
+    const job = await DeepScrapeJob.findById(res.body.jobId);
+    expect(job.scrape_followers).toBe(false);
+  });
+
+  it("defaults scrape_comments to true and scrape_likers to false", async () => {
+    await seedApifyToken();
+
+    const res = await request(app)
+      .post("/api/deep-scrape/start")
+      .send({ seed_usernames: ["@testuser"] });
+
+    expect(res.status).toBe(201);
+    const job = await DeepScrapeJob.findById(res.body.jobId);
+    expect(job.scrape_comments).toBe(true);
+    expect(job.scrape_likers).toBe(false);
+  });
+
   it("returns 400 without seeds or URLs", async () => {
     await seedApifyToken();
 
@@ -201,6 +294,30 @@ describe("POST /api/deep-scrape/:id/pause", () => {
       account_id: accountId,
       seed_usernames: ["s"],
       status: "scraping_reels",
+    });
+
+    const res = await request(app).post(`/api/deep-scrape/${job._id}/pause`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it("pauses a job in scraping_likers status", async () => {
+    const job = await DeepScrapeJob.create({
+      account_id: accountId,
+      seed_usernames: ["s"],
+      status: "scraping_likers",
+    });
+
+    const res = await request(app).post(`/api/deep-scrape/${job._id}/pause`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it("pauses a job in scraping_followers status", async () => {
+    const job = await DeepScrapeJob.create({
+      account_id: accountId,
+      seed_usernames: ["s"],
+      status: "scraping_followers",
     });
 
     const res = await request(app).post(`/api/deep-scrape/${job._id}/pause`);

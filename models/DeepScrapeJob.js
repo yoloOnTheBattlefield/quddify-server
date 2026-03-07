@@ -13,6 +13,8 @@ const DeepScrapeJobSchema = new mongoose.Schema(
         "pending",
         "scraping_reels",
         "scraping_comments",
+        "scraping_likers",
+        "scraping_followers",
         "scraping_profiles",
         "qualifying",
         "completed",
@@ -33,6 +35,9 @@ const DeepScrapeJobSchema = new mongoose.Schema(
     comment_limit: { type: Number, default: 100 },
     min_followers: { type: Number, default: 1000 },
     force_reprocess: { type: Boolean, default: false },
+    scrape_comments: { type: Boolean, default: true },
+    scrape_likers: { type: Boolean, default: false },
+    scrape_followers: { type: Boolean, default: false },
     scrape_emails: { type: Boolean, default: true },
     promptId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -54,12 +59,17 @@ const DeepScrapeJobSchema = new mongoose.Schema(
       skipped_existing: { type: Number, default: 0 },
       leads_created: { type: Number, default: 0 },
       leads_updated: { type: Number, default: 0 },
+      likers_scraped: { type: Number, default: 0 },
+      unique_likers: { type: Number, default: 0 },
+      followers_scraped: { type: Number, default: 0 },
     },
 
     // Checkpoint data for resume
     reel_urls: [{ type: String }],
     reel_seeds: [{ type: String }], // parallel to reel_urls — which seed each reel came from
     commenter_usernames: [{ type: String }],
+    liker_usernames: [{ type: String }],
+    followers_scraped_seeds: [{ type: String }], // which seeds have had followers scraped
     commenter_seed_map: { type: mongoose.Schema.Types.Mixed, default: {} }, // { username: [seed1, seed2] }
     comments_fetched_index: { type: Number, default: 0 }, // which reel index we've scraped comments up to
     profiles_fetched: { type: Number, default: 0 },
