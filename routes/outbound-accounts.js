@@ -284,6 +284,38 @@ router.patch("/me/status", async (req, res) => {
   }
 });
 
+// PUT /api/outbound-accounts/me/cookies — extension pushes IG cookies
+router.put("/me/cookies", async (req, res) => {
+  try {
+    if (!req.outboundAccount) {
+      return res.status(403).json({ error: "This endpoint requires a browser token (extension only)" });
+    }
+
+    const { cookies } = req.body;
+    if (!Array.isArray(cookies)) {
+      return res.status(400).json({ error: "cookies must be an array" });
+    }
+
+    const account = await OutboundAccount.findByIdAndUpdate(
+      req.outboundAccount._id,
+      {
+        $set: {
+          "ig_cookies.cookies": cookies,
+          "ig_cookies.updated_at": new Date(),
+        },
+      },
+      { new: true },
+    ).lean();
+
+    logger.info(`Cookies saved for @${account.username} (${cookies.length} cookies)`);
+
+    res.json({ saved: cookies.length, updated_at: account.ig_cookies.updated_at });
+  } catch (err) {
+    logger.error("Save cookies error:", err);
+    res.status(500).json({ error: "Failed to save cookies" });
+  }
+});
+
 // DELETE /api/outbound-accounts/:id — delete account
 router.delete("/:id", async (req, res) => {
   try {

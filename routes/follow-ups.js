@@ -34,15 +34,49 @@ router.get("/", async (req, res) => {
     const limitNum = parseInt(limit, 10) || 20;
     const skip = (pageNum - 1) * limitNum;
 
-    // Determine sort order
+    // Exclude terminal statuses from default view
+    if (!filter.status) {
+      filter.status = { $nin: ["booked", "not_interested"] };
+    }
+
+    // Priority-based sort: need_reply first, then hot_lead, then by last_activity ascending (oldest first)
     let sortObj = { createdAt: -1 };
     if (sort === "oldest") sortObj = { createdAt: 1 };
     else if (sort === "follow_up_date") sortObj = { follow_up_date: 1, createdAt: -1 };
+    else if (sort === "priority") {
+      // Custom priority order handled via addFields below
+    }
 
     // Build aggregation pipeline to join with outbound lead data
     const pipeline = [
       { $match: filter },
-      { $sort: sortObj },
+    ];
+
+    // Priority sort: need_reply > hot_lead > follow_up_later > waiting_for_them
+    if (sort === "priority") {
+      pipeline.push(
+        {
+          $addFields: {
+            _priority: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ["$status", "need_reply"] }, then: 0 },
+                  { case: { $eq: ["$status", "hot_lead"] }, then: 1 },
+                  { case: { $eq: ["$status", "follow_up_later"] }, then: 2 },
+                  { case: { $eq: ["$status", "waiting_for_them"] }, then: 3 },
+                ],
+                default: 4,
+              },
+            },
+          },
+        },
+        { $sort: { _priority: 1, last_activity: 1, createdAt: -1 } },
+      );
+    } else {
+      pipeline.push({ $sort: sortObj });
+    }
+
+    pipeline.push(
       {
         $lookup: {
           from: "outbound_leads",
@@ -52,7 +86,7 @@ router.get("/", async (req, res) => {
         },
       },
       { $unwind: { path: "$lead", preserveNullAndEmptyArrays: true } },
-    ];
+    );
 
     // Search filter — applied after lookup so we can search lead fields
     if (search && search.trim()) {
@@ -97,6 +131,7 @@ router.get("/", async (req, res) => {
               status: 1,
               follow_up_date: 1,
               note: 1,
+              last_activity: 1,
               createdAt: 1,
               updatedAt: 1,
               "lead.username": 1,
@@ -105,6 +140,8 @@ router.get("/", async (req, res) => {
               "lead.profileLink": 1,
               "lead.isVerified": 1,
               "lead.replied_at": 1,
+              "lead.dmDate": 1,
+              "lead.message": 1,
               "lead.source_seeds": 1,
               "outbound_account.username": 1,
             },
@@ -157,15 +194,12 @@ router.get("/stats", async (req, res) => {
 
     const counts = {
       total: 0,
-      new: 0,
-      contacted: 0,
-      interested: 0,
-      not_interested: 0,
-      booked: 0,
-      no_response: 0,
-      ghosted: 0,
+      need_reply: 0,
+      waiting_for_them: 0,
+      follow_up_later: 0,
       hot_lead: 0,
-      disqualified: 0,
+      booked: 0,
+      not_interested: 0,
     };
 
     if (stats) {
@@ -254,7 +288,8 @@ router.post("/sync", async (req, res) => {
         outbound_lead_id: leadId,
         account_id: accountId,
         outbound_account_id: outboundAccountId,
-        status: "new",
+        status: "need_reply",
+        last_activity: new Date(),
         note: "",
       };
     });
@@ -274,7 +309,10 @@ router.patch("/:id", async (req, res) => {
     const { status, follow_up_date, note } = req.body;
     const updates = {};
 
-    if (status !== undefined) updates.status = status;
+    if (status !== undefined) {
+      updates.status = status;
+      updates.last_activity = new Date();
+    }
     if (follow_up_date !== undefined) updates.follow_up_date = follow_up_date;
     if (note !== undefined) updates.note = note;
 

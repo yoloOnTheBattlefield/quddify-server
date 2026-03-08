@@ -780,7 +780,7 @@ async function processJob(jobId) {
 
           const { run: followerRun, tokenValue: followerToken } = await startApifyRunWithRotation(
             FOLLOWERS_SCRAPER,
-            { usernames: [seed], scrapeFollowers: true, scrapeFollowing: false },
+            { posts: [`https://www.instagram.com/${seed}/`], scrapeFollowers: true, scrapeFollowing: false },
             job.account_id,
             legacyToken,
             jobId,
