@@ -4,6 +4,7 @@ const express = require("express");
 const multer = require("multer");
 const OutboundLead = require("../models/OutboundLead");
 const CampaignLead = require("../models/CampaignLead");
+const FollowUp = require("../models/FollowUp");
 const Campaign = require("../models/Campaign");
 const Prompt = require("../models/Prompt");
 const { parseXlsx } = require("../services/uploadService");
@@ -413,6 +414,58 @@ router.post("/bulk-delete", validate(bulkDeleteSchema), async (req, res) => {
   } catch (err) {
     logger.error("Bulk delete error:", err);
     res.status(500).json({ error: "Failed to delete leads" });
+  }
+});
+
+// POST /outbound-leads/mark-replied — mark a lead as replied by username (extension use)
+router.post("/mark-replied", async (req, res) => {
+  try {
+    const { username } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: "username is required" });
+    }
+
+    const clean = username.replace(/^@/, "").trim().toLowerCase();
+    if (!clean) {
+      return res.status(400).json({ error: "Invalid username" });
+    }
+
+    const lead = await OutboundLead.findOneAndUpdate(
+      { account_id: req.account._id, username: clean },
+      { $set: { replied: true, replied_at: new Date() } },
+      { new: true },
+    );
+
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    // Sync CampaignLead status
+    await CampaignLead.updateMany(
+      { outbound_lead_id: lead._id, status: { $in: ["sent", "delivered"] } },
+      { $set: { status: "replied" } },
+    );
+
+    // Auto-create follow-up if one doesn't exist
+    await FollowUp.findOneAndUpdate(
+      { outbound_lead_id: lead._id, account_id: req.account._id },
+      {
+        $setOnInsert: {
+          outbound_lead_id: lead._id,
+          account_id: req.account._id,
+          outbound_account_id: req.outboundAccount?._id || null,
+          status: "need_reply",
+          last_activity: new Date(),
+          note: "",
+        },
+      },
+      { upsert: true },
+    );
+
+    res.json({ marked: true, username: clean });
+  } catch (err) {
+    logger.error("Mark replied error:", err);
+    res.status(500).json({ error: "Failed to mark lead as replied" });
   }
 });
 

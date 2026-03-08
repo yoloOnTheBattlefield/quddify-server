@@ -175,6 +175,7 @@ router.get("/next", async (req, res) => {
       return res.json({ status: "skipped", reason: "Already messaged" });
     }
 
+
     // Resolve message template (round-robin)
     const messageIndex = (campaign.last_message_index || 0) % campaign.messages.length;
     const template = campaign.messages[messageIndex];
