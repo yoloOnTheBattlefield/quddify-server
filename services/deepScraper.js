@@ -533,7 +533,7 @@ async function processJob(jobId) {
 
           const { run: likerRun, tokenValue: likerToken } = await startApifyRunWithRotation(
             LIKER_SCRAPER,
-            { urls: [reelUrl] },
+            { posts: [reelUrl], max_count: 1000 },
             job.account_id,
             legacyToken,
             jobId,
