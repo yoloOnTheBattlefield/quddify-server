@@ -45,9 +45,9 @@ async function startApifyRun(actorId, input, token) {
   });
   if (!res.ok) {
     const text = await res.text();
-    // Detect 403 hard limit / actor-disabled errors
-    if (res.status === 403) {
-      throw new ApifyLimitError(`Apify 403: ${text}`);
+    // Detect 401 invalid token or 403 hard limit / actor-disabled errors
+    if (res.status === 401 || res.status === 403) {
+      throw new ApifyLimitError(`Apify ${res.status}: ${text}`);
     }
     throw new Error(`Apify start failed (${res.status}): ${text}`);
   }
@@ -109,13 +109,14 @@ async function startApifyRunWithRotation(actorId, input, accountId, legacyToken,
       return { run, tokenValue: picked.tokenValue, tokenDocId: picked.tokenDocId };
     } catch (err) {
       if (err instanceof ApifyLimitError) {
-        logger.info(`[deep-scraper] Token ${picked.tokenDocId || "legacy"} hit 403 limit: ${err.message}`);
+        const isAuthError = err.message.includes("Apify 401");
+        logger.info(`[deep-scraper] Token ${picked.tokenDocId || "legacy"} ${isAuthError ? "auth failed" : "hit limit"}: ${err.message}`);
         if (picked.tokenDocId) {
           await markTokenLimitReached(picked.tokenDocId, err.message);
-          emitLog(accountIdStr, jobId, `Apify token "${picked.tokenDocId}" hit limit — rotating to next token`, "warn");
+          emitLog(accountIdStr, jobId, `Apify token "${picked.tokenDocId}" ${isAuthError ? "is invalid" : "hit limit"} — rotating to next token`, "warn");
           continue; // try next token
         }
-        // Legacy token hit 403 — no rotation possible
+        // Legacy token failed — no rotation possible
         throw err;
       }
       throw err; // non-403 error — don't rotate
