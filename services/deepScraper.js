@@ -104,6 +104,9 @@ async function startApifyRunWithRotation(actorId, input, accountId, legacyToken,
       throw new ApifyLimitError("No active Apify tokens available");
     }
 
+    const masked = picked.tokenValue.slice(0, 6) + "…" + picked.tokenValue.slice(-4);
+    emitLog(accountIdStr, jobId, `Using token ${masked}${picked.tokenDocId ? ` (${picked.tokenDocId})` : " (legacy)"}`);
+
     try {
       const run = await startApifyRun(actorId, input, picked.tokenValue);
       return { run, tokenValue: picked.tokenValue, tokenDocId: picked.tokenDocId };
