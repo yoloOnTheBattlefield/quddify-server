@@ -94,6 +94,23 @@ async function markTokenLimitReached(tokenDocId, errorMsg) {
   );
 }
 
+async function fetchApifyUsage(token) {
+  try {
+    const res = await fetch(`${APIFY_BASE}/users/me/limits`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const { data } = await res.json();
+    return {
+      usedUsd: data.current?.monthlyUsageUsd ?? null,
+      limitUsd: data.limits?.maxMonthlyUsageUsd ?? null,
+      resetAt: data.monthlyUsageCycle?.endAt ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Try to start an Apify run with token rotation. If 403, mark token and try next.
 // Returns { run, tokenValue, tokenDocId } or throws if all tokens exhausted.
 async function startApifyRunWithRotation(actorId, input, accountId, legacyToken, jobId, accountIdStr) {
@@ -105,7 +122,15 @@ async function startApifyRunWithRotation(actorId, input, accountId, legacyToken,
     }
 
     const masked = picked.tokenValue.slice(0, 6) + "…" + picked.tokenValue.slice(-4);
-    emitLog(accountIdStr, jobId, `Using token ${masked}${picked.tokenDocId ? ` (${picked.tokenDocId})` : " (legacy)"}`);
+    const usage = await fetchApifyUsage(picked.tokenValue);
+    let tokenMsg = `Using token ${masked}${picked.tokenDocId ? ` (${picked.tokenDocId})` : " (legacy)"}`;
+    if (usage) {
+      const spent = usage.usedUsd != null ? `$${usage.usedUsd.toFixed(2)}` : "?";
+      const limit = usage.limitUsd != null ? `$${usage.limitUsd.toFixed(2)}` : "?";
+      const reset = usage.resetAt ? new Date(usage.resetAt).toLocaleDateString() : "?";
+      tokenMsg += ` — usage: ${spent}/${limit}, resets ${reset}`;
+    }
+    emitLog(accountIdStr, jobId, tokenMsg);
 
     try {
       const run = await startApifyRun(actorId, input, picked.tokenValue);
@@ -171,6 +196,11 @@ async function waitForApifyRun(runId, token, jobId, handle) {
     }
     await new Promise((r) => setTimeout(r, 5000));
   }
+}
+
+function logRunCost(run, accountId, jobId) {
+  if (!run || run.usageTotalUsd == null) return;
+  emitLog(accountId, jobId, `Run cost: $${run.usageTotalUsd.toFixed(4)}`);
 }
 
 // Safely get dataset items — returns empty array if dataset is unavailable
@@ -343,6 +373,7 @@ async function processJob(jobId) {
         emitLog(accountId, jobId, `Apify ${contentLabel} scraper started for @${seed} (${APIFY_MEMORY_MB}MB)`);
 
         const completedRun = await waitForApifyRun(run.id, currentToken, jobId, handle);
+        logRunCost(completedRun, accountId, jobId);
         if (!completedRun) break; // paused or cancelled
 
         if (completedRun.status !== "SUCCEEDED") {
@@ -474,6 +505,7 @@ async function processJob(jobId) {
         await job.save();
 
         const completedCommentRun = await waitForApifyRun(commentRun.id, currentToken, jobId, handle);
+        logRunCost(completedCommentRun, accountId, jobId);
         if (!completedCommentRun) break;
 
         if (completedCommentRun.status !== "SUCCEEDED") {
@@ -549,6 +581,7 @@ async function processJob(jobId) {
           await job.save();
 
           const completedLikerRun = await waitForApifyRun(likerRun.id, currentToken, jobId, handle);
+          logRunCost(completedLikerRun, accountId, jobId);
           if (!completedLikerRun) break;
 
           if (completedLikerRun.status !== "SUCCEEDED") {
@@ -643,6 +676,7 @@ async function processJob(jobId) {
             await job.save();
 
             const completedProfileRun = await waitForApifyRun(profileRun.id, currentToken, jobId, handle);
+            logRunCost(completedProfileRun, accountId, jobId);
             if (!completedProfileRun) break;
 
             if (completedProfileRun.status !== "SUCCEEDED") {
@@ -796,6 +830,7 @@ async function processJob(jobId) {
           await job.save();
 
           const completedFollowerRun = await waitForApifyRun(followerRun.id, currentToken, jobId, handle);
+          logRunCost(completedFollowerRun, accountId, jobId);
           if (!completedFollowerRun) break;
 
           if (completedFollowerRun.status !== "SUCCEEDED") {
@@ -864,6 +899,7 @@ async function processJob(jobId) {
                   await job.save();
 
                   const completedProfileRun = await waitForApifyRun(profileRun.id, currentToken, jobId, handle);
+                  logRunCost(completedProfileRun, accountId, jobId);
                   if (!completedProfileRun) break;
 
                   if (completedProfileRun.status !== "SUCCEEDED") {
