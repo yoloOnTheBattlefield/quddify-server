@@ -174,9 +174,15 @@ router.get("/", async (req, res) => {
 router.get("/stats", async (req, res) => {
   try {
     const accountId = req.account._id;
+    const { outbound_account_id } = req.query;
+
+    const matchFilter = { account_id: accountId };
+    if (outbound_account_id && outbound_account_id !== "all") {
+      matchFilter.outbound_account_id = new mongoose.Types.ObjectId(outbound_account_id);
+    }
 
     const [stats] = await FollowUp.aggregate([
-      { $match: { account_id: accountId } },
+      { $match: matchFilter },
       {
         $group: {
           _id: "$status",

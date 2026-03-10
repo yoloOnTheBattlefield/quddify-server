@@ -322,4 +322,34 @@ router.post("/skip", async (req, res) => {
   }
 });
 
+// GET /api/manual-campaigns/sender-stats?sender_id=
+router.get("/sender-stats", async (req, res) => {
+  try {
+    const { sender_id } = req.query;
+    if (!sender_id || !mongoose.Types.ObjectId.isValid(sender_id)) {
+      return res.status(400).json({ error: "Valid sender_id is required" });
+    }
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const [sentToday, totalSent] = await Promise.all([
+      CampaignLead.countDocuments({
+        sender_id,
+        status: "sent",
+        sent_at: { $gte: todayStart },
+      }),
+      CampaignLead.countDocuments({
+        sender_id,
+        status: "sent",
+      }),
+    ]);
+
+    res.json({ sent_today: sentToday, total_sent: totalSent });
+  } catch (err) {
+    logger.error("Sender stats error:", err);
+    res.status(500).json({ error: "Failed to fetch sender stats" });
+  }
+});
+
 module.exports = router;

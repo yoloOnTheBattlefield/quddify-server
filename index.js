@@ -43,6 +43,17 @@ const igWebhookRoutes = require("./routes/instagram-webhook");
 const igConversationRoutes = require("./routes/ig-conversations");
 const igOAuthRoutes = require("./routes/instagram-oauth");
 const followUpRoutes = require("./routes/follow-ups");
+const clientRoutes = require("./routes/clients");
+const clientImageRoutes = require("./routes/client-images");
+const clientLutRoutes = require("./routes/client-luts");
+const transcriptRoutes = require("./routes/transcripts");
+const swipeFileRoutes = require("./routes/swipe-files");
+const carouselTemplateRoutes = require("./routes/carousel-templates");
+const carouselStyleRoutes = require("./routes/carousel-styles");
+const carouselRoutes = require("./routes/carousels");
+const clientImageUploadRoutes = require("./routes/client-image-upload");
+const googleDriveRoutes = require("./routes/google-drive");
+const authRoutes = require("./routes/auth");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -71,7 +82,11 @@ app.use(
   igWebhookRoutes,
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+
+// Serve uploaded files (images, thumbnails, exports)
+const { UPLOAD_DIR } = require("./services/storageService");
+app.use("/uploads", express.static(UPLOAD_DIR));
 
 // Assign a unique request ID to every request
 app.use(requestId);
@@ -82,6 +97,8 @@ app.use("/t", cors({ origin: true, credentials: false }), trackingPublicRoutes);
 const allowedOrigins = [
   "http://localhost:8080",
   "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
   "https://quddify-app.app",
   "https://www.quddify-app.app",
   "https://quddify-app.vercel.app",
@@ -104,6 +121,7 @@ app.options(/.*/, cors());
 
 // Initialize Socket.IO
 const io = socketManager.init(server, allowedOrigins);
+app.set("io", io);
 
 // Initialize job worker with Socket.IO, then init queue
 jobWorker.init(io);
@@ -174,6 +192,7 @@ app.post("/login", authLimiter, accountRoutes);
 app.post("/register", authLimiter, accountRoutes);
 app.post("/accounts/login", authLimiter, accountRoutes);
 app.post("/accounts/register", authLimiter, accountRoutes);
+app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/calendly", webhookLimiter, calendlyRoutes);
 app.get("/api/health", healthRoutes);
 app.get("/api/debug", healthRoutes);
@@ -209,6 +228,18 @@ app.use("/api/ig-conversations", igConversationRoutes);
 app.use("/api/instagram", igOAuthRoutes);
 app.use("/api/follow-ups", requireOutbound, followUpRoutes);
 app.use("/tracking", trackingRoutes);
+
+// Carousel feature routes
+app.use("/api/clients", clientRoutes);
+app.use("/api/client-images", clientImageRoutes);
+app.use("/api/client-luts", clientLutRoutes);
+app.use("/api/transcripts", transcriptRoutes);
+app.use("/api/swipe-files", swipeFileRoutes);
+app.use("/api/carousel-templates", carouselTemplateRoutes);
+app.use("/api/carousel-styles", carouselStyleRoutes);
+app.use("/api/carousels", carouselRoutes);
+app.use("/api/client-images", clientImageUploadRoutes);
+app.use("/api/google-drive", googleDriveRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass
 const PORT = process.env.PORT || 3000;
