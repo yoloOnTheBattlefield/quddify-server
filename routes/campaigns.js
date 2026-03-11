@@ -1388,7 +1388,7 @@ router.post("/:id/generate-messages", async (req, res) => {
       return res.status(400).json({ error: "Invalid campaign ID" });
     }
 
-    const { prompt, provider = "openai" } = req.body;
+    const { prompt, provider = "openai", scope = "without_message" } = req.body;
     if (!prompt || !prompt.trim()) {
       return res.status(400).json({ error: "Prompt is required" });
     }
@@ -1413,15 +1413,19 @@ router.post("/:id/generate-messages", async (req, res) => {
       return res.status(400).json({ error: "Generation already in progress" });
     }
 
-    // Find pending leads that don't already have a custom_message
-    const leads = await CampaignLead.find({
-      campaign_id: campaign._id,
-      status: "pending",
-      $or: [{ custom_message: null }, { custom_message: { $exists: false } }],
-    }).populate("outbound_lead_id", "username fullName bio").lean();
+    // Find pending leads — for "unsent" scope include leads that already have a message (overwrite),
+    // for "without_message" scope only process leads that don't have one yet
+    const leadsFilter = { campaign_id: campaign._id, status: "pending" };
+    if (scope !== "unsent") {
+      leadsFilter.$or = [{ custom_message: null }, { custom_message: { $exists: false } }];
+    }
+
+    const leads = await CampaignLead.find(leadsFilter)
+      .populate("outbound_lead_id", "username fullName bio")
+      .lean();
 
     if (leads.length === 0) {
-      return res.status(400).json({ error: "No pending leads without messages to generate for" });
+      return res.status(400).json({ error: "No pending leads to generate messages for" });
     }
 
     // Save prompt and set generating status
@@ -1545,6 +1549,13 @@ router.post("/:id/generate-messages", async (req, res) => {
               return generatedMessage;
             }),
           );
+
+          // Log any per-lead failures
+          for (const r of results) {
+            if (r.status === "rejected") {
+              logger.error("[ai-gen] Lead generation error:", r.reason);
+            }
+          }
 
           processed += batch.length;
 
