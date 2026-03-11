@@ -998,7 +998,7 @@ router.post("/:id/leads/move", async (req, res) => {
       return res.status(400).json({ error: "Invalid campaign ID" });
     }
 
-    const { lead_ids, target_campaign_id } = req.body;
+    const { lead_ids, target_campaign_id, keep_in_source = false } = req.body;
 
     if (!Array.isArray(lead_ids) || lead_ids.length === 0) {
       return res.status(400).json({ error: "lead_ids array is required" });
@@ -1039,17 +1039,21 @@ router.post("/:id/leads/move", async (req, res) => {
       return res.json({ moved: 0, duplicates_skipped: 0 });
     }
 
-    const outboundLeadIds = leadsToMove.map((l) => l.outbound_lead_id);
     const campaignLeadIds = leadsToMove.map((l) => l._id);
 
-    // Delete from source
-    await CampaignLead.deleteMany({ _id: { $in: campaignLeadIds } });
+    // Delete from source unless keeping
+    if (!keep_in_source) {
+      await CampaignLead.deleteMany({ _id: { $in: campaignLeadIds } });
+    }
 
-    // Insert into target (skip duplicates via unique index)
-    const docs = outboundLeadIds.map((id) => ({
+    // Insert into target, copying message if already generated (skip duplicates via unique index)
+    const docs = leadsToMove.map((l) => ({
       campaign_id: targetCampaign._id,
-      outbound_lead_id: id,
+      outbound_lead_id: l.outbound_lead_id,
       status: "pending",
+      ...(l.custom_message ? { custom_message: l.custom_message } : {}),
+      ...(l.ai_provider ? { ai_provider: l.ai_provider } : {}),
+      ...(l.ai_model ? { ai_model: l.ai_model } : {}),
     }));
 
     let inserted = 0;
@@ -1064,13 +1068,15 @@ router.post("/:id/leads/move", async (req, res) => {
       }
     }
 
-    const moved = leadsToMove.length;
-    const duplicates = moved - inserted;
+    const affected = leadsToMove.length;
+    const duplicates = affected - inserted;
 
-    // Update source stats
-    await Campaign.findByIdAndUpdate(sourceCampaign._id, {
-      $inc: { "stats.total": -moved, "stats.pending": -moved },
-    });
+    // Update source stats only if we removed from source
+    if (!keep_in_source) {
+      await Campaign.findByIdAndUpdate(sourceCampaign._id, {
+        $inc: { "stats.total": -affected, "stats.pending": -affected },
+      });
+    }
 
     // Update target stats
     const targetUpdate = { $inc: { "stats.total": inserted, "stats.pending": inserted } };
