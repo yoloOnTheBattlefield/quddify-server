@@ -991,6 +991,101 @@ router.post("/:id/leads/remove", async (req, res) => {
   }
 });
 
+// POST /api/campaigns/:id/leads/move — move pending leads to another campaign
+router.post("/:id/leads/move", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const { lead_ids, target_campaign_id } = req.body;
+
+    if (!Array.isArray(lead_ids) || lead_ids.length === 0) {
+      return res.status(400).json({ error: "lead_ids array is required" });
+    }
+
+    if (!target_campaign_id || !mongoose.Types.ObjectId.isValid(target_campaign_id)) {
+      return res.status(400).json({ error: "Valid target_campaign_id is required" });
+    }
+
+    if (req.params.id === target_campaign_id) {
+      return res.status(400).json({ error: "Source and target campaigns must be different" });
+    }
+
+    const [sourceCampaign, targetCampaign] = await Promise.all([
+      Campaign.findOne({ _id: req.params.id, account_id: req.account._id }),
+      Campaign.findOne({ _id: target_campaign_id, account_id: req.account._id }),
+    ]);
+
+    if (!sourceCampaign) return res.status(404).json({ error: "Source campaign not found" });
+    if (!targetCampaign) return res.status(404).json({ error: "Target campaign not found" });
+
+    const validIds = lead_ids
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    if (validIds.length === 0) {
+      return res.status(400).json({ error: "No valid lead IDs provided" });
+    }
+
+    // Only move pending leads
+    const leadsToMove = await CampaignLead.find({
+      _id: { $in: validIds },
+      campaign_id: sourceCampaign._id,
+      status: "pending",
+    }).lean();
+
+    if (leadsToMove.length === 0) {
+      return res.json({ moved: 0, duplicates_skipped: 0 });
+    }
+
+    const outboundLeadIds = leadsToMove.map((l) => l.outbound_lead_id);
+    const campaignLeadIds = leadsToMove.map((l) => l._id);
+
+    // Delete from source
+    await CampaignLead.deleteMany({ _id: { $in: campaignLeadIds } });
+
+    // Insert into target (skip duplicates via unique index)
+    const docs = outboundLeadIds.map((id) => ({
+      campaign_id: targetCampaign._id,
+      outbound_lead_id: id,
+      status: "pending",
+    }));
+
+    let inserted = 0;
+    try {
+      const result = await CampaignLead.insertMany(docs, { ordered: false });
+      inserted = result.length;
+    } catch (err) {
+      if (err.code === 11000 || err.insertedDocs) {
+        inserted = err.insertedDocs?.length || 0;
+      } else {
+        throw err;
+      }
+    }
+
+    const moved = leadsToMove.length;
+    const duplicates = moved - inserted;
+
+    // Update source stats
+    await Campaign.findByIdAndUpdate(sourceCampaign._id, {
+      $inc: { "stats.total": -moved, "stats.pending": -moved },
+    });
+
+    // Update target stats
+    const targetUpdate = { $inc: { "stats.total": inserted, "stats.pending": inserted } };
+    if (inserted > 0 && targetCampaign.status === "completed") {
+      targetUpdate.$set = { status: "paused" };
+    }
+    await Campaign.findByIdAndUpdate(targetCampaign._id, targetUpdate);
+
+    res.json({ moved: inserted, duplicates_skipped: duplicates });
+  } catch (err) {
+    logger.error("Move campaign leads error:", err);
+    res.status(500).json({ error: "Failed to move leads" });
+  }
+});
+
 // GET /api/campaigns/:id/leads — list campaign leads with filters
 router.get("/:id/leads", async (req, res) => {
   try {
