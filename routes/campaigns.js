@@ -1092,6 +1092,31 @@ router.post("/:id/leads/move", async (req, res) => {
   }
 });
 
+// GET /api/campaigns/:id/leads/ids — return all CampaignLead IDs matching a status filter
+router.get("/:id/leads/ids", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+    const filter = { campaign_id: campaign._id };
+    if (req.query.status) filter.status = req.query.status;
+
+    const leads = await CampaignLead.find(filter, { _id: 1 }).lean();
+    res.json({ ids: leads.map((l) => l._id.toString()) });
+  } catch (err) {
+    logger.error("Get campaign lead IDs error:", err);
+    res.status(500).json({ error: "Failed to get lead IDs" });
+  }
+});
+
 // GET /api/campaigns/:id/leads — list campaign leads with filters
 router.get("/:id/leads", async (req, res) => {
   try {
