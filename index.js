@@ -53,6 +53,7 @@ const carouselStyleRoutes = require("./routes/carousel-styles");
 const carouselRoutes = require("./routes/carousels");
 const clientImageUploadRoutes = require("./routes/client-image-upload");
 const googleDriveRoutes = require("./routes/google-drive");
+const reelRoutes = require("./routes/reels");
 const authRoutes = require("./routes/auth");
 
 const { auth } = require("./middleware/auth");
@@ -240,6 +241,7 @@ app.use("/api/carousel-styles", carouselStyleRoutes);
 app.use("/api/carousels", carouselRoutes);
 app.use("/api/client-images", clientImageUploadRoutes);
 app.use("/api/google-drive", googleDriveRoutes);
+app.use("/api/reels", reelRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass
 const PORT = process.env.PORT || 3000;
