@@ -28,6 +28,9 @@ Never generate these structures:
 - You won't believe this
 - The reason is simple
 - Here's what nobody tells you
+- But the [X] thing? (e.g. "But the money thing?", "But the discipline thing?", "But the hardest thing?")
+
+Never use the "But the [X] thing?" rhetorical question pattern. It is an obvious AI tell — a fake-casual pivot that no real person uses in writing. If you need a transition, write it as a natural continuation of the thought, not a staged rhetorical question.
 
 These phrases instantly signal AI generated writing.
 

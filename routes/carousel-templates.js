@@ -58,6 +58,32 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
+// POST /api/carousel-templates/:id/clone — duplicate a template, optionally for a different client
+router.post("/:id/clone", async (req, res) => {
+  try {
+    const original = await CarouselTemplate.findOne({ _id: req.params.id, account_id: req.account._id });
+    if (!original) return res.status(404).json({ error: "Template not found" });
+
+    const obj = original.toObject();
+    delete obj._id;
+    delete obj.created_at;
+    delete obj.updated_at;
+
+    const clone = await CarouselTemplate.create({
+      ...obj,
+      account_id: req.account._id,
+      client_id: req.body.client_id || null,
+      name: req.body.name || `${original.name} (Copy)`,
+      source_swipe_file_id: null,
+      is_default: false,
+    });
+    res.status(201).json(clone);
+  } catch (err) {
+    logger.error("Failed to clone template:", err);
+    res.status(500).json({ error: "Failed to clone template" });
+  }
+});
+
 // DELETE /api/carousel-templates/:id
 router.delete("/:id", async (req, res) => {
   try {

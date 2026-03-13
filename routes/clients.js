@@ -5,11 +5,23 @@ const validate = require("../middleware/validate");
 const clientSchemas = require("../schemas/clients");
 const logger = require("../utils/logger").child({ module: "clients" });
 
+function sanitizeIgOAuth(client) {
+  const obj = client.toObject ? client.toObject() : { ...client };
+  if (obj.ig_oauth) {
+    obj.ig_oauth = {
+      ig_user_id: obj.ig_oauth.ig_user_id || null,
+      ig_username: obj.ig_oauth.ig_username || null,
+      connected_at: obj.ig_oauth.connected_at || null,
+    };
+  }
+  return obj;
+}
+
 // GET /api/clients — list all clients for account
 router.get("/", async (req, res) => {
   try {
     const clients = await Client.find({ account_id: req.account._id }).sort({ created_at: -1 });
-    res.json(clients);
+    res.json(clients.map(sanitizeIgOAuth));
   } catch (err) {
     logger.error("Failed to list clients:", err);
     res.status(500).json({ error: "Failed to list clients" });
@@ -21,7 +33,7 @@ router.get("/:id", async (req, res) => {
   try {
     const client = await Client.findOne({ _id: req.params.id, account_id: req.account._id });
     if (!client) return res.status(404).json({ error: "Client not found" });
-    res.json(client);
+    res.json(sanitizeIgOAuth(client));
   } catch (err) {
     logger.error("Failed to get client:", err);
     res.status(500).json({ error: "Failed to get client" });
@@ -94,6 +106,32 @@ router.post("/:id/generate-niche-playbook", async (req, res) => {
   } catch (err) {
     logger.error("Failed to generate niche playbook:", err);
     res.status(500).json({ error: "Failed to generate niche playbook" });
+  }
+});
+
+// POST /api/clients/:id/clone-settings-from/:sourceId — copy brand kit, voice profile, CTA defaults from another client
+router.post("/:id/clone-settings-from/:sourceId", async (req, res) => {
+  try {
+    const [target, source] = await Promise.all([
+      Client.findOne({ _id: req.params.id, account_id: req.account._id }),
+      Client.findOne({ _id: req.params.sourceId, account_id: req.account._id }),
+    ]);
+    if (!target) return res.status(404).json({ error: "Target client not found" });
+    if (!source) return res.status(404).json({ error: "Source client not found" });
+
+    const fields = req.body.fields || ["brand_kit", "voice_profile", "cta_defaults"];
+    const update = {};
+    for (const field of fields) {
+      if (["brand_kit", "voice_profile", "cta_defaults"].includes(field) && source[field]) {
+        update[field] = source[field].toObject ? source[field].toObject() : source[field];
+      }
+    }
+
+    const updated = await Client.findByIdAndUpdate(target._id, { $set: update }, { new: true });
+    res.json(updated);
+  } catch (err) {
+    logger.error("Failed to clone client settings:", err);
+    res.status(500).json({ error: "Failed to clone client settings" });
   }
 });
 

@@ -14,6 +14,7 @@ const CarouselSlideSchema = new mongoose.Schema(
     image_id: { type: mongoose.Schema.Types.ObjectId, ref: "ClientImage", default: null },
     image_key: { type: String, default: "" },
     extra_image_keys: [{ type: String }],
+    extra_image_ids: [{ type: mongoose.Schema.Types.ObjectId, ref: "ClientImage" }],
     is_ai_generated_image: { type: Boolean, default: false },
     rendered_key: { type: String, default: "" },
     image_selection_reason: { type: String, default: "" },
@@ -29,6 +30,23 @@ const CarouselSchema = new mongoose.Schema(
     swipe_file_id: { type: mongoose.Schema.Types.ObjectId, ref: "SwipeFile", default: null },
     template_id: { type: mongoose.Schema.Types.ObjectId, ref: "CarouselTemplate", default: null },
     lut_id: { type: mongoose.Schema.Types.ObjectId, ref: "ClientLut", default: null },
+    layout_preset: {
+      mode: { type: String, enum: ["uniform", "sequence", "ai_suggested"], default: "ai_suggested" },
+      default_composition: {
+        type: String,
+        enum: ["single_hero", "split_collage", "grid_2x2", "before_after", "lifestyle_grid", "text_only"],
+        default: "single_hero",
+      },
+      sequence: [
+        {
+          position: { type: Number },
+          composition: {
+            type: String,
+            enum: ["single_hero", "split_collage", "grid_2x2", "before_after", "lifestyle_grid", "text_only"],
+          },
+        },
+      ],
+    },
     goal: {
       type: String,
       enum: ["saveable_educational", "polarizing_authority", "emotional_story", "conversion_focused"],
@@ -62,11 +80,16 @@ const CarouselSchema = new mongoose.Schema(
     status: { type: String, enum: ["queued", "generating", "ready", "failed"], default: "queued" },
     generation_log: [{ type: String }],
     exported_at: { type: Date, default: null },
+    scheduled_date: { type: Date, default: null },
+    posted_to_ig: { type: Boolean, default: false },
+    ig_post_id: { type: String, default: null },
+    ig_posted_at: { type: Date, default: null },
   },
   { collection: "carousels", versionKey: false, timestamps: { createdAt: "created_at", updatedAt: "updated_at" } },
 );
 
 CarouselSchema.index({ client_id: 1, created_at: -1 });
 CarouselSchema.index({ account_id: 1, status: 1 });
+CarouselSchema.index({ account_id: 1, scheduled_date: 1 });
 
 module.exports = mongoose.model("Carousel", CarouselSchema);

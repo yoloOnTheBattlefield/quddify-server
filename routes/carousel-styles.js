@@ -60,6 +60,25 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
+// POST /api/carousel-styles/:id/clone — duplicate a style
+router.post("/:id/clone", async (req, res) => {
+  try {
+    const original = await CarouselStyle.findOne({ _id: req.params.id, account_id: req.account._id });
+    if (!original) return res.status(404).json({ error: "Style not found" });
+
+    const clone = await CarouselStyle.create({
+      account_id: req.account._id,
+      name: req.body.name || `${original.name} (Copy)`,
+      style_prompt: original.style_prompt,
+      is_default: false,
+    });
+    res.status(201).json(clone);
+  } catch (err) {
+    logger.error("Failed to clone style:", err);
+    res.status(500).json({ error: "Failed to clone style" });
+  }
+});
+
 // DELETE /api/carousel-styles/:id
 router.delete("/:id", async (req, res) => {
   try {

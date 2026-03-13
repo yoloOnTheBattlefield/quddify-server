@@ -17,12 +17,7 @@ const create = z.object({
       style_notes: z.string().optional(),
     }).optional(),
     voice_profile: z.object({
-      tone: z.string().optional(),
-      vocabulary_level: z.enum(["simple", "moderate", "advanced"]).optional(),
-      phrases_to_use: z.array(z.string()).optional(),
-      phrases_to_avoid: z.array(z.string()).optional(),
-      example_copy: z.string().optional(),
-      personality_notes: z.string().optional(),
+      raw_text: z.string().optional(),
     }).optional(),
     cta_defaults: z.object({
       primary_cta: z.string().optional(),
@@ -49,12 +44,7 @@ const update = z.object({
       style_notes: z.string().optional(),
     }).optional(),
     voice_profile: z.object({
-      tone: z.string().optional(),
-      vocabulary_level: z.enum(["simple", "moderate", "advanced"]).optional(),
-      phrases_to_use: z.array(z.string()).optional(),
-      phrases_to_avoid: z.array(z.string()).optional(),
-      example_copy: z.string().optional(),
-      personality_notes: z.string().optional(),
+      raw_text: z.string().optional(),
     }).optional(),
     cta_defaults: z.object({
       primary_cta: z.string().optional(),

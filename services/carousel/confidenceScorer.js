@@ -52,11 +52,7 @@ async function scoreCarousel({ slides, imageSelections, transcriptIds, angle, go
 
   // 4. Brand fit (0-100): Is the voice profile well-defined?
   let brandScore = 40; // Base
-  if (voiceProfile?.tone) brandScore += 15;
-  if (voiceProfile?.vocabulary_level) brandScore += 10;
-  if (voiceProfile?.phrases_to_use?.length) brandScore += 10;
-  if (voiceProfile?.example_copy) brandScore += 15;
-  if (voiceProfile?.personality_notes) brandScore += 10;
+  if (voiceProfile?.raw_text) brandScore += 60;
   scores.brand_fit = Math.min(100, brandScore);
 
   // 5. Style fit (0-100): Was a reference swipe file used?

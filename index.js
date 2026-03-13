@@ -54,11 +54,21 @@ const carouselRoutes = require("./routes/carousels");
 const clientImageUploadRoutes = require("./routes/client-image-upload");
 const googleDriveRoutes = require("./routes/google-drive");
 const reelRoutes = require("./routes/reels");
+const dashboardRoutes = require("./routes/dashboard");
+const notificationRoutes = require("./routes/notifications");
 const authRoutes = require("./routes/auth");
+const youtubeChannelRoutes = require("./routes/youtube-channels");
+const youtubeAlertRoutes = require("./routes/youtube-alerts");
+const youtubeTrendingRoutes = require("./routes/youtube-trending");
+const youtubeScrapeRoutes = require("./routes/youtube-scrape");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
-const { authLimiter, apiLimiter, webhookLimiter } = require("./middleware/rateLimiter");
+const {
+  authLimiter,
+  apiLimiter,
+  webhookLimiter,
+} = require("./middleware/rateLimiter");
 const requestId = require("./middleware/requestId");
 const socketManager = require("./services/socketManager");
 const jobQueue = require("./services/jobQueue");
@@ -66,6 +76,7 @@ const jobWorker = require("./services/jobWorker");
 const { recoverStuckJobs } = require("./services/jobRecovery");
 const campaignScheduler = require("./services/campaignScheduler");
 const deepScrapeScheduler = require("./services/deepScrapeScheduler");
+const youtubeScheduler = require("./services/youtubeScheduler");
 
 const app = express();
 const server = http.createServer(app);
@@ -97,6 +108,7 @@ app.use("/t", cors({ origin: true, credentials: false }), trackingPublicRoutes);
 
 const allowedOrigins = [
   "http://localhost:8080",
+  "http://localhost:8083",
   "http://localhost:5173",
   "http://localhost:5174",
   "http://localhost:5175",
@@ -167,6 +179,8 @@ const connectDB = async () => {
     await IgMessage.syncIndexes();
     const Lead = require("./models/Lead");
     await Lead.syncIndexes();
+    const Channel = require("./models/Channel");
+    await Channel.syncIndexes();
   }
 
   return cachedConnection;
@@ -242,6 +256,14 @@ app.use("/api/carousels", carouselRoutes);
 app.use("/api/client-images", clientImageUploadRoutes);
 app.use("/api/google-drive", googleDriveRoutes);
 app.use("/api/reels", reelRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/notifications", notificationRoutes);
+
+// YouTube trend detection routes
+app.use("/api/youtube/channels", youtubeChannelRoutes);
+app.use("/api/youtube/alerts", youtubeAlertRoutes);
+app.use("/api/youtube/trending", youtubeTrendingRoutes);
+app.use("/api/youtube/scrape", youtubeScrapeRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass
 const PORT = process.env.PORT || 3000;
@@ -262,22 +284,33 @@ connectDB()
       { $set: { status: "pending", startedAt: null } },
     );
     if (stuckResult.modifiedCount > 0) {
-      logger.info(`[taskRecovery] Reset ${stuckResult.modifiedCount} stuck task(s) to pending`);
+      logger.info(
+        `[taskRecovery] Reset ${stuckResult.modifiedCount} stuck task(s) to pending`,
+      );
     }
 
     // Clear any senders stuck in "restricted" status (restriction mechanism removed)
     const SenderAccount = require("./models/SenderAccount");
     const restrictedResult = await SenderAccount.updateMany(
       { status: "restricted" },
-      { $set: { status: "offline", restricted_until: null, restriction_reason: null } },
+      {
+        $set: {
+          status: "offline",
+          restricted_until: null,
+          restriction_reason: null,
+        },
+      },
     );
     if (restrictedResult.modifiedCount > 0) {
-      logger.info(`[startup] Unrestricted ${restrictedResult.modifiedCount} sender(s)`);
+      logger.info(
+        `[startup] Unrestricted ${restrictedResult.modifiedCount} sender(s)`,
+      );
     }
 
     // Start schedulers
     campaignScheduler.start();
     deepScrapeScheduler.start();
+    youtubeScheduler.start();
 
     logger.info("Startup complete");
   })

@@ -35,7 +35,7 @@ router.get("/:id", async (req, res) => {
 // POST /api/carousels/generate — kick off carousel generation
 router.post("/generate", validate(carouselSchemas.generate), async (req, res) => {
   try {
-    const { client_id, transcript_ids, swipe_file_id, template_id, goal, copy_model, lut_id, style_id, style_prompt_override } = req.body;
+    const { client_id, transcript_ids, swipe_file_id, template_id, goal, copy_model, lut_id, style_id, style_prompt_override, layout_preset } = req.body;
 
     // Resolve style prompt from saved preset or override
     let stylePrompt = style_prompt_override || "";
@@ -52,6 +52,7 @@ router.post("/generate", validate(carouselSchemas.generate), async (req, res) =>
       swipe_file_id: swipe_file_id || null,
       template_id: template_id || null,
       lut_id: lut_id || null,
+      layout_preset: layout_preset || { mode: "ai_suggested" },
       goal: goal || "saveable_educational",
       status: "queued",
     });
@@ -71,6 +72,7 @@ router.post("/generate", validate(carouselSchemas.generate), async (req, res) =>
       copyModel: copy_model || "claude-sonnet",
       lutId: lut_id || null,
       stylePrompt: stylePrompt || null,
+      layoutPreset: layout_preset || null,
     }).catch((err) => {
       logger.error("Background pipeline failed:", err);
     });
@@ -194,6 +196,111 @@ router.post("/:id/regenerate", async (req, res) => {
   } catch (err) {
     logger.error("Failed to regenerate carousel:", err);
     res.status(500).json({ error: "Failed to regenerate carousel" });
+  }
+});
+
+// POST /api/carousels/:id/publish-ig — publish carousel to Instagram
+router.post("/:id/publish-ig", async (req, res) => {
+  try {
+    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    if (!carousel) return res.status(404).json({ error: "Carousel not found" });
+
+    const { publishToInstagram } = require("../services/carousel/igPublisher");
+    const result = await publishToInstagram({
+      carouselId: carousel._id.toString(),
+      accountId: req.account._id.toString(),
+    });
+
+    // Create notification
+    try {
+      const Notification = require("../models/Notification");
+      const Client = require("../models/Client");
+      const client = await Client.findById(carousel.client_id).lean();
+      await Notification.create({
+        account_id: req.account._id,
+        type: "general",
+        title: "Posted to Instagram",
+        message: `Carousel for ${client?.name || "Unknown"} published to Instagram`,
+        client_id: carousel.client_id,
+        carousel_id: carousel._id,
+      });
+    } catch (notifErr) {
+      logger.error("Failed to create publish notification:", notifErr);
+    }
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    logger.error("Failed to publish to Instagram:", err);
+    res.status(400).json({ error: err.message || "Failed to publish to Instagram" });
+  }
+});
+
+// POST /api/carousels/:id/slides/:position/rerender — re-render a single slide with new composition
+router.post("/:id/slides/:position/rerender", async (req, res) => {
+  try {
+    const { composition, image_id, extra_image_ids } = req.body;
+    const position = parseInt(req.params.position, 10);
+    if (isNaN(position)) return res.status(400).json({ error: "Invalid position" });
+
+    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    if (!carousel) return res.status(404).json({ error: "Carousel not found" });
+
+    const slideIndex = carousel.slides.findIndex((s) => s.position === position);
+    if (slideIndex === -1) return res.status(404).json({ error: "Slide not found" });
+
+    const slide = carousel.slides[slideIndex];
+
+    // Update composition if provided
+    if (composition) slide.composition = composition;
+
+    // Update primary image if provided
+    if (image_id) {
+      const ClientImage = require("../models/ClientImage");
+      const img = await ClientImage.findById(image_id);
+      if (img) {
+        slide.image_id = img._id;
+        slide.image_key = img.storage_key;
+      }
+    }
+
+    // Update extra images if provided
+    if (extra_image_ids && Array.isArray(extra_image_ids)) {
+      const ClientImage = require("../models/ClientImage");
+      const imgs = await ClientImage.find({ _id: { $in: extra_image_ids } });
+      slide.extra_image_ids = imgs.map((i) => i._id);
+      slide.extra_image_keys = imgs.map((i) => i.storage_key);
+    }
+
+    // Build image selections for this single slide
+    const imageSelections = [{
+      position: slide.position,
+      image_key: slide.image_key || null,
+      image_id: slide.image_id || null,
+      extra_image_keys: slide.extra_image_keys || [],
+    }];
+
+    const { renderSlides } = require("../services/carousel/slideRenderer");
+    const rendered = await renderSlides({
+      carouselId: carousel._id.toString(),
+      clientId: carousel.client_id.toString(),
+      accountId: carousel.account_id.toString(),
+      slides: [slide],
+      imageSelections,
+      templateId: carousel.template_id?.toString(),
+      lutId: carousel.lut_id?.toString() || null,
+    });
+
+    // Update just this slide in the carousel
+    const r = rendered[0];
+    if (r) slide.rendered_key = r.rendered_key;
+
+    carousel.slides[slideIndex] = slide;
+    await carousel.save();
+
+    res.json(carousel);
+  } catch (err) {
+    logger.error("Failed to re-render slide:", err);
+    res.status(500).json({ error: "Failed to re-render slide" });
   }
 });
 

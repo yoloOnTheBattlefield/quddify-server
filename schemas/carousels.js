@@ -11,6 +11,14 @@ const generate = z.object({
     copy_model: z.enum(["claude-sonnet", "claude-opus", "gpt-4o"]).optional(),
     style_id: z.string().nullable().optional(),
     style_prompt_override: z.string().nullable().optional(),
+    layout_preset: z.object({
+      mode: z.enum(["uniform", "sequence", "ai_suggested"]),
+      default_composition: z.enum(["single_hero", "split_collage", "grid_2x2", "before_after", "lifestyle_grid", "text_only"]).optional(),
+      sequence: z.array(z.object({
+        position: z.number(),
+        composition: z.enum(["single_hero", "split_collage", "grid_2x2", "before_after", "lifestyle_grid", "text_only"]),
+      })).optional(),
+    }).optional(),
   }),
 });
 

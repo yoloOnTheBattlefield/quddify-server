@@ -36,6 +36,23 @@ const CarouselTemplateSchema = new mongoose.Schema(
       overlay_opacity: { type: Number, default: 0.4 },
       accent_elements: [{ type: String }],
     },
+    layout_preset: {
+      mode: { type: String, enum: ["uniform", "sequence", "ai_suggested"], default: "ai_suggested" },
+      default_composition: {
+        type: String,
+        enum: ["single_hero", "split_collage", "grid_2x2", "before_after", "lifestyle_grid", "text_only"],
+        default: "single_hero",
+      },
+      sequence: [
+        {
+          position: { type: Number },
+          composition: {
+            type: String,
+            enum: ["single_hero", "split_collage", "grid_2x2", "before_after", "lifestyle_grid", "text_only"],
+          },
+        },
+      ],
+    },
     is_default: { type: Boolean, default: false },
   },
   { collection: "carousel_templates", versionKey: false, timestamps: { createdAt: "created_at", updatedAt: "updated_at" } },

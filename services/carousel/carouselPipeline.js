@@ -34,7 +34,7 @@ async function updateJobStatus(jobId, step, progress, io) {
  * @param {Object} [opts.io] - Socket.IO instance for real-time updates
  * @param {string} [opts.copyModel] - AI model for copy generation
  */
-async function runPipeline({ carouselId, jobId, io, copyModel, lutId, stylePrompt }) {
+async function runPipeline({ carouselId, jobId, io, copyModel, lutId, stylePrompt, layoutPreset }) {
   const carousel = await Carousel.findById(carouselId);
   if (!carousel) throw new Error(`Carousel ${carouselId} not found`);
 
@@ -64,6 +64,7 @@ async function runPipeline({ carouselId, jobId, io, copyModel, lutId, stylePromp
       templateId: carousel.template_id?.toString(),
       copyModel: copyModel || "claude-sonnet",
       stylePrompt: stylePrompt || null,
+      layoutPreset: layoutPreset || carousel.layout_preset || null,
     });
 
     pushLog(`Generated ${copyResult.slides.length} slides of copy`);
@@ -130,6 +131,8 @@ async function runPipeline({ carouselId, jobId, io, copyModel, lutId, stylePromp
         ...slide,
         image_id: sel?.image_id || null,
         image_key: sel?.image_key || null,
+        extra_image_ids: sel?.extra_image_ids || [],
+        extra_image_keys: sel?.extra_image_keys || [],
         is_ai_generated_image: sel?.is_ai_generated || false,
         image_selection_reason: sel?.image_selection_reason || "",
       };
@@ -202,6 +205,23 @@ async function runPipeline({ carouselId, jobId, io, copyModel, lutId, stylePromp
 
     pushLog(`Carousel ${carouselId} complete — confidence: ${confidence.overall}/100`);
 
+    // Create notification
+    try {
+      const Notification = require("../../models/Notification");
+      const carousel = await Carousel.findById(carouselId).lean();
+      const client = carousel ? await Client.findById(carousel.client_id).lean() : null;
+      await Notification.create({
+        account_id: carousel.account_id,
+        type: "carousel_ready",
+        title: "Carousel Ready",
+        message: `Carousel for ${client?.name || "Unknown"} is ready — confidence: ${confidence.overall}/100`,
+        client_id: carousel.client_id,
+        carousel_id: carouselId,
+      });
+    } catch (notifErr) {
+      logger.error("Failed to create completion notification:", notifErr);
+    }
+
     return { carouselId, confidence };
   } catch (err) {
     logger.error(`Pipeline failed for carousel ${carouselId}:`, err);
@@ -216,6 +236,23 @@ async function runPipeline({ carouselId, jobId, io, copyModel, lutId, stylePromp
       error: err.message,
       completed_at: new Date(),
     });
+
+    // Create failure notification
+    try {
+      const Notification = require("../../models/Notification");
+      const carousel = await Carousel.findById(carouselId).lean();
+      const client = carousel ? await Client.findById(carousel.client_id).lean() : null;
+      await Notification.create({
+        account_id: carousel.account_id,
+        type: "carousel_failed",
+        title: "Carousel Failed",
+        message: `Carousel for ${client?.name || "Unknown"} failed: ${err.message}`,
+        client_id: carousel?.client_id,
+        carousel_id: carouselId,
+      });
+    } catch (notifErr) {
+      logger.error("Failed to create failure notification:", notifErr);
+    }
 
     if (io) {
       const job = await CarouselJob.findById(jobId).lean();

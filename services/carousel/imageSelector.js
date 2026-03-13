@@ -138,15 +138,26 @@ function scoreImageForSlide(image, slide, goal) {
   return { score: Math.max(0, score), reasons };
 }
 
+// How many images each composition type needs
+const IMAGES_NEEDED = {
+  single_hero: 1,
+  text_only: 0,
+  split_collage: 4,
+  grid_2x2: 4,
+  before_after: 2,
+  lifestyle_grid: 4,
+};
+
 /**
- * Select the best image for each slide from the client's image library.
+ * Select the best image(s) for each slide from the client's image library.
+ * For multi-image compositions, selects additional scored images.
  * @param {Object} opts
  * @param {string} opts.clientId
  * @param {string} opts.accountId
- * @param {Array<{position, role, copy}>} opts.slides
+ * @param {Array<{position, role, copy, composition}>} opts.slides
  * @param {string} opts.goal
  * @param {string[]} [opts.excludeCarouselIds] - Carousel IDs to check for reuse
- * @returns {Array<{position, image_id, image_key, score, needs_ai_image}>}
+ * @returns {Array<{position, image_id, image_key, score, needs_ai_image, extra_image_ids, extra_image_keys}>}
  */
 async function selectImages({ clientId, accountId, slides, goal, excludeCarouselIds = [] }) {
   // Fetch all ready images for this client
@@ -162,6 +173,8 @@ async function selectImages({ clientId, accountId, slides, goal, excludeCarousel
       position: slide.position,
       image_id: null,
       image_key: null,
+      extra_image_ids: [],
+      extra_image_keys: [],
       score: 0,
       needs_ai_image: true,
     }));
@@ -177,6 +190,24 @@ async function selectImages({ clientId, accountId, slides, goal, excludeCarousel
   );
 
   for (const slide of sortedSlides) {
+    const composition = slide.composition || "single_hero";
+    const needed = IMAGES_NEEDED[composition] || 1;
+
+    // Text-only slides don't need images
+    if (composition === "text_only") {
+      results.push({
+        position: slide.position,
+        image_id: null,
+        image_key: null,
+        extra_image_ids: [],
+        extra_image_keys: [],
+        score: 100,
+        needs_ai_image: false,
+        image_selection_reason: "Text-only composition — no image needed",
+      });
+      continue;
+    }
+
     const scored = images
       .filter((img) => !usedImageIds.has(img._id.toString()))
       .map((img) => {
@@ -193,11 +224,27 @@ async function selectImages({ clientId, accountId, slides, goal, excludeCarousel
       const reason = best.reasons.length > 0
         ? `Score ${Math.round(best.score)}: ${best.reasons.join(", ")}`
         : `Score ${Math.round(best.score)}`;
+
+      // Select extra images for multi-image compositions
+      const extraImageIds = [];
+      const extraImageKeys = [];
+      if (needed > 1) {
+        const extraCandidates = scored.slice(1).filter((s) => s.score >= MIN_SCORE && !usedImageIds.has(s.image._id.toString()));
+        const extraCount = Math.min(needed - 1, extraCandidates.length);
+        for (let i = 0; i < extraCount; i++) {
+          usedImageIds.add(extraCandidates[i].image._id.toString());
+          extraImageIds.push(extraCandidates[i].image._id);
+          extraImageKeys.push(extraCandidates[i].image.storage_key);
+        }
+      }
+
       results.push({
         position: slide.position,
         image_id: best.image._id,
         image_key: best.image.storage_key,
         thumbnail_key: best.image.thumbnail_key,
+        extra_image_ids: extraImageIds,
+        extra_image_keys: extraImageKeys,
         score: best.score,
         needs_ai_image: false,
         image_selection_reason: reason,
@@ -207,6 +254,8 @@ async function selectImages({ clientId, accountId, slides, goal, excludeCarousel
         position: slide.position,
         image_id: null,
         image_key: null,
+        extra_image_ids: [],
+        extra_image_keys: [],
         score: 0,
         needs_ai_image: true,
         image_selection_reason: best

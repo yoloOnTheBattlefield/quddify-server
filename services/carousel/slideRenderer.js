@@ -363,7 +363,19 @@ async function renderSlides({ carouselId, clientId, accountId, slides, imageSele
         }
       }
 
-      // Fetch extra images for multi-image compositions
+      // Load pre-selected extra images first (from imageSelector)
+      const preSelectedExtras = selection?.extra_image_keys || [];
+      for (const extraKey of preSelectedExtras) {
+        if (slideImages.length >= needed) break;
+        try {
+          slideImages.push(await loadImage(extraKey, lutData, lutSize));
+          usedImageKeys.add(extraKey);
+        } catch (err) {
+          logger.warn(`Could not load pre-selected extra image ${extraKey}: ${err.message}`);
+        }
+      }
+
+      // Fetch remaining extra images if still needed (fallback to random high-quality)
       if (needed > slideImages.length && composition !== "text_only") {
         const extras = await fetchExtraImages(
           clientId,

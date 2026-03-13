@@ -47,7 +47,7 @@ The carousel MUST follow this emotional structure (expand each section with as m
 HOOK (1-2 slides): Curiosity loop — moment or tension, NOT a lesson. Must leave an unresolved question.
 TENSION (2-4 slides): Relatable struggle — build recognition. The reader should think "that's me." Use specific details, internal dialogue, sensory moments. Don't rush this section.
 CONFLICT (2-4 slides): Deepen the pain — show what it cost them. Repeated failures, broken promises, the weight of staying stuck.
-PATTERN INTERRUPT (1 slide): 3-7 words max, single short sentence that breaks rhythm.
+PATTERN INTERRUPT (1 slide): 3-7 words max, single short sentence that breaks rhythm. Still use an image (single_hero) — the short copy over a striking photo is more powerful than text-only.
 TURNING POINT (1-2 slides): What shifted — a realization, decision, or moment of change.
 TRANSFORMATION (2-4 slides): Proof it worked — use specific numbers, timelines, tangible results. Show both the external change and the internal feeling.
 IDENTITY SHIFT (1-2 slides): Bridge from "I" to "you" — make the reader reflect on their own identity.
@@ -138,7 +138,7 @@ async function callOpenAI(accountId, modelId, systemPrompt, userPrompt) {
  * @param {string} [opts.copyModel] - "claude-sonnet" | "claude-opus" | "gpt-4o"
  * @returns {{ slides: Array<{position, role, copy, why}>, caption, hashtags, strategy_notes, angle }}
  */
-async function generateCopy({ accountId, clientId, transcriptIds, goal, swipeFileId, templateId, copyModel, stylePrompt: externalStylePrompt }) {
+async function generateCopy({ accountId, clientId, transcriptIds, goal, swipeFileId, templateId, copyModel, stylePrompt: externalStylePrompt, layoutPreset }) {
   const modelKey = copyModel || "claude-sonnet";
   const modelConfig = MODEL_MAP[modelKey];
   if (!modelConfig) throw new Error(`Unknown copy model: ${modelKey}`);
@@ -155,7 +155,7 @@ async function generateCopy({ accountId, clientId, transcriptIds, goal, swipeFil
   const clientNiche = client.niche || "fitness";
   const angle = await extractBestAngle(
     transcriptIds,
-    client.voice_profile?.tone || "confident and direct",
+    client.voice_profile?.raw_text ? "as described in voice profile" : "confident and direct",
     clientNiche
   );
 
@@ -163,14 +163,7 @@ async function generateCopy({ accountId, clientId, transcriptIds, goal, swipeFil
   const stylePrompt = buildStylePrompt(swipeFile);
 
   const voiceProfile = client.voice_profile || {};
-  const voiceInstructions = [
-    voiceProfile.tone ? `Tone: ${voiceProfile.tone}` : null,
-    voiceProfile.vocabulary_level ? `Vocabulary: ${voiceProfile.vocabulary_level}` : null,
-    voiceProfile.phrases_to_use?.length ? `Use phrases like: ${voiceProfile.phrases_to_use.join(", ")}` : null,
-    voiceProfile.phrases_to_avoid?.length ? `Avoid phrases like: ${voiceProfile.phrases_to_avoid.join(", ")}` : null,
-    voiceProfile.personality_notes ? `Personality: ${voiceProfile.personality_notes}` : null,
-    voiceProfile.example_copy ? `Example of their voice:\n"${voiceProfile.example_copy}"` : null,
-  ].filter(Boolean).join("\n");
+  const voiceInstructions = voiceProfile.raw_text || "";
 
   const ctaDefaults = client.cta_defaults || {};
   const ctaInstructions = ctaDefaults.cta_enabled !== false
@@ -215,15 +208,15 @@ CTA:
 ${ctaInstructions}
 ${client.niche_playbook ? `\nNICHE-SPECIFIC PLAYBOOK (use this for niche-authentic language, pain points, and examples):\n${client.niche_playbook}` : ""}
 
-AVAILABLE COMPOSITION TYPES (pick the best one for each slide):
+AVAILABLE COMPOSITION TYPES:
 - "single_hero" — one full-bleed portrait image, text overlaid. Most common.
 - "split_collage" — main background image + 2-3 stacked inset photos on the right side
 - "grid_2x2" — four equal quadrant images with text centered overlay
 - "before_after" — two images split vertically, side by side
 - "lifestyle_grid" — 4-photo grid showing success markers with text overlay
-- "text_only" — bold text on solid/gradient background, no image. Good for pattern interrupts.
+- "text_only" — bold text on solid/gradient background, no image. Use sparingly — only when the slide has zero visual context needed.
 
-If a CAROUSEL STYLE GUIDE is provided above, use its composition recommendations. Otherwise default to "single_hero" for most slides and "text_only" for pattern interrupts.
+${layoutPreset?.mode === "uniform" ? `LAYOUT CONSTRAINT: You MUST use "${layoutPreset.default_composition || "single_hero"}" as the composition for ALL slides. Do not use any other composition type.` : layoutPreset?.mode === "sequence" && layoutPreset.sequence?.length ? `LAYOUT CONSTRAINT: You MUST use the following compositions for each slide position:\n${layoutPreset.sequence.map((s) => `- Slide ${s.position}: "${s.composition}"`).join("\n")}\nFor any slide positions not listed above, choose the best composition.` : `If a CAROUSEL STYLE GUIDE is provided above, use its composition recommendations. Otherwise default to "single_hero" for all slides, including pattern interrupts.`}
 
 Return ONLY valid JSON (no markdown fencing, no extra text):
 {

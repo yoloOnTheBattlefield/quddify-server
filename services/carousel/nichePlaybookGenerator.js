@@ -80,7 +80,7 @@ async function generateNichePlaybook(clientId, accountId) {
       { role: "system", content: NICHE_PLAYBOOK_PROMPT },
       {
         role: "user",
-        content: `Generate a niche-specific playbook for: ${niche}\n\nClient name: ${client.name}\n${client.voice_profile?.personality_notes ? `Personality context: ${client.voice_profile.personality_notes}` : ""}`,
+        content: `Generate a niche-specific playbook for: ${niche}\n\nClient name: ${client.name}\n${client.voice_profile?.raw_text ? `Voice profile context: ${client.voice_profile.raw_text}` : ""}`,
       },
     ],
     max_tokens: 4096,
