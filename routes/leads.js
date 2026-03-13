@@ -122,6 +122,37 @@ router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
   }
 });
 
+// POST /leads/sync-outbound — backfill outbound leads with inbound funnel status
+router.post("/sync-outbound", async (req, res) => {
+  try {
+    const linked = await Lead.find({
+      outbound_lead_id: { $ne: null },
+      $or: [{ link_sent_at: { $ne: null } }, { booked_at: { $ne: null } }],
+    }).lean();
+
+    let updated = 0;
+    for (const lead of linked) {
+      const update = {};
+      if (lead.link_sent_at) {
+        update.link_sent = true;
+        update.link_sent_at = lead.link_sent_at;
+      }
+      if (lead.booked_at) {
+        update.booked = true;
+        update.booked_at = lead.booked_at;
+      }
+      const result = await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, update);
+      if (result) updated++;
+    }
+
+    logger.info(`[sync-outbound] Synced ${updated}/${linked.length} outbound leads`);
+    res.json({ total: linked.length, updated });
+  } catch (error) {
+    logger.error("Sync outbound error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // delete lead
 router.delete("/:id", async (req, res) => {
   try {
