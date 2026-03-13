@@ -1551,4 +1551,70 @@ router.get("/outbound/question-types", async (req, res) => {
   }
 });
 
+// ── AI Analytics Reports ─────────────────────────────────
+
+const AnalyticsReport = require("../models/AnalyticsReport");
+const { generateAndSaveReport } = require("../services/analyticsReportGenerator");
+
+// POST /analytics/outbound/ai-report — Generate a new AI report
+router.post("/outbound/ai-report", async (req, res) => {
+  try {
+    const { start_date, end_date, campaign_id } = req.body;
+
+    const reportDoc = await AnalyticsReport.create({
+      account_id: req.account._id,
+      type: "on_demand",
+      status: "generating",
+      date_range: {
+        start: start_date ? new Date(`${start_date}T00:00:00.000Z`) : new Date("2020-01-01"),
+        end: end_date ? new Date(`${end_date}T23:59:59.999Z`) : new Date(),
+      },
+      campaign_id: campaign_id || null,
+    });
+
+    // Fire and forget — async generation
+    generateAndSaveReport(reportDoc._id).catch((err) => {
+      logger.error({ reportId: reportDoc._id, err: err.message }, "AI report generation failed");
+    });
+
+    res.json({ report_id: reportDoc._id, status: "generating" });
+  } catch (err) {
+    logger.error("AI report creation error:", err);
+    res.status(500).json({ error: "Failed to create AI report" });
+  }
+});
+
+// GET /analytics/outbound/ai-reports — List past AI reports
+router.get("/outbound/ai-reports", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const reports = await AnalyticsReport.find({ account_id: req.account._id })
+      .select("type status date_range campaign_id report.executive_summary report.overall_health token_usage error generated_at")
+      .sort({ generated_at: -1 })
+      .limit(limit)
+      .lean();
+
+    res.json({ reports });
+  } catch (err) {
+    logger.error("AI reports list error:", err);
+    res.status(500).json({ error: "Failed to fetch AI reports" });
+  }
+});
+
+// GET /analytics/outbound/ai-reports/:id — Get a single AI report
+router.get("/outbound/ai-reports/:id", async (req, res) => {
+  try {
+    const report = await AnalyticsReport.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!report) return res.status(404).json({ error: "Report not found" });
+    res.json(report);
+  } catch (err) {
+    logger.error("AI report fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch AI report" });
+  }
+});
+
 module.exports = router;
