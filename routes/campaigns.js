@@ -197,15 +197,60 @@ router.get("/:id/senders", async (req, res) => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const sentTodayCounts = await CampaignLead.aggregate([
-      {
-        $match: {
-          campaign_id: campaign._id,
-          sender_id: { $in: senders.map((s) => s._id) },
-          sent_at: { $gte: todayStart },
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const senderIds = senders.map((s) => s._id);
+
+    const [sentTodayCounts, failedCounts, replyStats7d] = await Promise.all([
+      CampaignLead.aggregate([
+        {
+          $match: {
+            campaign_id: campaign._id,
+            sender_id: { $in: senderIds },
+            sent_at: { $gte: todayStart },
+          },
         },
-      },
-      { $group: { _id: "$sender_id", count: { $sum: 1 } } },
+        { $group: { _id: "$sender_id", count: { $sum: 1 } } },
+      ]),
+      CampaignLead.aggregate([
+        {
+          $match: {
+            campaign_id: campaign._id,
+            sender_id: { $in: senderIds },
+            status: "failed",
+          },
+        },
+        { $group: { _id: "$sender_id", count: { $sum: 1 } } },
+      ]),
+      // Count sent in last 7 days per sender and how many of those got a reply (via OutboundLead.replied)
+      CampaignLead.aggregate([
+        {
+          $match: {
+            campaign_id: campaign._id,
+            sender_id: { $in: senderIds },
+            sent_at: { $gte: sevenDaysAgo },
+            status: { $in: ["sent", "delivered", "replied"] },
+          },
+        },
+        {
+          $lookup: {
+            from: "outbound_leads",
+            localField: "outbound_lead_id",
+            foreignField: "_id",
+            as: "lead",
+          },
+        },
+        { $unwind: "$lead" },
+        {
+          $group: {
+            _id: "$sender_id",
+            sent: { $sum: 1 },
+            replied: { $sum: { $cond: [{ $eq: ["$lead.replied", true] }, 1, 0] } },
+          },
+        },
+      ]),
     ]);
 
     const sentTodayMap = {};
@@ -213,21 +258,14 @@ router.get("/:id/senders", async (req, res) => {
       sentTodayMap[c._id.toString()] = c.count;
     }
 
-    // Count failed messages per sender
-    const failedCounts = await CampaignLead.aggregate([
-      {
-        $match: {
-          campaign_id: campaign._id,
-          sender_id: { $in: senders.map((s) => s._id) },
-          status: "failed",
-        },
-      },
-      { $group: { _id: "$sender_id", count: { $sum: 1 } } },
-    ]);
-
     const failedMap = {};
     for (const c of failedCounts) {
       failedMap[c._id.toString()] = c.count;
+    }
+
+    const replyStats7dMap = {};
+    for (const c of replyStats7d) {
+      replyStats7dMap[c._id.toString()] = { sent: c.sent, replied: c.replied };
     }
 
     let online = 0;
@@ -279,6 +317,9 @@ router.get("/:id/senders", async (req, res) => {
         issue = "Rest day";
       }
 
+      const stats7d = replyStats7dMap[s._id.toString()];
+      const replyRate7d = stats7d && stats7d.sent > 0 ? Math.round((stats7d.replied / stats7d.sent) * 100) : null;
+
       return {
         _id: s._id,
         ig_username: s.ig_username,
@@ -288,6 +329,8 @@ router.get("/:id/senders", async (req, res) => {
         daily_limit: dailyLimit,
         sent_today: sentToday,
         failed_total: failedTotal,
+        reply_rate_7d: replyRate7d,
+        is_connected_to_ai: oa ? oa.isConnectedToAISetter === true : false,
         health,
         issue,
         outbound_account: oa
@@ -316,6 +359,8 @@ router.get("/:id/senders", async (req, res) => {
           daily_limit: 50,
           sent_today: 0,
           failed_total: 0,
+          reply_rate_7d: null,
+          is_connected_to_ai: oa.isConnectedToAISetter === true,
           health: "risk",
           issue: "No sender linked (extension not connected)",
           outbound_account: {

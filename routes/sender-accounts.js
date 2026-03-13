@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 const SenderAccount = require("../models/SenderAccount");
 const OutboundAccount = require("../models/OutboundAccount");
 const Task = require("../models/Task");
+const CampaignLead = require("../models/CampaignLead");
 const router = express.Router();
 
 // GET /api/sender-accounts — list senders with upcoming task info
@@ -53,7 +54,7 @@ router.get("/", async (req, res) => {
     const outbounds = outboundIds.length
       ? await OutboundAccount.find(
           { _id: { $in: outboundIds } },
-          { _id: 1, username: 1, status: 1 },
+          { _id: 1, username: 1, status: 1, isConnectedToAISetter: 1 },
         ).lean()
       : [];
     const outboundMap = {};
@@ -61,13 +62,54 @@ router.get("/", async (req, res) => {
       outboundMap[ob._id.toString()] = ob;
     }
 
+    // Reply rate in last 7 days per sender (join with outbound_leads for replied status)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const replyStats = await CampaignLead.aggregate([
+      {
+        $match: {
+          sender_id: { $in: senderIds },
+          sent_at: { $gte: sevenDaysAgo },
+          status: { $in: ["sent", "delivered", "replied"] },
+        },
+      },
+      {
+        $lookup: {
+          from: "outbound_leads",
+          localField: "outbound_lead_id",
+          foreignField: "_id",
+          as: "lead",
+        },
+      },
+      { $unwind: "$lead" },
+      {
+        $group: {
+          _id: "$sender_id",
+          sent: { $sum: 1 },
+          replied: { $sum: { $cond: [{ $eq: ["$lead.replied", true] }, 1, 0] } },
+        },
+      },
+    ]);
+
+    const replyStatsMap = {};
+    for (const r of replyStats) {
+      replyStatsMap[r._id.toString()] = { sent: r.sent, replied: r.replied };
+    }
+
     const enriched = senders.map((s) => {
       const obId = s.outbound_account_id?.toString();
+      const ob = obId ? outboundMap[obId] || null : null;
+      const stats = replyStatsMap[s._id.toString()];
+      const replyRate7d = stats && stats.sent > 0 ? Math.round((stats.replied / stats.sent) * 100) : null;
       return {
         ...s,
         upcomingTask: taskBySender[s._id.toString()] || null,
-        outbound_account: obId ? outboundMap[obId] || null : null,
+        outbound_account: ob ? { _id: ob._id, username: ob.username, status: ob.status } : null,
         link_status: obId ? "linked" : "not_linked",
+        reply_rate_7d: replyRate7d,
+        is_connected_to_ai: ob ? ob.isConnectedToAISetter === true : false,
       };
     });
 
