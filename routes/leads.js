@@ -2,6 +2,7 @@ const escapeRegex = require("../utils/escapeRegex");
 const logger = require("../utils/logger").child({ module: "leads" });
 const express = require("express");
 const Lead = require("../models/Lead");
+const OutboundLead = require("../models/OutboundLead");
 const validate = require("../middleware/validate");
 const { leadCreateSchema, leadUpdateSchema } = require("../schemas/leads");
 
@@ -97,6 +98,23 @@ router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
     }).lean();
 
     if (!lead) return res.status(404).json({ error: "Not found" });
+
+    // Sync funnel status to outbound lead when linked
+    if (lead.outbound_lead_id) {
+      const outboundUpdate = {};
+      if (lead.link_sent_at) {
+        outboundUpdate.link_sent = true;
+        outboundUpdate.link_sent_at = lead.link_sent_at;
+      }
+      if (lead.booked_at) {
+        outboundUpdate.booked = true;
+        outboundUpdate.booked_at = lead.booked_at;
+      }
+      if (Object.keys(outboundUpdate).length > 0) {
+        await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, outboundUpdate);
+      }
+    }
+
     res.json(lead);
   } catch (error) {
     logger.error("Update lead error:", error);
