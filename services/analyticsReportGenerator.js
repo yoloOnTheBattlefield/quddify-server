@@ -99,7 +99,7 @@ async function gatherMessages(obFilter) {
     {
       $project: {
         _id: 0,
-        message: { $substrBytes: ["$_id", 0, 200] },
+        message: { $substrCP: ["$_id", 0, 200] },
         sent: 1,
         replied: 1,
         booked: 1,
