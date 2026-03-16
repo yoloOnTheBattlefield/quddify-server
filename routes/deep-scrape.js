@@ -7,6 +7,8 @@ const OutboundLead = require("../models/OutboundLead");
 const ResearchPost = require("../models/ResearchPost");
 const ResearchComment = require("../models/ResearchComment");
 const Prompt = require("../models/Prompt");
+const Campaign = require("../models/Campaign");
+const CampaignLead = require("../models/CampaignLead");
 const deepScraper = require("../services/deepScraper");
 const validate = require("../middleware/validate");
 const { startDeepScrapeSchema } = require("../schemas/deep-scrape");
@@ -603,6 +605,73 @@ router.delete("/:id", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete job" });
+  }
+});
+
+// POST /api/deep-scrape/:id/add-to-campaign — add all qualified leads from a job to a campaign
+router.post("/:id/add-to-campaign", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid job ID" });
+    }
+
+    const { campaign_id } = req.body;
+    if (!campaign_id || !mongoose.Types.ObjectId.isValid(campaign_id)) {
+      return res.status(400).json({ error: "Valid campaign_id is required" });
+    }
+
+    const campaign = await Campaign.findOne({
+      _id: campaign_id,
+      account_id: req.account._id,
+    });
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // Get all qualified lead IDs from this job
+    const leadIds = await OutboundLead.find({
+      account_id: req.account._id,
+      "metadata.executionId": `deep-scrape-${req.params.id}`,
+      qualified: true,
+    })
+      .select("_id")
+      .lean()
+      .then((docs) => docs.map((d) => d._id));
+
+    if (leadIds.length === 0) {
+      return res.json({ added: 0, duplicates_skipped: 0, total_qualified: 0 });
+    }
+
+    const docs = leadIds.map((id) => ({
+      campaign_id: campaign._id,
+      outbound_lead_id: id,
+      status: "pending",
+    }));
+
+    let inserted = 0;
+    try {
+      const result = await CampaignLead.insertMany(docs, { ordered: false });
+      inserted = result.length;
+    } catch (err) {
+      if (err.code === 11000 || err.insertedDocs) {
+        inserted = err.insertedDocs?.length || 0;
+      } else {
+        throw err;
+      }
+    }
+
+    if (inserted > 0) {
+      const update = { $inc: { "stats.total": inserted, "stats.pending": inserted } };
+      if (campaign.status === "completed") {
+        update.$set = { status: "paused" };
+      }
+      await Campaign.findByIdAndUpdate(campaign._id, update);
+    }
+
+    res.json({ added: inserted, duplicates_skipped: leadIds.length - inserted, total_qualified: leadIds.length });
+  } catch (err) {
+    logger.error("Add deep scrape leads to campaign error:", err);
+    res.status(500).json({ error: "Failed to add leads to campaign" });
   }
 });
 

@@ -6,6 +6,8 @@ const request = require("supertest");
 const DeepScrapeJob = require("../models/DeepScrapeJob");
 const ApifyToken = require("../models/ApifyToken");
 const OutboundLead = require("../models/OutboundLead");
+const Campaign = require("../models/Campaign");
+const CampaignLead = require("../models/CampaignLead");
 
 // Mock deepScraper to avoid real Apify calls
 jest.mock("../services/deepScraper", () => ({
@@ -43,6 +45,8 @@ afterEach(async () => {
   await DeepScrapeJob.deleteMany({});
   await ApifyToken.deleteMany({});
   await OutboundLead.deleteMany({});
+  await Campaign.deleteMany({});
+  await CampaignLead.deleteMany({});
 });
 
 async function seedApifyToken() {
@@ -474,6 +478,121 @@ describe("DELETE /api/deep-scrape/:id", () => {
     });
 
     const res = await request(app).delete(`/api/deep-scrape/${job._id}`);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/deep-scrape/:id/add-to-campaign", () => {
+  it("adds qualified leads from a job to a campaign", async () => {
+    const job = await DeepScrapeJob.create({
+      account_id: accountId,
+      seed_usernames: ["s"],
+      status: "completed",
+    });
+    const campaign = await Campaign.create({
+      account_id: accountId,
+      name: "Test Campaign",
+      messages: ["Hi {{username}}"],
+      stats: { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, replied: 0, failed: 0, skipped: 0 },
+    });
+    // Create qualified and unqualified leads
+    await OutboundLead.create({
+      account_id: accountId,
+      followingKey: "qual1",
+      username: "qual1",
+      qualified: true,
+      metadata: { executionId: `deep-scrape-${job._id}` },
+    });
+    await OutboundLead.create({
+      account_id: accountId,
+      followingKey: "unqual1",
+      username: "unqual1",
+      qualified: false,
+      metadata: { executionId: `deep-scrape-${job._id}` },
+    });
+
+    const res = await request(app)
+      .post(`/api/deep-scrape/${job._id}/add-to-campaign`)
+      .send({ campaign_id: campaign._id.toString() });
+
+    expect(res.status).toBe(200);
+    expect(res.body.added).toBe(1);
+    expect(res.body.total_qualified).toBe(1);
+
+    const campaignLeads = await CampaignLead.find({ campaign_id: campaign._id });
+    expect(campaignLeads).toHaveLength(1);
+
+    const updatedCampaign = await Campaign.findById(campaign._id);
+    expect(updatedCampaign.stats.total).toBe(1);
+    expect(updatedCampaign.stats.pending).toBe(1);
+  });
+
+  it("skips duplicate leads already in campaign", async () => {
+    const job = await DeepScrapeJob.create({
+      account_id: accountId,
+      seed_usernames: ["s"],
+      status: "completed",
+    });
+    const campaign = await Campaign.create({
+      account_id: accountId,
+      name: "Test Campaign",
+      messages: ["Hi"],
+      stats: { total: 1, pending: 1, queued: 0, sent: 0, delivered: 0, replied: 0, failed: 0, skipped: 0 },
+    });
+    const lead = await OutboundLead.create({
+      account_id: accountId,
+      followingKey: "dup1",
+      username: "dup1",
+      qualified: true,
+      metadata: { executionId: `deep-scrape-${job._id}` },
+    });
+    // Pre-add lead to campaign
+    await CampaignLead.create({
+      campaign_id: campaign._id,
+      outbound_lead_id: lead._id,
+      status: "pending",
+    });
+
+    const res = await request(app)
+      .post(`/api/deep-scrape/${job._id}/add-to-campaign`)
+      .send({ campaign_id: campaign._id.toString() });
+
+    expect(res.status).toBe(200);
+    expect(res.body.added).toBe(0);
+    expect(res.body.duplicates_skipped).toBe(1);
+  });
+
+  it("returns 400 without campaign_id", async () => {
+    const job = await DeepScrapeJob.create({
+      account_id: accountId,
+      seed_usernames: ["s"],
+      status: "completed",
+    });
+
+    const res = await request(app)
+      .post(`/api/deep-scrape/${job._id}/add-to-campaign`)
+      .send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 404 for campaign from different account", async () => {
+    const job = await DeepScrapeJob.create({
+      account_id: accountId,
+      seed_usernames: ["s"],
+      status: "completed",
+    });
+    const otherCampaign = await Campaign.create({
+      account_id: new mongoose.Types.ObjectId(),
+      name: "Other",
+      messages: ["Hi"],
+      stats: { total: 0, pending: 0, queued: 0, sent: 0, delivered: 0, replied: 0, failed: 0, skipped: 0 },
+    });
+
+    const res = await request(app)
+      .post(`/api/deep-scrape/${job._id}/add-to-campaign`)
+      .send({ campaign_id: otherCampaign._id.toString() });
+
     expect(res.status).toBe(404);
   });
 });
