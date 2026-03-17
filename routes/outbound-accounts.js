@@ -151,7 +151,7 @@ router.patch("/:id", async (req, res) => {
     const allowedFields = [
       "username", "password", "email", "emailPassword", "proxy",
       "status", "isConnectedToAISetter", "assignedTo", "isBlacklisted",
-      "notes", "twoFA", "hidemyacc_profile_id",
+      "notes", "twoFA", "hidemyacc_profile_id", "daily_limit",
     ];
 
     const updates = {};

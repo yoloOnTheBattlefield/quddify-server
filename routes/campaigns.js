@@ -114,8 +114,14 @@ router.get("/:id/next-send", async (req, res) => {
     // Use base delay without jitter so the estimate is stable across polls
     const activeHours =
       (campaign.schedule.active_hours_end || 21) - (campaign.schedule.active_hours_start || 9);
-    const totalDailyMessages =
-      (campaign.daily_limit_per_sender || 50) * Math.max(senders.length, 1);
+    const outboundAccounts = await OutboundAccount.find({
+      _id: { $in: campaign.outbound_account_ids },
+    }).lean();
+    const outboundById = Object.fromEntries(outboundAccounts.map((a) => [a._id.toString(), a]));
+    const totalDailyMessages = onlineSenders.reduce((sum, s) => {
+      const acct = s.outbound_account_id ? outboundById[s.outbound_account_id.toString()] : null;
+      return sum + getEffectiveDailyLimit(campaign, acct);
+    }, 0) || 1;
     const delaySec = isTestMode ? 30 : Math.max(Math.round((activeHours * 3600) / totalDailyMessages), 30);
 
     let nextSendAt = null;
@@ -276,7 +282,9 @@ router.get("/:id/senders", async (req, res) => {
       const oa = s.outbound_account_id ? outboundMap[s.outbound_account_id.toString()] : null;
       const sentToday = sentTodayMap[s._id.toString()] || 0;
       const failedTotal = failedMap[s._id.toString()] || 0;
-      const dailyLimit = s.daily_limit || 50;
+      const dailyLimit = campaign.daily_limit_per_sender
+        || (oa && oa.daily_limit)
+        || 50;
 
       // Determine health
       let health = "good";
@@ -356,7 +364,7 @@ router.get("/:id/senders", async (req, res) => {
           display_name: null,
           status: "offline",
           last_seen: null,
-          daily_limit: 50,
+          daily_limit: campaign.daily_limit_per_sender || oa.daily_limit || 50,
           sent_today: 0,
           failed_total: 0,
           reply_rate_7d: null,

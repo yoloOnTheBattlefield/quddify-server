@@ -29,7 +29,7 @@ function computeDailyLimit(outbound) {
   }
 
   if (status === "ready") {
-    return 50;
+    return outbound.daily_limit || 50;
   }
 
   return 0;

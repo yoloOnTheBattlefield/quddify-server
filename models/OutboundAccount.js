@@ -37,6 +37,7 @@ const OutboundAccountSchema = new mongoose.Schema(
       cookies: { type: [mongoose.Schema.Types.Mixed], default: [] },
       updated_at: { type: Date, default: null },
     },
+    daily_limit: { type: Number, default: 50 },
     // Sending streak tracking — enforces rest days
     // 1 day break after every 5 consecutive sending days
     // 2 day break after every 10 consecutive sending days (cycle resets)

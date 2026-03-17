@@ -75,11 +75,12 @@ router.get("/next", async (req, res) => {
         });
       }
 
-      // Check outbound account daily cap (if sender is linked)
-      let dailyLimit = campaign.daily_limit_per_sender || 50;
+      // Check outbound account daily cap: campaign override > account daily_limit > 50
+      const outbound = sender.outbound_account_id
+        ? await OutboundAccount.findById(sender.outbound_account_id).lean()
+        : null;
 
-      if (sender.outbound_account_id) {
-        const outbound = await OutboundAccount.findById(sender.outbound_account_id).lean();
+      if (outbound) {
         const outboundCap = computeDailyLimit(outbound);
         if (outboundCap === 0) {
           return res.json({
@@ -88,9 +89,11 @@ router.get("/next", async (req, res) => {
             outbound_status: outbound?.status,
           });
         }
-        // Use the lower of campaign limit and outbound cap
-        dailyLimit = Math.min(dailyLimit, outboundCap);
       }
+
+      const dailyLimit = campaign.daily_limit_per_sender
+        || (outbound && outbound.daily_limit)
+        || 50;
 
       // Check daily limit for this sender (across all campaigns)
       const todayStart = new Date();
@@ -113,7 +116,7 @@ router.get("/next", async (req, res) => {
 
       // Check cooldown (skip if skip_wait_time is enabled)
       if (!campaign.schedule.skip_wait_time) {
-        const delaySec = calculateDelay(campaign, 1, sentToday);
+        const delaySec = calculateDelay(campaign, dailyLimit, sentToday);
         if (campaign.last_sent_at) {
           const elapsed = (Date.now() - campaign.last_sent_at.getTime()) / 1000;
           if (elapsed < delaySec) {

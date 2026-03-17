@@ -33,9 +33,14 @@ function isWithinActiveHours(schedule) {
   return currentHour >= schedule.active_hours_start && currentHour < schedule.active_hours_end;
 }
 
-// Calculate the effective daily limit per sender, accounting for campaign warmup ramp
-function getEffectiveDailyLimit(campaign) {
-  const baseLimit = campaign.daily_limit_per_sender || 50;
+// Effective daily limit for a sender: campaign override > outbound account limit > 50
+// Also applies the campaign warmup ramp if configured.
+function getEffectiveDailyLimit(campaign, outboundAcct) {
+  // Campaign override takes priority, then account limit, then default
+  const baseLimit = campaign.daily_limit_per_sender
+    || (outboundAcct && outboundAcct.daily_limit)
+    || 50;
+
   if (!campaign.warmup_days || campaign.warmup_days <= 0 || !campaign.warmup_start_date) {
     return baseLimit;
   }
@@ -51,12 +56,11 @@ function getEffectiveDailyLimit(campaign) {
 // Calculate seconds between each message based on REMAINING quota and REMAINING time.
 // This ensures the daily limit is always reached — if the campaign starts late or
 // tasks get stuck, subsequent sends speed up to compensate.
-function calculateDelay(campaign, numSenders, sentToday) {
+function calculateDelay(campaign, totalDailyLimit, sentToday) {
   const tz = campaign.schedule.timezone || "America/New_York";
   const endHour = campaign.schedule.active_hours_end || 21;
   const startHour = campaign.schedule.active_hours_start || 9;
-  const effectiveLimit = getEffectiveDailyLimit(campaign);
-  const totalDailyMessages = effectiveLimit * Math.max(numSenders, 1);
+  const totalDailyMessages = Math.max(totalDailyLimit, 1);
 
   // Calculate remaining time in active window (in seconds)
   const now = new Date();
@@ -335,6 +339,12 @@ async function processTick() {
 
       if (allSenders.length === 0) continue;
 
+      // Pre-fetch outbound accounts for limit lookups (used by delay calc + per-sender check)
+      const outboundAccounts = await OutboundAccount.find({
+        _id: { $in: campaign.outbound_account_ids },
+      }).lean();
+      const outboundById = Object.fromEntries(outboundAccounts.map((a) => [a._id.toString(), a]));
+
       // Count only online senders for delay calculation — avoids
       // cramming messages when some senders are offline
       const onlineSenders = allSenders.filter((s) => s.status === "online");
@@ -359,6 +369,13 @@ async function processTick() {
         campaign.burst_break_until = null;
       }
 
+      // Total daily limit = sum of each online sender's effective limit
+      // (campaign override > account daily_limit > 50)
+      const totalDailyLimit = onlineSenders.reduce((sum, s) => {
+        const acct = s.outbound_account_id ? outboundById[s.outbound_account_id.toString()] : null;
+        return sum + getEffectiveDailyLimit(campaign, acct);
+      }, 0);
+
       // Count how many have been sent today (across all senders for this campaign)
       const todayStartForDelay = new Date();
       todayStartForDelay.setHours(0, 0, 0, 0);
@@ -371,7 +388,7 @@ async function processTick() {
       // Calculate how long to wait between sends
       const delaySec = campaign.schedule.burst_enabled
         ? calculateBurstDelay(campaign)
-        : calculateDelay(campaign, onlineSenders.length, sentTodayTotal);
+        : calculateDelay(campaign, totalDailyLimit, sentTodayTotal);
 
       // Check if enough time has passed since last send (skip in test mode)
       if (!isTestMode && campaign.last_sent_at) {
@@ -408,7 +425,7 @@ async function processTick() {
             todayStart.setHours(0, 0, 0, 0);
 
             const outboundAcct = candidate.outbound_account_id
-              ? await OutboundAccount.findById(candidate.outbound_account_id).lean()
+              ? outboundById[candidate.outbound_account_id.toString()] || null
               : null;
 
             // Skip accounts that aren't in "ready" status (restricted, disabled, etc.)
@@ -456,7 +473,7 @@ async function processTick() {
               }
             }
 
-            // Check daily limit
+            // Check daily limit: campaign override > account daily_limit > 50
             const sentToday = await CampaignLead.countDocuments({
               campaign_id: campaign._id,
               sender_id: candidate._id,
@@ -464,7 +481,7 @@ async function processTick() {
               updatedAt: { $gte: todayStart },
             });
 
-            const dailyLimit = getEffectiveDailyLimit(campaign);
+            const dailyLimit = getEffectiveDailyLimit(campaign, outboundAcct);
             if (sentToday < dailyLimit) {
               const existingTask = await Task.findOne({
                 sender_id: candidate._id,

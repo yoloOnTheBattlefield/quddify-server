@@ -67,8 +67,17 @@ describe("getEffectiveDailyLimit", () => {
     expect(getEffectiveDailyLimit({ daily_limit_per_sender: 50 })).toBe(50);
   });
 
-  it("defaults to 50 when daily_limit_per_sender not set", () => {
+  it("defaults to 50 when no campaign override and no account limit", () => {
+    expect(getEffectiveDailyLimit({}, null)).toBe(50);
     expect(getEffectiveDailyLimit({})).toBe(50);
+  });
+
+  it("uses outbound account daily_limit when no campaign override", () => {
+    expect(getEffectiveDailyLimit({}, { daily_limit: 20 })).toBe(20);
+  });
+
+  it("campaign override takes priority over account limit", () => {
+    expect(getEffectiveDailyLimit({ daily_limit_per_sender: 15 }, { daily_limit: 20 })).toBe(15);
   });
 
   it("returns base limit when warmup_days is 0", () => {
