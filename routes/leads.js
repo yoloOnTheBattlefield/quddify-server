@@ -24,11 +24,22 @@ router.get("/", async (req, res) => {
     if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
     if (status) {
       const statuses = Array.isArray(status) ? status : status.split(",");
-      const statusConditions = statuses.map((s) => {
-        const field = `${s}_at`;
-        return { [field]: { $ne: null } };
-      });
-      filter.$or = statusConditions;
+      // Build mutually exclusive stage conditions matching the frontend pipeline priority:
+      // ghosted > closed > booked > follow_up > link_sent > new
+      const stageConditions = {
+        new: { link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null },
+        link_sent: { link_sent_at: { $ne: null }, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null },
+        follow_up: { follow_up_at: { $ne: null }, booked_at: null, closed_at: null, ghosted_at: null },
+        booked: { booked_at: { $ne: null }, closed_at: null, ghosted_at: null },
+        closed: { closed_at: { $ne: null }, ghosted_at: null },
+        ghosted: { ghosted_at: { $ne: null } },
+      };
+      const statusConditions = statuses
+        .map((s) => stageConditions[s])
+        .filter(Boolean);
+      if (statusConditions.length > 0) {
+        filter.$or = statusConditions;
+      }
     }
     if (start_date || end_date) {
       filter.date_created = {};

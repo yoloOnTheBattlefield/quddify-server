@@ -119,11 +119,17 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Missing utm_medium (contact_id)" });
     }
 
-    // Find lead by contact_id and update booked_at and email
+    // Find lead by contact_id — try with account scope first (from utm_source),
+    // then fall back to global match for backwards compat
     logger.info("Searching for lead with contact_id:", contactId);
 
+    const utmSource = payload?.tracking?.utm_source; // account ghl id
+    const leadQuery = utmSource
+      ? { contact_id: contactId, account_id: utmSource }
+      : { contact_id: contactId };
+
     const lead = await Lead.findOneAndUpdate(
-      { contact_id: contactId },
+      leadQuery,
       {
         booked_at: new Date(),
         ...(email && { email }),
