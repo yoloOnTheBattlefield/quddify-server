@@ -1,6 +1,7 @@
 const logger = require("../utils/logger").child({ module: "calendly" });
 const express = require("express");
 const Lead = require("../models/Lead");
+const OutboundLead = require("../models/OutboundLead");
 const Account = require("../models/Account");
 const { encrypt } = require("../utils/crypto");
 
@@ -146,6 +147,14 @@ router.post("/", async (req, res) => {
     }
 
     logger.info("Lead updated successfully:", lead._id);
+
+    // Sync booked status to linked outbound lead
+    if (lead.outbound_lead_id) {
+      await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, {
+        booked: true,
+        booked_at: lead.booked_at,
+      }).catch((err) => logger.error({ err }, "Failed to sync booked to outbound lead"));
+    }
 
     // Fetch account to get dynamic webhook URL
     const account = await Account.findOne({ ghl: lead.account_id });
