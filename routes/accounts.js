@@ -485,9 +485,9 @@ router.get("/team", async (req, res) => {
       .populate("user_id", "-password")
       .lean();
 
-    // Filter out owner (role 1) for non-admin callers, same as before
+    // Filter out owner (role 1) for non-admin callers
     const members = memberships
-      .filter((m) => m.role !== 1)
+      .filter((m) => req.user?.role === 0 || m.role !== 1)
       .map((m) => ({
         _id: m._id,
         user_id: m.user_id?._id,
