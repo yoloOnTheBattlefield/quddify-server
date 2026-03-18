@@ -51,6 +51,8 @@ const swipeFileRoutes = require("./routes/swipe-files");
 const carouselTemplateRoutes = require("./routes/carousel-templates");
 const carouselStyleRoutes = require("./routes/carousel-styles");
 const carouselRoutes = require("./routes/carousels");
+const thumbnailRoutes = require("./routes/thumbnails");
+const thumbnailTemplateRoutes = require("./routes/thumbnail-templates");
 const clientImageUploadRoutes = require("./routes/client-image-upload");
 const googleDriveRoutes = require("./routes/google-drive");
 const reelRoutes = require("./routes/reels");
@@ -61,6 +63,12 @@ const youtubeChannelRoutes = require("./routes/youtube-channels");
 const youtubeAlertRoutes = require("./routes/youtube-alerts");
 const youtubeTrendingRoutes = require("./routes/youtube-trending");
 const youtubeScrapeRoutes = require("./routes/youtube-scrape");
+const youtubeVideoRoutes = require("./routes/youtube-videos");
+const advisoryClientRoutes = require("./routes/advisory-clients");
+const advisorySessionRoutes = require("./routes/advisory-sessions");
+const advisoryMetricRoutes = require("./routes/advisory-metrics");
+const leadNoteRoutes = require("./routes/lead-notes");
+const leadTaskRoutes = require("./routes/lead-tasks");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -219,6 +227,8 @@ app.use(apiLimiter);
 // Protected routes
 app.use("/accounts", accountRoutes);
 app.use("/leads", leadRoutes);
+app.use("/api/lead-notes", leadNoteRoutes);
+app.use("/api/lead-tasks", leadTaskRoutes);
 app.use("/analytics", analyticsRoutes);
 app.use("/api", uploadRoutes);
 app.use("/outbound-leads", requireOutbound, outboundLeadRoutes);
@@ -253,6 +263,8 @@ app.use("/api/swipe-files", swipeFileRoutes);
 app.use("/api/carousel-templates", carouselTemplateRoutes);
 app.use("/api/carousel-styles", carouselStyleRoutes);
 app.use("/api/carousels", carouselRoutes);
+app.use("/api/thumbnails", thumbnailRoutes);
+app.use("/api/thumbnail-templates", thumbnailTemplateRoutes);
 app.use("/api/client-images", clientImageUploadRoutes);
 app.use("/api/google-drive", googleDriveRoutes);
 app.use("/api/reels", reelRoutes);
@@ -264,6 +276,12 @@ app.use("/api/youtube/channels", youtubeChannelRoutes);
 app.use("/api/youtube/alerts", youtubeAlertRoutes);
 app.use("/api/youtube/trending", youtubeTrendingRoutes);
 app.use("/api/youtube/scrape", youtubeScrapeRoutes);
+app.use("/api/youtube/videos", youtubeVideoRoutes);
+
+// Advisory module routes
+app.use("/api/advisory/clients", advisoryClientRoutes);
+app.use("/api/advisory/sessions", advisorySessionRoutes);
+app.use("/api/advisory/metrics", advisoryMetricRoutes);
 
 // Start listening IMMEDIATELY so Railway health checks pass
 const PORT = process.env.PORT || 3000;
