@@ -237,17 +237,57 @@ router.get("/posts", async (req, res) => {
       filter.caption = { $regex: escapeRegex(search.trim()), $options: "i" };
     }
 
-    let sortObj = { posted_at: -1 };
-    if (sort_by === "most_comments") sortObj = { comments_count: -1 };
-
-    const [posts, total] = await Promise.all([
-      ResearchPost.find(filter)
-        .sort(sortObj)
-        .skip((pageNum - 1) * limitNum)
-        .limit(limitNum)
-        .lean(),
-      ResearchPost.countDocuments(filter),
+    // Per-competitor averages for virality score
+    const competitorAvgs = await ResearchPost.aggregate([
+      { $match: { account_id: accountId } },
+      {
+        $group: {
+          _id: "$competitor_handle",
+          avgViews: { $avg: "$plays_count" },
+          avgLikes: { $avg: "$likes_count" },
+          avgComments: { $avg: "$comments_count" },
+        },
+      },
     ]);
+
+    const avgMap = new Map();
+    for (const c of competitorAvgs) {
+      avgMap.set(c._id, c);
+    }
+
+    function viralityScore(post) {
+      const avg = avgMap.get(post.competitor_handle) || {};
+      return (
+        0.5 * ((post.plays_count || 0) / Math.max(avg.avgViews || 1, 1)) +
+        0.3 * ((post.likes_count || 0) / Math.max(avg.avgLikes || 1, 1)) +
+        0.2 * ((post.comments_count || 0) / Math.max(avg.avgComments || 1, 1))
+      );
+    }
+
+    let posts;
+    let total;
+
+    if (sort_by === "virality") {
+      const allPosts = await ResearchPost.find(filter).lean();
+      total = allPosts.length;
+      const scored = allPosts
+        .map((p) => ({ ...p, _vs: viralityScore(p) }))
+        .sort((a, b) => b._vs - a._vs);
+      posts = scored.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+    } else {
+      let sortObj = { posted_at: -1 };
+      if (sort_by === "most_comments") sortObj = { comments_count: -1 };
+      if (sort_by === "most_views") sortObj = { plays_count: -1 };
+
+      [posts, total] = await Promise.all([
+        ResearchPost.find(filter)
+          .sort(sortObj)
+          .skip((pageNum - 1) * limitNum)
+          .limit(limitNum)
+          .lean(),
+        ResearchPost.countDocuments(filter),
+      ]);
+    }
 
     res.json({
       posts: posts.map((p) => ({
@@ -259,6 +299,7 @@ router.get("/posts", async (req, res) => {
         commentsCount: p.comments_count,
         likesCount: p.likes_count,
         playsCount: p.plays_count,
+        viralityScore: Math.round(viralityScore(p) * 10) / 10,
         postedAt: p.posted_at,
         reelUrl: p.reel_url,
         hookPattern: null,
