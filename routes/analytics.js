@@ -1296,7 +1296,7 @@ function buildInboundFilter(req) {
   const filter = {};
   if (isAdmin && req.query.account_id) {
     filter.account_id = req.query.account_id;
-  } else if (!isAdmin && req.account.ghl) {
+  } else if (req.account.ghl) {
     filter.account_id = req.account.ghl;
   }
   if (start_date || end_date) {
@@ -1614,6 +1614,154 @@ router.get("/outbound/ai-reports/:id", async (req, res) => {
   } catch (err) {
     logger.error("AI report fetch error:", err);
     res.status(500).json({ error: "Failed to fetch AI report" });
+  }
+});
+
+// GET /analytics/outbound/score-breakdown — score tier analytics
+router.get("/outbound/score-breakdown", async (req, res) => {
+  try {
+    const obFilter = await buildOutboundFilter(req);
+    obFilter.score = { $ne: null };
+
+    const tiers = await OutboundLead.aggregate([
+      { $match: obFilter },
+      {
+        $addFields: {
+          tier: {
+            $switch: {
+              branches: [
+                { case: { $lte: ["$score", 2] }, then: "1 Star" },
+                { case: { $lte: ["$score", 4] }, then: "2 Stars" },
+                { case: { $lte: ["$score", 6] }, then: "3 Stars" },
+                { case: { $lte: ["$score", 8] }, then: "4 Stars" },
+                { case: { $lte: ["$score", 10] }, then: "5 Stars" },
+              ],
+              default: "Unknown",
+            },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$tier",
+          sent: { $sum: 1 },
+          replied: { $sum: { $cond: ["$replied", 1, 0] } },
+          booked: { $sum: { $cond: ["$booked", 1, 0] } },
+          contracts: { $sum: { $cond: [{ $gt: ["$contract_value", 0] }, 1, 0] } },
+          total_revenue: { $sum: { $ifNull: ["$contract_value", 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          tier: "$_id",
+          sent: 1,
+          replied: 1,
+          booked: 1,
+          contracts: 1,
+          total_revenue: 1,
+          reply_rate: { $cond: [{ $gt: ["$sent", 0] }, { $round: [{ $multiply: [{ $divide: ["$replied", "$sent"] }, 100] }, 2] }, 0] },
+          book_rate: { $cond: [{ $gt: ["$sent", 0] }, { $round: [{ $multiply: [{ $divide: ["$booked", "$sent"] }, 100] }, 2] }, 0] },
+          close_rate: { $cond: [{ $gt: ["$sent", 0] }, { $round: [{ $multiply: [{ $divide: ["$contracts", "$sent"] }, 100] }, 2] }, 0] },
+          avg_revenue: { $cond: [{ $gt: ["$contracts", 0] }, { $round: [{ $divide: ["$total_revenue", "$contracts"] }, 2] }, 0] },
+        },
+      },
+      { $sort: { tier: 1 } },
+    ]);
+
+    res.json({ tiers });
+  } catch (err) {
+    logger.error("Score breakdown error:", err);
+    res.status(500).json({ error: "Failed to fetch score breakdown" });
+  }
+});
+
+// GET /analytics/outbound/weekly-heatmap — heatmap of activity by day-of-week and hour
+router.get("/outbound/weekly-heatmap", async (req, res) => {
+  try {
+    const metric = req.query.metric || "sent";
+    let cells;
+
+    if (metric === "sent") {
+      const match = await buildCampaignLeadMatch(req);
+      match.sent_at = match.sent_at || { $ne: null };
+
+      cells = await CampaignLead.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: {
+              dayOfWeek: { $dayOfWeek: "$sent_at" },
+              hour: { $hour: "$sent_at" },
+            },
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            day: { $subtract: ["$_id.dayOfWeek", 1] },
+            hour: "$_id.hour",
+            count: 1,
+          },
+        },
+      ]);
+    } else if (metric === "replied") {
+      const obFilter = await buildOutboundFilter(req);
+      obFilter.replied_at = { $ne: null };
+
+      cells = await OutboundLead.aggregate([
+        { $match: obFilter },
+        {
+          $group: {
+            _id: {
+              dayOfWeek: { $dayOfWeek: "$replied_at" },
+              hour: { $hour: "$replied_at" },
+            },
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            day: { $subtract: ["$_id.dayOfWeek", 1] },
+            hour: "$_id.hour",
+            count: 1,
+          },
+        },
+      ]);
+    } else if (metric === "booked") {
+      const obFilter = await buildOutboundFilter(req);
+      obFilter.booked_at = { $ne: null };
+
+      cells = await OutboundLead.aggregate([
+        { $match: obFilter },
+        {
+          $group: {
+            _id: {
+              dayOfWeek: { $dayOfWeek: "$booked_at" },
+              hour: { $hour: "$booked_at" },
+            },
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            day: { $subtract: ["$_id.dayOfWeek", 1] },
+            hour: "$_id.hour",
+            count: 1,
+          },
+        },
+      ]);
+    } else {
+      return res.status(400).json({ error: "Invalid metric. Use sent, replied, or booked." });
+    }
+
+    res.json({ cells });
+  } catch (err) {
+    logger.error("Weekly heatmap error:", err);
+    res.status(500).json({ error: "Failed to fetch weekly heatmap" });
   }
 });
 
