@@ -13,14 +13,13 @@ router.get("/", async (req, res) => {
   try {
     const { status, start_date, end_date, search, page, limit, account_id, sort_by, sort_order } = req.query;
     const filter = {};
-    // Admins (role 0) can filter by any account or see all; others see only their own
-    if (account_id && req.user?.role === 0) {
-      if (account_id !== "all") {
-        filter.account_id = account_id;
-      }
-      // account_id === "all" → no filter = all accounts
-    } else if (req.account.ghl) {
-      filter.account_id = req.account.ghl;
+    // Admins (role 0) can pass account_id="all" to see everything; otherwise always scoped
+    if (account_id === "all" && req.user?.role === 0) {
+      // No filter — admin viewing all accounts
+    } else if (account_id && req.user?.role === 0) {
+      filter.account_id = account_id;
+    } else {
+      filter.account_id = req.account.ghl || req.account._id.toString();
     }
     if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
     if (status) {
@@ -35,6 +34,9 @@ router.get("/", async (req, res) => {
       filter.date_created = {};
       if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
       if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
+    }
+    if (req.query.exclude_linked === "true") {
+      filter.outbound_lead_id = null;
     }
 
     // Sorting
