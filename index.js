@@ -116,6 +116,7 @@ app.use("/t", cors({ origin: true, credentials: false }), trackingPublicRoutes);
 
 const allowedOrigins = [
   "http://localhost:8080",
+  "http://localhost:8081",
   "http://localhost:8083",
   "http://localhost:5173",
   "http://localhost:5174",
