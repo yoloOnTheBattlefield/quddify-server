@@ -149,6 +149,10 @@ router.get("/", async (req, res) => {
       if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
     }
 
+    if (req.query.exclude_linked === "true") {
+      filter.outbound_lead_id = null;
+    }
+
     // Fetch inbound leads (skip if source=outbound)
     const leads = dataSource !== "outbound" ? await Lead.find(filter).lean() : [];
 
@@ -1303,6 +1307,9 @@ function buildInboundFilter(req) {
     filter.date_created = {};
     if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
     if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
+  }
+  if (req.query.exclude_linked === "true") {
+    filter.outbound_lead_id = null;
   }
   return filter;
 }

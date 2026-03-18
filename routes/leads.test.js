@@ -96,6 +96,20 @@ describe("GET /api/leads", () => {
     const res = await request(app).get("/api/leads");
     expect(res.body.leads[0].first_name).toBe("New");
   });
+
+  it("excludes outbound-linked leads when exclude_linked=true", async () => {
+    await createLead({ first_name: "Inbound" });
+    await createLead({ first_name: "Linked", outbound_lead_id: new mongoose.Types.ObjectId() });
+
+    const all = await request(app).get("/api/leads");
+    expect(all.body.leads).toHaveLength(2);
+    expect(all.body.pagination.total).toBe(2);
+
+    const filtered = await request(app).get("/api/leads?exclude_linked=true");
+    expect(filtered.body.leads).toHaveLength(1);
+    expect(filtered.body.leads[0].first_name).toBe("Inbound");
+    expect(filtered.body.pagination.total).toBe(1);
+  });
 });
 
 describe("POST /api/leads", () => {
