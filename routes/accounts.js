@@ -781,9 +781,15 @@ router.patch("/:id", async (req, res) => {
 router.post("/:id/password", async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
+    const isAdmin = req.user?.role === 0;
 
-    if (!current_password || !new_password) {
-      return res.status(400).json({ error: "Missing current_password or new_password" });
+    if (!new_password || new_password.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters" });
+    }
+
+    // Non-admins must provide current password
+    if (!isAdmin && !current_password) {
+      return res.status(400).json({ error: "Missing current_password" });
     }
 
     const user = await User.findById(req.params.id);
@@ -791,9 +797,12 @@ router.post("/:id/password", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const ok = await bcrypt.compare(current_password, user.password);
-    if (!ok) {
-      return res.status(401).json({ error: "Current password is incorrect" });
+    // Verify current password for non-admins
+    if (!isAdmin) {
+      const ok = await bcrypt.compare(current_password, user.password);
+      if (!ok) {
+        return res.status(401).json({ error: "Current password is incorrect" });
+      }
     }
 
     user.password = await bcrypt.hash(new_password, 10);
