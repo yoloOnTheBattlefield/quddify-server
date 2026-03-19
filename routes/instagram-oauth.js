@@ -326,6 +326,12 @@ router.delete("/outbound/:id/disconnect", async (req, res) => {
 
 // ─── GET /api/instagram/reels/monthly/:accountId — reels this month for a client account ──
 router.get("/reels/monthly/:accountId", async (req, res) => {
+  // Only allow fetching your own account's reels (admins can fetch any)
+  const isAdmin = req.user?.role === 0;
+  if (!isAdmin && req.account._id.toString() !== req.params.accountId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
   try {
     const account = await Account.findById(req.params.accountId)
       .select("ig_oauth");
