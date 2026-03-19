@@ -5,6 +5,7 @@ const router = express.Router();
 const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const Lead = require("../models/Lead");
+const Booking = require("../models/Booking");
 
 // GET /api/ig-conversations — list all threads ordered by last_message_at DESC
 router.get("/", async (req, res) => {
@@ -43,6 +44,16 @@ router.get("/by-lead/:leadId", async (req, res) => {
     let conversation = await IgConversation.findOne({ $or: orClauses }).lean();
 
     // Fallback: match by ig_username in the participant_usernames map
+    // Fallback: find outbound_lead_id via the Booking that links this inbound lead
+    if (!conversation) {
+      const booking = await Booking.findOne({ lead_id: req.params.leadId, outbound_lead_id: { $ne: null } })
+        .select("outbound_lead_id")
+        .lean();
+      if (booking?.outbound_lead_id) {
+        conversation = await IgConversation.findOne({ outbound_lead_id: booking.outbound_lead_id }).lean();
+      }
+    }
+
     if (!conversation && lead?.ig_username) {
       const username = lead.ig_username.replace(/^@/, "").toLowerCase();
       const [match] = await IgConversation.aggregate([
@@ -59,16 +70,7 @@ router.get("/by-lead/:leadId", async (req, res) => {
 
     if (!conversation) {
       // DEBUG: return what we know to diagnose the mismatch
-      const allConvs = await IgConversation.find({}).select("_id instagram_thread_id lead_id outbound_lead_id participant_ids participant_usernames").lean();
-      return res.status(404).json({
-        error: "No conversation found for this lead",
-        debug: {
-          lead: lead ? { _id: lead._id, ig_username: lead.ig_username, ig_thread_id: lead.ig_thread_id, outbound_lead_id: lead.outbound_lead_id } : null,
-          orClauses,
-          totalConversations: allConvs.length,
-          conversations: allConvs.slice(0, 5),
-        },
-      });
+      return res.status(404).json({ error: "No conversation found for this lead" });
     }
 
     const page = parseInt(req.query.page) || 1;
