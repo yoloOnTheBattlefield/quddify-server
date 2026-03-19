@@ -58,7 +58,17 @@ router.get("/by-lead/:leadId", async (req, res) => {
     }
 
     if (!conversation) {
-      return res.status(404).json({ error: "No conversation found for this lead" });
+      // DEBUG: return what we know to diagnose the mismatch
+      const allConvs = await IgConversation.find({}).select("_id instagram_thread_id lead_id outbound_lead_id participant_ids participant_usernames").lean();
+      return res.status(404).json({
+        error: "No conversation found for this lead",
+        debug: {
+          lead: lead ? { _id: lead._id, ig_username: lead.ig_username, ig_thread_id: lead.ig_thread_id, outbound_lead_id: lead.outbound_lead_id } : null,
+          orClauses,
+          totalConversations: allConvs.length,
+          conversations: allConvs.slice(0, 5),
+        },
+      });
     }
 
     const page = parseInt(req.query.page) || 1;
