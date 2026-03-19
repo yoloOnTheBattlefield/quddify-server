@@ -45,6 +45,7 @@ const AccountSchema = new mongoose.Schema(
     replicate_token: { type: String, default: null },
     deleted: { type: Boolean, default: false },
     deleted_at: { type: Date, default: null },
+    push_notifications_enabled: { type: Boolean, default: true },
   },
   { collection: "accounts", versionKey: false },
 );

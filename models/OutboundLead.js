@@ -31,6 +31,7 @@ const OutboundLeadSchema = new mongoose.Schema(
     contract_value: { type: Number, default: null },
     qualified: { type: Boolean, default: null },
     unqualified_reason: { type: String, default: null },
+    score: { type: Number, default: null },
     ai_processed: { type: Boolean, default: false },
     ai_provider: { type: String, default: null },
     ai_model: { type: String, default: null },

@@ -5,7 +5,7 @@ const NotificationSchema = new mongoose.Schema(
     account_id: { type: mongoose.Schema.Types.ObjectId, ref: "Account", required: true },
     type: {
       type: String,
-      enum: ["carousel_ready", "carousel_failed", "transcript_ready", "transcript_failed", "general"],
+      enum: ["carousel_ready", "carousel_failed", "transcript_ready", "transcript_failed", "thumbnail_ready", "general", "new_lead", "lead_replied"],
       required: true,
     },
     title: { type: String, required: true },

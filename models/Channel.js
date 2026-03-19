@@ -8,6 +8,7 @@ const ChannelSchema = new mongoose.Schema(
       required: true,
     },
     channel_id: { type: String, required: true },
+    yt_channel_id: { type: String, default: null },
     channel_url: { type: String, default: null },
     channel_name: { type: String, default: null },
     description: { type: String, default: null },

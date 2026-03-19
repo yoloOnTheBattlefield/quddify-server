@@ -43,6 +43,8 @@ const igWebhookRoutes = require("./routes/instagram-webhook");
 const igConversationRoutes = require("./routes/ig-conversations");
 const igOAuthRoutes = require("./routes/instagram-oauth");
 const followUpRoutes = require("./routes/follow-ups");
+const eodReportRoutes = require("./routes/eod-reports");
+const bookingRoutes = require("./routes/bookings");
 const clientRoutes = require("./routes/clients");
 const clientImageRoutes = require("./routes/client-images");
 const clientLutRoutes = require("./routes/client-luts");
@@ -69,6 +71,8 @@ const advisorySessionRoutes = require("./routes/advisory-sessions");
 const advisoryMetricRoutes = require("./routes/advisory-metrics");
 const leadNoteRoutes = require("./routes/lead-notes");
 const leadTaskRoutes = require("./routes/lead-tasks");
+const invitationRoutes = require("./routes/invitations");
+const pushSubscriptionRoutes = require("./routes/push-subscriptions");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -220,6 +224,7 @@ app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/calendly", webhookLimiter, calendlyRoutes);
 app.get("/api/health", healthRoutes);
 app.get("/api/debug", healthRoutes);
+app.use("/api/invitations", invitationRoutes);
 // Auth middleware — everything below requires JWT or API key
 app.use(auth);
 // General rate limit for all authenticated routes
@@ -253,6 +258,8 @@ app.use("/api/manychat", webhookLimiter, manychatRoutes);
 app.use("/api/ig-conversations", igConversationRoutes);
 app.use("/api/instagram", igOAuthRoutes);
 app.use("/api/follow-ups", requireOutbound, followUpRoutes);
+app.use("/api/eod-reports", eodReportRoutes);
+app.use("/api/bookings", bookingRoutes);
 app.use("/tracking", trackingRoutes);
 
 // Carousel feature routes
@@ -271,6 +278,7 @@ app.use("/api/google-drive", googleDriveRoutes);
 app.use("/api/reels", reelRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/push-subscriptions", pushSubscriptionRoutes);
 
 // YouTube trend detection routes
 app.use("/api/youtube/channels", youtubeChannelRoutes);

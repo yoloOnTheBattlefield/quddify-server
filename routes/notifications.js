@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Notification = require("../models/Notification");
+const Account = require("../models/Account");
 const logger = require("../utils/logger").child({ module: "notifications" });
 
 // GET /api/notifications?unread_only=true
@@ -41,6 +42,32 @@ router.post("/read-all", async (req, res) => {
   } catch (err) {
     logger.error("Failed to mark all read:", err);
     res.status(500).json({ error: "Failed to mark all read" });
+  }
+});
+
+// GET /api/notifications/settings
+router.get("/settings", async (req, res) => {
+  try {
+    const account = await Account.findById(req.account._id).select("push_notifications_enabled").lean();
+    res.json({ push_notifications_enabled: account?.push_notifications_enabled ?? true });
+  } catch (err) {
+    logger.error("Failed to get notification settings:", err);
+    res.status(500).json({ error: "Failed to get notification settings" });
+  }
+});
+
+// PATCH /api/notifications/settings
+router.patch("/settings", async (req, res) => {
+  try {
+    const { push_notifications_enabled } = req.body;
+    if (typeof push_notifications_enabled !== "boolean") {
+      return res.status(400).json({ error: "push_notifications_enabled must be a boolean" });
+    }
+    await Account.findByIdAndUpdate(req.account._id, { $set: { push_notifications_enabled } });
+    res.json({ success: true, push_notifications_enabled });
+  } catch (err) {
+    logger.error("Failed to update notification settings:", err);
+    res.status(500).json({ error: "Failed to update notification settings" });
   }
 });
 

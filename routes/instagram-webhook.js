@@ -11,6 +11,9 @@ const OutboundAccount = require("../models/OutboundAccount");
 const { decrypt } = require("../utils/crypto");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
+const Notification = require("../models/Notification");
+const socketManager = require("../services/socketManager");
+const { sendPushToAccount } = require("../services/pushNotifications");
 
 // ─── Signature verification ─────────────────────────────────────────────────
 function verifySignature(req, res, next) {
@@ -42,6 +45,35 @@ function verifySignature(req, res, next) {
 // ─── Helper: build thread ID from two participant IDs ────────────────────────
 function buildThreadId(idA, idB) {
   return [idA, idB].sort().join("_");
+}
+
+// ─── Fire in-app + browser push notification ────────────────────────────────
+async function fireLeadNotification(accountId, type, username) {
+  try {
+    const account = await Account.findById(accountId).select("push_notifications_enabled").lean();
+    if (!account || account.push_notifications_enabled === false) return;
+
+    const isNew = type === "new_lead";
+    const title = isNew ? "New lead" : "Lead replied";
+    const message = isNew
+      ? `@${username} started a new conversation`
+      : `@${username} replied to your DM`;
+
+    const notification = await Notification.create({
+      account_id: accountId,
+      type,
+      title,
+      message,
+    });
+
+    socketManager.emitToAccount(accountId.toString(), "notification:lead", {
+      notification: { _id: notification._id, type, title, message, read: false, created_at: notification.created_at },
+    });
+
+    await sendPushToAccount(accountId, { title, body: message, type });
+  } catch (err) {
+    logger.error("[ig-webhook] fireLeadNotification error:", err);
+  }
 }
 
 // ─── GET  /instagram-webhook — Meta verification handshake ───────────────────
@@ -214,6 +246,7 @@ async function handleMessage(event, senderId, recipientId) {
             $set: { replied: true, replied_at: messageTimestamp },
           });
           logger.info(`[ig-webhook] OutboundLead @${contactUsername} marked as replied`);
+          await fireLeadNotification(owner.account_id, "lead_replied", contactUsername);
         }
       }
 
@@ -232,6 +265,11 @@ async function handleMessage(event, senderId, recipientId) {
       if (Object.keys(leadUpdates).length > 0) {
         await IgConversation.findByIdAndUpdate(conversation._id, { $set: leadUpdates });
         logger.info(`[ig-webhook] Linked conversation to leads:`, leadUpdates);
+
+        // Fire new_lead notification when an inbound Lead (not outbound) first contacts us
+        if (direction === "inbound" && leadUpdates.lead_id && !leadUpdates.outbound_lead_id) {
+          await fireLeadNotification(owner.account_id, "new_lead", contactUsername);
+        }
       }
     }
   }

@@ -18,6 +18,7 @@
     "@anthropic-ai/sdk": "^0.78.0",
     "@aws-sdk/client-s3": "^3.1004.0",
     "@aws-sdk/s3-request-presigner": "^3.1004.0",
+    "@google/genai": "^1.45.0",
     "@google/generative-ai": "^0.24.1",
     "apify-client": "^2.22.2",
     "bcryptjs": "^3.0.3",
@@ -36,8 +37,10 @@
     "pino": "^10.3.1",
     "puppeteer": "^24.38.0",
     "replicate": "^1.4.0",
+    "resend": "^6.9.4",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
+    "web-push": "^3.6.7",
     "xlsx": "^0.18.5",
     "zod": "^4.3.6"
   },

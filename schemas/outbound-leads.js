@@ -41,6 +41,7 @@ const patchLeadSchema = z.object({
     message: z.string().optional().nullable(),
     notes: z.string().optional().nullable(),
     contract_value: z.number().optional().nullable(),
+    score: z.number().optional().nullable(),
     qualified: z.boolean().optional().nullable(),
     promptId: z.string().optional().nullable(),
     promptLabel: z.string().optional().nullable(),

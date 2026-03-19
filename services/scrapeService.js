@@ -84,12 +84,11 @@ async function scrapeChannels(accountId) {
 
   let run;
   try {
-    run = await client.actor("apify/youtube-scraper").call({
+    run = await client.actor("streamers/youtube-scraper").call({
       startUrls: channelUrls,
       maxResults: 50,
-      maxResultsShort: 0,
-      searchKeywords: "",
-      type: "channel",
+      maxResultsShorts: 0,
+      maxResultStreams: 0,
     });
   } catch (err) {
     if (err.statusCode === 402 || err.statusCode === 403) {
@@ -141,12 +140,26 @@ async function scrapeChannels(accountId) {
     );
 
     videoCount++;
+  }
 
-    if (video.channel_id) {
-      await Channel.updateOne(
-        { channel_id: video.channel_id, account_id: accountId },
-        { $set: { last_scraped_at: now } },
-      );
+  // Map Apify's UC-style channel IDs back to our channel docs and update metadata
+  const videoChannelIds = [...new Set(items.map((i) => i.channelId || i.channelName).filter(Boolean))];
+  const now2 = new Date();
+  for (const ch of channels) {
+    // Find videos whose channelUrl contains the channel handle
+    const handle = ch.channel_url?.split("/").pop(); // e.g. "@gradyssells"
+    const matchedVideo = items.find((i) => {
+      const vChannelUrl = i.channelUrl || "";
+      return vChannelUrl.includes(handle) || vChannelUrl.includes(ch.channel_id);
+    });
+    if (matchedVideo) {
+      const ytChannelId = matchedVideo.channelId || matchedVideo.channelName;
+      const updateFields = { last_scraped_at: now2 };
+      if (ytChannelId) updateFields.yt_channel_id = ytChannelId;
+      if (matchedVideo.channelName && !ch.channel_name) {
+        updateFields.channel_name = matchedVideo.channelName;
+      }
+      await Channel.updateOne({ _id: ch._id }, { $set: updateFields });
     }
   }
 
