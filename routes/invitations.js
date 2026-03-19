@@ -10,7 +10,9 @@ const User = require("../models/User");
 const Account = require("../models/Account");
 const AccountUser = require("../models/AccountUser");
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+function getResend() {
+  return new Resend(process.env.RESEND_API_KEY);
+}
 
 // POST / — create and send an invitation (admin only)
 router.post("/", auth, async (req, res) => {
@@ -73,7 +75,7 @@ router.post("/", auth, async (req, res) => {
     // Send invitation email
     const inviteUrl = `${process.env.FRONTEND_URL}/invite/${token}`;
     try {
-      await resend.emails.send({
+      await getResend().emails.send({
         from: "Quddify <onboarding@resend.dev>",
         to: email,
         subject: "You've been invited to Quddify",
