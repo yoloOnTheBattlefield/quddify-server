@@ -3,7 +3,7 @@ const express = require("express");
 const router = express.Router();
 const Account = require("../models/Account");
 const OutboundAccount = require("../models/OutboundAccount");
-const { encrypt } = require("../utils/crypto");
+const { encrypt, decrypt } = require("../utils/crypto");
 
 const IG_APP_ID = process.env.IG_APP_ID;
 const IG_APP_SECRET = process.env.IG_APP_SECRET;
@@ -321,6 +321,66 @@ router.delete("/outbound/:id/disconnect", async (req, res) => {
   } catch (err) {
     logger.error("[ig-oauth] Outbound disconnect error:", err);
     res.status(500).json({ error: "Failed to disconnect Instagram" });
+  }
+});
+
+// ─── GET /api/instagram/reels/monthly/:clientId — reels this month for one client ──
+router.get("/reels/monthly/:clientId", async (req, res) => {
+  const Client = require("../models/Client");
+
+  try {
+    const client = await Client.findOne({
+      _id: req.params.clientId,
+      account_id: req.account._id,
+    }).select("name ig_username ig_oauth.page_access_token ig_oauth.ig_user_id ig_oauth.ig_username");
+
+    if (!client) return res.status(404).json({ error: "Client not found" });
+
+    if (!client.ig_oauth?.page_access_token || !client.ig_oauth?.ig_user_id) {
+      return res.status(400).json({ error: "Instagram not connected for this client" });
+    }
+
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const sinceUnix = Math.floor(startOfMonth.getTime() / 1000);
+
+    const token = decrypt(client.ig_oauth.page_access_token);
+    const igUserId = client.ig_oauth.ig_user_id;
+    const igUsername = client.ig_oauth.ig_username || client.ig_username;
+
+    const fields = "id,media_type,media_product_type,timestamp,permalink";
+    let reels = [];
+    let url = `https://graph.facebook.com/v21.0/${igUserId}/media?fields=${fields}&since=${sinceUnix}&limit=100&access_token=${token}`;
+
+    while (url) {
+      const resp = await fetch(url);
+      const data = await resp.json();
+
+      if (data.error) {
+        logger.warn(`[reels] IG API error for client ${client._id}: ${data.error.message}`);
+        return res.status(502).json({ error: data.error.message || "Instagram API error" });
+      }
+
+      for (const item of data.data || []) {
+        if (item.media_product_type === "REELS") {
+          reels.push({ id: item.id, timestamp: item.timestamp, permalink: item.permalink });
+        }
+      }
+
+      url = data.paging?.next || null;
+    }
+
+    const monthLabel = startOfMonth.toLocaleString("en-US", { month: "long", year: "numeric" });
+    res.json({
+      month: monthLabel,
+      since: startOfMonth.toISOString(),
+      ig_username: igUsername,
+      count: reels.length,
+      reels,
+    });
+  } catch (err) {
+    logger.error("[reels] Monthly reels error:", err);
+    res.status(500).json({ error: "Failed to fetch monthly reels" });
   }
 });
 
