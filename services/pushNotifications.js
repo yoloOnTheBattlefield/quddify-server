@@ -1,11 +1,13 @@
 const webpush = require("web-push");
 const logger = require("../utils/logger").child({ module: "pushNotifications" });
 
-webpush.setVapidDetails(
-  "mailto:admin@quddify-app.app",
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY,
-);
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(
+    "mailto:admin@quddify-app.app",
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY,
+  );
+}
 
 /**
  * Send a browser push notification to all subscriptions for an account.
