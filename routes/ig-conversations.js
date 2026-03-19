@@ -40,7 +40,23 @@ router.get("/by-lead/:leadId", async (req, res) => {
     if (lead?.ig_thread_id) orClauses.push({ instagram_thread_id: lead.ig_thread_id });
     if (lead?.outbound_lead_id) orClauses.push({ outbound_lead_id: lead.outbound_lead_id });
 
-    const conversation = await IgConversation.findOne({ $or: orClauses }).lean();
+    let conversation = await IgConversation.findOne({ $or: orClauses }).lean();
+
+    // Fallback: match by ig_username in the participant_usernames map
+    if (!conversation && lead?.ig_username) {
+      const username = lead.ig_username.replace(/^@/, "").toLowerCase();
+      const [match] = await IgConversation.aggregate([
+        {
+          $addFields: {
+            usernameValues: { $map: { input: { $objectToArray: "$participant_usernames" }, as: "kv", in: { $toLower: "$$kv.v" } } },
+          },
+        },
+        { $match: { usernameValues: username } },
+        { $limit: 1 },
+      ]);
+      if (match) conversation = match;
+    }
+
     if (!conversation) {
       return res.status(404).json({ error: "No conversation found for this lead" });
     }
