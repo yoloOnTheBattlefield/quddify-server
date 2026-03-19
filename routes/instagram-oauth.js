@@ -324,29 +324,25 @@ router.delete("/outbound/:id/disconnect", async (req, res) => {
   }
 });
 
-// ─── GET /api/instagram/reels/monthly/:clientId — reels this month for one client ──
-router.get("/reels/monthly/:clientId", async (req, res) => {
-  const Client = require("../models/Client");
-
+// ─── GET /api/instagram/reels/monthly/:accountId — reels this month for a client account ──
+router.get("/reels/monthly/:accountId", async (req, res) => {
   try {
-    const client = await Client.findOne({
-      _id: req.params.clientId,
-      account_id: req.account._id,
-    }).select("name ig_username ig_oauth.page_access_token ig_oauth.ig_user_id ig_oauth.ig_username");
+    const account = await Account.findById(req.params.accountId)
+      .select("ig_oauth");
 
-    if (!client) return res.status(404).json({ error: "Client not found" });
+    if (!account) return res.status(404).json({ error: "Account not found" });
 
-    if (!client.ig_oauth?.page_access_token || !client.ig_oauth?.ig_user_id) {
-      return res.status(400).json({ error: "Instagram not connected for this client" });
+    if (!account.ig_oauth?.page_access_token || !account.ig_oauth?.ig_user_id) {
+      return res.status(400).json({ error: "Instagram not connected for this account" });
     }
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const sinceUnix = Math.floor(startOfMonth.getTime() / 1000);
 
-    const token = decrypt(client.ig_oauth.page_access_token);
-    const igUserId = client.ig_oauth.ig_user_id;
-    const igUsername = client.ig_oauth.ig_username || client.ig_username;
+    const token = decrypt(account.ig_oauth.page_access_token);
+    const igUserId = account.ig_oauth.ig_user_id;
+    const igUsername = account.ig_oauth.ig_username;
 
     const fields = "id,media_type,media_product_type,timestamp,permalink";
     let reels = [];
@@ -357,7 +353,7 @@ router.get("/reels/monthly/:clientId", async (req, res) => {
       const data = await resp.json();
 
       if (data.error) {
-        logger.warn(`[reels] IG API error for client ${client._id}: ${data.error.message}`);
+        logger.warn(`[reels] IG API error for account ${req.params.accountId}: ${data.error.message}`);
         return res.status(502).json({ error: data.error.message || "Instagram API error" });
       }
 
