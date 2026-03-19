@@ -28,10 +28,10 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET /api/ig-conversations/by-lead/:leadId — find conversation for a lead and return with messages
-router.get("/by-lead/:leadId", async (req, res) => {
+// GET /api/ig-conversations/by-thread/:threadId — find conversation by instagram_thread_id and return with messages
+router.get("/by-thread/:threadId", async (req, res) => {
   try {
-    const conversation = await IgConversation.findOne({ lead_id: req.params.leadId }).lean();
+    const conversation = await IgConversation.findOne({ instagram_thread_id: req.params.threadId }).lean();
     if (!conversation) {
       return res.status(404).json({ error: "No conversation found for this lead" });
     }
@@ -51,7 +51,7 @@ router.get("/by-lead/:leadId", async (req, res) => {
 
     res.json({ conversation, messages, total, page, limit });
   } catch (err) {
-    logger.error("[ig-conversations] By-lead error:", err);
+    logger.error("[ig-conversations] By-thread error:", err);
     res.status(500).json({ error: "Failed to fetch conversation" });
   }
 });
