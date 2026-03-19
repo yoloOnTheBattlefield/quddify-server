@@ -28,6 +28,34 @@ router.get("/", async (req, res) => {
   }
 });
 
+// GET /api/ig-conversations/by-lead/:leadId — find conversation for a lead and return with messages
+router.get("/by-lead/:leadId", async (req, res) => {
+  try {
+    const conversation = await IgConversation.findOne({ lead_id: req.params.leadId }).lean();
+    if (!conversation) {
+      return res.status(404).json({ error: "No conversation found for this lead" });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 100;
+    const skip = (page - 1) * limit;
+
+    const [messages, total] = await Promise.all([
+      IgMessage.find({ conversation_id: conversation._id })
+        .sort({ timestamp: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      IgMessage.countDocuments({ conversation_id: conversation._id }),
+    ]);
+
+    res.json({ conversation, messages, total, page, limit });
+  } catch (err) {
+    logger.error("[ig-conversations] By-lead error:", err);
+    res.status(500).json({ error: "Failed to fetch conversation" });
+  }
+});
+
 // GET /api/ig-conversations/:id/messages — all messages in a thread ordered by timestamp ASC
 router.get("/:id/messages", async (req, res) => {
   try {
