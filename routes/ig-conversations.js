@@ -4,6 +4,7 @@ const router = express.Router();
 
 const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
+const Lead = require("../models/Lead");
 
 // GET /api/ig-conversations — list all threads ordered by last_message_at DESC
 router.get("/", async (req, res) => {
@@ -28,10 +29,18 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET /api/ig-conversations/by-thread/:threadId — find conversation by instagram_thread_id and return with messages
-router.get("/by-thread/:threadId", async (req, res) => {
+// GET /api/ig-conversations/by-lead/:leadId — find conversation for a lead using all available identifiers
+router.get("/by-lead/:leadId", async (req, res) => {
   try {
-    const conversation = await IgConversation.findOne({ instagram_thread_id: req.params.threadId }).lean();
+    // Look up the lead to get all possible linking fields
+    const lead = await Lead.findById(req.params.leadId).lean();
+
+    // Build $or query covering every way a conversation can be linked to this lead
+    const orClauses = [{ lead_id: req.params.leadId }];
+    if (lead?.ig_thread_id) orClauses.push({ instagram_thread_id: lead.ig_thread_id });
+    if (lead?.outbound_lead_id) orClauses.push({ outbound_lead_id: lead.outbound_lead_id });
+
+    const conversation = await IgConversation.findOne({ $or: orClauses }).lean();
     if (!conversation) {
       return res.status(404).json({ error: "No conversation found for this lead" });
     }
@@ -51,7 +60,7 @@ router.get("/by-thread/:threadId", async (req, res) => {
 
     res.json({ conversation, messages, total, page, limit });
   } catch (err) {
-    logger.error("[ig-conversations] By-thread error:", err);
+    logger.error("[ig-conversations] By-lead error:", err);
     res.status(500).json({ error: "Failed to fetch conversation" });
   }
 });
