@@ -342,9 +342,10 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
       return res.status(400).json({ error: "Instagram not connected for this account" });
     }
 
+    const days = Math.min(parseInt(req.query.days) || 30, 365);
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const sinceUnix = Math.floor(startOfMonth.getTime() / 1000);
+    const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const sinceUnix = Math.floor(since.getTime() / 1000);
 
     const token = decrypt(account.ig_oauth.page_access_token);
     const igUserId = account.ig_oauth.ig_user_id;
@@ -383,24 +384,23 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
     await Promise.all(reels.map(async (reel) => {
       try {
         const commentsResp = await fetch(
-          `https://graph.facebook.com/v21.0/${reel.id}/comments?fields=id,text,timestamp,username&limit=50&access_token=${token}`,
+          `https://graph.facebook.com/v21.0/${reel.id}/comments?fields=id,text,timestamp,username,from&limit=50&access_token=${token}`,
         );
         const commentsData = await commentsResp.json();
         reel.comments = (commentsData.data || []).map((c) => ({
           id: c.id,
           text: c.text,
           timestamp: c.timestamp,
-          username: c.username,
+          username: c.from?.username || c.username || "unknown",
         }));
       } catch {
         reel.comments = [];
       }
     }));
 
-    const monthLabel = startOfMonth.toLocaleString("en-US", { month: "long", year: "numeric" });
     res.json({
-      month: monthLabel,
-      since: startOfMonth.toISOString(),
+      days,
+      since: since.toISOString(),
       ig_username: igUsername,
       count: reels.length,
       reels,
@@ -425,9 +425,10 @@ router.get("/posts/monthly/:accountId", async (req, res) => {
       return res.status(400).json({ error: "Instagram not connected for this account" });
     }
 
+    const days = Math.min(parseInt(req.query.days) || 30, 365);
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const sinceUnix = Math.floor(startOfMonth.getTime() / 1000);
+    const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const sinceUnix = Math.floor(since.getTime() / 1000);
 
     const token = decrypt(account.ig_oauth.page_access_token);
     const igUserId = account.ig_oauth.ig_user_id;
@@ -468,24 +469,23 @@ router.get("/posts/monthly/:accountId", async (req, res) => {
     await Promise.all(posts.map(async (post) => {
       try {
         const commentsResp = await fetch(
-          `https://graph.facebook.com/v21.0/${post.id}/comments?fields=id,text,timestamp,username&limit=50&access_token=${token}`,
+          `https://graph.facebook.com/v21.0/${post.id}/comments?fields=id,text,timestamp,username,from&limit=50&access_token=${token}`,
         );
         const commentsData = await commentsResp.json();
         post.comments = (commentsData.data || []).map((c) => ({
           id: c.id,
           text: c.text,
           timestamp: c.timestamp,
-          username: c.username,
+          username: c.from?.username || c.username || "unknown",
         }));
       } catch {
         post.comments = [];
       }
     }));
 
-    const monthLabel = startOfMonth.toLocaleString("en-US", { month: "long", year: "numeric" });
     res.json({
-      month: monthLabel,
-      since: startOfMonth.toISOString(),
+      days,
+      since: since.toISOString(),
       ig_username: igUsername,
       count: posts.length,
       posts,
