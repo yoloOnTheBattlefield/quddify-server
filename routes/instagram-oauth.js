@@ -365,6 +365,7 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
 
       for (const item of data.data || []) {
         if (item.media_product_type === "REELS") {
+          logger.info(`[reels] reel item keys: ${Object.keys(item).join(", ")} | plays=${item.plays} play_count=${item.play_count} video_view_count=${item.video_view_count}`);
           reels.push({
             id: item.id,
             timestamp: item.timestamp,
