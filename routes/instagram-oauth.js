@@ -385,6 +385,7 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
           `https://graph.facebook.com/v21.0/${reel.id}/insights?metric=plays&access_token=${token}`,
         );
         const insightsData = await insightsResp.json();
+        logger.info(`[reels] insights for ${reel.id}: ${JSON.stringify(insightsData)}`);
         const playsEntry = insightsData.data?.find((d) => d.name === "plays");
         reel.play_count = playsEntry?.values?.[0]?.value ?? playsEntry?.value ?? 0;
       } catch {
