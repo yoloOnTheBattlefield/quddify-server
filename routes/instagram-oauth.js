@@ -109,7 +109,7 @@ router.get("/auth-url", (req, res) => {
     return res.status(500).json({ error: "Instagram OAuth not configured" });
   }
 
-  const scopes = "instagram_basic,instagram_manage_messages,instagram_manage_insights,pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata";
+  const scopes = "instagram_basic,instagram_manage_messages,instagram_manage_insights,instagram_manage_comments,pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata";
   const outboundId = req.query.outbound_account_id;
   const state = outboundId ? `oa:${outboundId}` : `acct:${req.account._id}`;
 
@@ -378,17 +378,21 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
       url = data.paging?.next || null;
     }
 
-    // Fetch play count (views) for each reel via insights API in parallel
+    // Fetch comments for each reel in parallel
     await Promise.all(reels.map(async (reel) => {
       try {
-        const insightsResp = await fetch(
-          `https://graph.facebook.com/v21.0/${reel.id}/insights?metric=plays&access_token=${token}`,
+        const commentsResp = await fetch(
+          `https://graph.facebook.com/v21.0/${reel.id}/comments?fields=id,text,timestamp,username&limit=50&access_token=${token}`,
         );
-        const insightsData = await insightsResp.json();
-const playsEntry = insightsData.data?.find((d) => d.name === "plays");
-        reel.play_count = playsEntry?.values?.[0]?.value ?? playsEntry?.value ?? 0;
+        const commentsData = await commentsResp.json();
+        reel.comments = (commentsData.data || []).map((c) => ({
+          id: c.id,
+          text: c.text,
+          timestamp: c.timestamp,
+          username: c.username,
+        }));
       } catch {
-        reel.play_count = 0;
+        reel.comments = [];
       }
     }));
 
