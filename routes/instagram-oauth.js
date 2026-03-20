@@ -350,7 +350,7 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
     const igUserId = account.ig_oauth.ig_user_id;
     const igUsername = account.ig_oauth.ig_username;
 
-    const fields = "id,media_type,media_product_type,timestamp,permalink,like_count,comments_count,play_count";
+    const fields = "id,media_type,media_product_type,timestamp,permalink,like_count,comments_count,plays";
     let reels = [];
     let url = `https://graph.facebook.com/v21.0/${igUserId}/media?fields=${fields}&since=${sinceUnix}&limit=100&access_token=${token}`;
 
@@ -371,7 +371,7 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
             permalink: item.permalink,
             like_count: item.like_count ?? 0,
             comments_count: item.comments_count ?? 0,
-            play_count: item.play_count ?? 0,
+            play_count: item.plays ?? 0,
           });
         }
       }
