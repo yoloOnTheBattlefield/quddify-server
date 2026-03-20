@@ -3,6 +3,8 @@ const logger = require("../utils/logger").child({ module: "leads" });
 const express = require("express");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
+const LeadNote = require("../models/LeadNote");
+const LeadTask = require("../models/LeadTask");
 const validate = require("../middleware/validate");
 const { leadCreateSchema, leadUpdateSchema } = require("../schemas/leads");
 
@@ -169,7 +171,15 @@ router.post("/sync-outbound", async (req, res) => {
 // delete lead
 router.delete("/:id", async (req, res) => {
   try {
-    await Lead.findByIdAndDelete(req.params.id);
+    const lead = await Lead.findByIdAndDelete(req.params.id);
+    if (!lead) return res.status(404).json({ error: "Lead not found" });
+
+    // Clean up related data
+    await Promise.all([
+      LeadNote.deleteMany({ lead_id: req.params.id }),
+      LeadTask.deleteMany({ lead_id: req.params.id }),
+    ]);
+
     res.json({ deleted: true });
   } catch (error) {
     logger.error("Delete lead error:", error);
