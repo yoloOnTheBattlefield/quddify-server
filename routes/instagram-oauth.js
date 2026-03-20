@@ -365,20 +365,32 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
 
       for (const item of data.data || []) {
         if (item.media_product_type === "REELS") {
-          logger.info(`[reels] reel item keys: ${Object.keys(item).join(", ")} | plays=${item.plays} play_count=${item.play_count} video_view_count=${item.video_view_count}`);
           reels.push({
             id: item.id,
             timestamp: item.timestamp,
             permalink: item.permalink,
             like_count: item.like_count ?? 0,
             comments_count: item.comments_count ?? 0,
-            play_count: item.plays ?? 0,
           });
         }
       }
 
       url = data.paging?.next || null;
     }
+
+    // Fetch play count (views) for each reel via insights API in parallel
+    await Promise.all(reels.map(async (reel) => {
+      try {
+        const insightsResp = await fetch(
+          `https://graph.facebook.com/v21.0/${reel.id}/insights?metric=plays&access_token=${token}`,
+        );
+        const insightsData = await insightsResp.json();
+        const playsEntry = insightsData.data?.find((d) => d.name === "plays");
+        reel.play_count = playsEntry?.values?.[0]?.value ?? playsEntry?.value ?? 0;
+      } catch {
+        reel.play_count = 0;
+      }
+    }));
 
     const monthLabel = startOfMonth.toLocaleString("en-US", { month: "long", year: "numeric" });
     res.json({
