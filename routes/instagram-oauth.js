@@ -109,7 +109,7 @@ router.get("/auth-url", (req, res) => {
     return res.status(500).json({ error: "Instagram OAuth not configured" });
   }
 
-  const scopes = "instagram_basic,instagram_manage_messages,pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata";
+  const scopes = "instagram_basic,instagram_manage_messages,instagram_manage_insights,pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata";
   const outboundId = req.query.outbound_account_id;
   const state = outboundId ? `oa:${outboundId}` : `acct:${req.account._id}`;
 
@@ -385,8 +385,7 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
           `https://graph.facebook.com/v21.0/${reel.id}/insights?metric=plays&access_token=${token}`,
         );
         const insightsData = await insightsResp.json();
-        logger.info(`[reels] insights for ${reel.id}: ${JSON.stringify(insightsData)}`);
-        const playsEntry = insightsData.data?.find((d) => d.name === "plays");
+const playsEntry = insightsData.data?.find((d) => d.name === "plays");
         reel.play_count = playsEntry?.values?.[0]?.value ?? playsEntry?.value ?? 0;
       } catch {
         reel.play_count = 0;
