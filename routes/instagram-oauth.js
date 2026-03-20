@@ -371,6 +371,7 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
             permalink: item.permalink,
             like_count: item.like_count ?? 0,
             comments_count: item.comments_count ?? 0,
+            play_count: 0,
           });
         }
       }
@@ -407,6 +408,134 @@ router.get("/reels/monthly/:accountId", async (req, res) => {
   } catch (err) {
     logger.error("[reels] Monthly reels error:", err);
     res.status(500).json({ error: "Failed to fetch monthly reels" });
+  }
+});
+
+// ─── GET /api/instagram/posts/monthly/:accountId — feed posts this month ──────
+router.get("/posts/monthly/:accountId", async (req, res) => {
+  const isAdmin = req.user?.role === 0;
+  if (!isAdmin && req.account._id.toString() !== req.params.accountId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  try {
+    const account = await Account.findById(req.params.accountId).select("ig_oauth");
+    if (!account) return res.status(404).json({ error: "Account not found" });
+    if (!account.ig_oauth?.page_access_token || !account.ig_oauth?.ig_user_id) {
+      return res.status(400).json({ error: "Instagram not connected for this account" });
+    }
+
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const sinceUnix = Math.floor(startOfMonth.getTime() / 1000);
+
+    const token = decrypt(account.ig_oauth.page_access_token);
+    const igUserId = account.ig_oauth.ig_user_id;
+    const igUsername = account.ig_oauth.ig_username;
+
+    const fields = "id,media_type,media_product_type,timestamp,permalink,like_count,comments_count,caption,media_url,thumbnail_url";
+    let posts = [];
+    let url = `https://graph.facebook.com/v21.0/${igUserId}/media?fields=${fields}&since=${sinceUnix}&limit=100&access_token=${token}`;
+
+    while (url) {
+      const resp = await fetch(url);
+      const data = await resp.json();
+
+      if (data.error) {
+        logger.warn(`[posts] IG API error for account ${req.params.accountId}: ${data.error.message}`);
+        return res.status(502).json({ error: data.error.message || "Instagram API error" });
+      }
+
+      for (const item of data.data || []) {
+        if (item.media_product_type !== "REELS") {
+          posts.push({
+            id: item.id,
+            media_type: item.media_type,
+            timestamp: item.timestamp,
+            permalink: item.permalink,
+            caption: item.caption || null,
+            media_url: item.media_url || item.thumbnail_url || null,
+            like_count: item.like_count ?? 0,
+            comments_count: item.comments_count ?? 0,
+          });
+        }
+      }
+
+      url = data.paging?.next || null;
+    }
+
+    // Fetch comments for each post in parallel
+    await Promise.all(posts.map(async (post) => {
+      try {
+        const commentsResp = await fetch(
+          `https://graph.facebook.com/v21.0/${post.id}/comments?fields=id,text,timestamp,username&limit=50&access_token=${token}`,
+        );
+        const commentsData = await commentsResp.json();
+        post.comments = (commentsData.data || []).map((c) => ({
+          id: c.id,
+          text: c.text,
+          timestamp: c.timestamp,
+          username: c.username,
+        }));
+      } catch {
+        post.comments = [];
+      }
+    }));
+
+    const monthLabel = startOfMonth.toLocaleString("en-US", { month: "long", year: "numeric" });
+    res.json({
+      month: monthLabel,
+      since: startOfMonth.toISOString(),
+      ig_username: igUsername,
+      count: posts.length,
+      posts,
+    });
+  } catch (err) {
+    logger.error("[posts] Monthly posts error:", err);
+    res.status(500).json({ error: "Failed to fetch monthly posts" });
+  }
+});
+
+// ─── GET /api/instagram/stories/:accountId — active stories ──────────────────
+router.get("/stories/:accountId", async (req, res) => {
+  const isAdmin = req.user?.role === 0;
+  if (!isAdmin && req.account._id.toString() !== req.params.accountId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  try {
+    const account = await Account.findById(req.params.accountId).select("ig_oauth");
+    if (!account) return res.status(404).json({ error: "Account not found" });
+    if (!account.ig_oauth?.page_access_token || !account.ig_oauth?.ig_user_id) {
+      return res.status(400).json({ error: "Instagram not connected for this account" });
+    }
+
+    const token = decrypt(account.ig_oauth.page_access_token);
+    const igUserId = account.ig_oauth.ig_user_id;
+    const igUsername = account.ig_oauth.ig_username;
+
+    const resp = await fetch(
+      `https://graph.facebook.com/v21.0/${igUserId}/stories?fields=id,media_type,timestamp,permalink,media_url&access_token=${token}`,
+    );
+    const data = await resp.json();
+
+    if (data.error) {
+      logger.warn(`[stories] IG API error for account ${req.params.accountId}: ${data.error.message}`);
+      return res.status(502).json({ error: data.error.message || "Instagram API error" });
+    }
+
+    const stories = (data.data || []).map((item) => ({
+      id: item.id,
+      media_type: item.media_type,
+      timestamp: item.timestamp,
+      permalink: item.permalink || null,
+      media_url: item.media_url || null,
+    }));
+
+    res.json({ ig_username: igUsername, count: stories.length, stories });
+  } catch (err) {
+    logger.error("[stories] Stories error:", err);
+    res.status(500).json({ error: "Failed to fetch stories" });
   }
 });
 
