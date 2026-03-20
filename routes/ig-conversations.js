@@ -93,6 +93,27 @@ router.get("/by-lead/:leadId", async (req, res) => {
   }
 });
 
+// PATCH /api/ig-conversations/:id/link-lead — manually link a conversation to an inbound lead
+router.patch("/:id/link-lead", async (req, res) => {
+  try {
+    const { lead_id } = req.body;
+    if (!lead_id) return res.status(400).json({ error: "lead_id is required" });
+
+    const conversation = await IgConversation.findByIdAndUpdate(
+      req.params.id,
+      { $set: { lead_id } },
+      { new: true }
+    ).lean();
+
+    if (!conversation) return res.status(404).json({ error: "Conversation not found" });
+
+    res.json(conversation);
+  } catch (err) {
+    logger.error("[ig-conversations] Link-lead error:", err);
+    res.status(500).json({ error: "Failed to link conversation" });
+  }
+});
+
 // GET /api/ig-conversations/:id/messages — all messages in a thread ordered by timestamp ASC
 router.get("/:id/messages", async (req, res) => {
   try {
