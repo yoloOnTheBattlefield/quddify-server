@@ -24,8 +24,8 @@ const startDeepScrapeSchema = z.object({
       (Array.isArray(data.direct_urls) && data.direct_urls.length > 0),
     { message: "Provide seed_usernames or direct_urls" }
   ),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 module.exports = { startDeepScrapeSchema };

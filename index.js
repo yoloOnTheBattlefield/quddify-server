@@ -10,6 +10,7 @@ process.on("unhandledRejection", (err) => {
 });
 
 const express = require("express");
+const helmet = require("helmet");
 const http = require("http");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -56,6 +57,7 @@ const carouselRoutes = require("./routes/carousels");
 const thumbnailRoutes = require("./routes/thumbnails");
 const thumbnailTemplateRoutes = require("./routes/thumbnail-templates");
 const clientImageUploadRoutes = require("./routes/client-image-upload");
+const voiceNoteRoutes = require("./routes/voice-notes");
 const googleDriveRoutes = require("./routes/google-drive");
 const reelRoutes = require("./routes/reels");
 const dashboardRoutes = require("./routes/dashboard");
@@ -123,12 +125,19 @@ app.use(
 
 app.use(express.json({ limit: "10mb" }));
 
+// Security headers
+app.use(helmet());
+
 // Serve uploaded files (images, thumbnails, exports)
 const { UPLOAD_DIR } = require("./services/storageService");
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 // Assign a unique request ID to every request
 app.use(requestId);
+
+// Structured request logging
+const requestLogger = require("./middleware/requestLogger");
+app.use(requestLogger);
 
 // Public tracking routes — registered before global CORS so any origin can call them
 app.use("/t", cors({ origin: true, credentials: false }), trackingPublicRoutes);
@@ -290,6 +299,7 @@ app.use("/api/carousels", carouselRoutes);
 app.use("/api/thumbnails", thumbnailRoutes);
 app.use("/api/thumbnail-templates", thumbnailTemplateRoutes);
 app.use("/api/client-images", clientImageUploadRoutes);
+app.use("/api/voice-notes", voiceNoteRoutes);
 app.use("/api/google-drive", googleDriveRoutes);
 app.use("/api/reels", reelRoutes);
 app.use("/api/dashboard", dashboardRoutes);
@@ -307,6 +317,10 @@ app.use("/api/youtube/videos", youtubeVideoRoutes);
 app.use("/api/advisory/clients", advisoryClientRoutes);
 app.use("/api/advisory/sessions", advisorySessionRoutes);
 app.use("/api/advisory/metrics", advisoryMetricRoutes);
+
+// Central error handler — catches errors thrown/nexted from routes
+const errorHandler = require("./middleware/errorHandler");
+app.use(errorHandler);
 
 // Start listening IMMEDIATELY so Railway health checks pass
 const PORT = process.env.PORT || 3000;

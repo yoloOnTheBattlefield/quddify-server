@@ -13,8 +13,8 @@ const promptCreateSchema = z.object({
       bioRequired: z.boolean().optional(),
     }).optional(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const promptUpdateSchema = z.object({
@@ -30,8 +30,8 @@ const promptUpdateSchema = z.object({
       bioRequired: z.boolean().optional(),
     }).optional(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 module.exports = { promptCreateSchema, promptUpdateSchema };

@@ -17,8 +17,8 @@ const bulkDeleteSchema = z.object({
     (data) => (data.ids && data.ids.length > 0) || (data.all && data.filters),
     { message: "Provide ids array or all+filters" }
   ),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const patchLeadSchema = z.object({
@@ -47,8 +47,8 @@ const patchLeadSchema = z.object({
     promptLabel: z.string().optional().nullable(),
     follow_up_status: z.string().optional().nullable(),
     follow_up_notes: z.string().optional().nullable(),
-  }).passthrough(),
-  query: z.object({}).passthrough(),
+  }).strip(),
+  query: z.object({}).strip(),
   params: z.object({
     id: z.string().min(1, "Lead ID is required"),
   }),

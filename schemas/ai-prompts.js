@@ -5,17 +5,17 @@ const aiPromptCreateSchema = z.object({
     name: z.string().min(1, "name is required"),
     promptText: z.string().min(1, "promptText is required"),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const aiPromptUpdateSchema = z.object({
   body: z.object({
     name: z.string().min(1).optional(),
     promptText: z.string().min(1).optional(),
-  }).passthrough(),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  }).strip(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 module.exports = { aiPromptCreateSchema, aiPromptUpdateSchema };

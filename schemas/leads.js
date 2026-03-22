@@ -7,18 +7,18 @@ const leadCreateSchema = z.object({
     account_id: z.string().optional().nullable(),
     ig_username: z.string().optional().nullable(),
     email: z.string().email().optional().nullable(),
-  }).passthrough(),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  }).strip(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const leadUpdateSchema = z.object({
   body: z.object({
     score: z.number().min(1).max(10).optional().nullable(),
     contract_value: z.number().min(0).optional().nullable(),
-  }).passthrough(),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  }).strip(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 module.exports = { leadCreateSchema, leadUpdateSchema };

@@ -14,8 +14,8 @@ const createClientSchema = z.object({
     next_call_date: z.string().optional(),
     notes: z.string().optional(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const updateClientSchema = z.object({
@@ -32,8 +32,8 @@ const updateClientSchema = z.object({
     next_call_date: z.string().optional().nullable(),
     notes: z.string().optional().nullable(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const createSessionSchema = z.object({
@@ -54,8 +54,8 @@ const createSessionSchema = z.object({
       )
       .optional(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const updateSessionSchema = z.object({
@@ -76,8 +76,8 @@ const updateSessionSchema = z.object({
       )
       .optional(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const upsertMetricSchema = z.object({
@@ -94,8 +94,8 @@ const upsertMetricSchema = z.object({
     calls_closed: z.number().optional(),
     expenses: z.number().optional(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 module.exports = {

@@ -18,11 +18,11 @@ const createCampaignSchema = z.object({
       min_group_break_seconds: z.number().optional(),
       max_group_break_seconds: z.number().optional(),
       skip_active_hours: z.boolean().optional(),
-    }).passthrough().optional(),
+    }).strip().optional(),
     daily_limit_per_sender: z.number().int().positive().optional(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const patchCampaignSchema = z.object({
@@ -43,10 +43,10 @@ const patchCampaignSchema = z.object({
       min_group_break_seconds: z.number().optional(),
       max_group_break_seconds: z.number().optional(),
       skip_active_hours: z.boolean().optional(),
-    }).passthrough().optional(),
+    }).strip().optional(),
     daily_limit_per_sender: z.number().int().positive().optional(),
-  }).passthrough(),
-  query: z.object({}).passthrough(),
+  }).strip(),
+  query: z.object({}).strip(),
   params: z.object({
     id: z.string().min(1, "Campaign ID is required"),
   }),

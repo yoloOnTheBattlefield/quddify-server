@@ -9,8 +9,8 @@ const webhookSchema = z.object({
     trigger_type: z.string().optional().nullable(),
     post_url: z.string().optional().nullable(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 module.exports = { webhookSchema };

@@ -5,8 +5,8 @@ const loginSchema = z.object({
     email: z.string().min(1, "Email is required").email("Invalid email format"),
     password: z.string().min(1, "Password is required"),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 const registerSchema = z.object({
@@ -17,8 +17,8 @@ const registerSchema = z.object({
     last_name: z.string().optional(),
     ghl: z.string().optional().nullable(),
   }),
-  query: z.object({}).passthrough(),
-  params: z.object({}).passthrough(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
 });
 
 module.exports = { loginSchema, registerSchema };
