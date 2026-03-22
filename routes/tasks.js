@@ -227,6 +227,7 @@ router.post("/", async (req, res) => {
       campaign_id: t.campaign_id || null,
       campaign_lead_id: t.campaign_lead_id || null,
       message: t.message || null,
+      voice_note_url: t.voice_note_url || null,
       metadata: t.metadata || {},
       status: "pending",
     }));

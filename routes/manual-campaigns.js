@@ -179,20 +179,35 @@ router.get("/next", async (req, res) => {
     }
 
 
-    // Resolve message template (round-robin)
-    const messageIndex = (campaign.last_message_index || 0) % campaign.messages.length;
-    const template = campaign.messages[messageIndex];
-    const message = resolveTemplate(template, outboundLead);
+    // Resolve message template (round-robin) — text messages + voice notes rotate together
+    const voiceNotes = campaign.voice_notes || [];
+    const totalSlots = campaign.messages.length + voiceNotes.length;
+
+    if (totalSlots === 0) {
+      return res.json({ status: "skipped", reason: "No messages or voice notes configured" });
+    }
+
+    const messageIndex = (campaign.last_message_index || 0) % totalSlots;
+    let message = null;
+    let voiceNoteUrl = null;
+
+    if (messageIndex < campaign.messages.length) {
+      const template = campaign.messages[messageIndex];
+      message = resolveTemplate(template, outboundLead);
+    } else {
+      const vnIndex = messageIndex - campaign.messages.length;
+      voiceNoteUrl = voiceNotes[vnIndex].url;
+    }
 
     // Update campaign tracking (atomic $inc to avoid race conditions)
     await Campaign.findByIdAndUpdate(campaign._id, {
       $inc: { "stats.pending": -1, "stats.queued": 1 },
-      $set: { last_message_index: (messageIndex + 1) % campaign.messages.length },
+      $set: { last_message_index: (messageIndex + 1) % totalSlots },
     });
 
     // Store the message and template index on the campaign lead
     await CampaignLead.findByIdAndUpdate(campaignLead._id, {
-      $set: { message_used: message, template_index: messageIndex },
+      $set: { message_used: message || "(voice note)", template_index: messageIndex },
     });
 
     res.json({
@@ -206,6 +221,7 @@ router.get("/next", async (req, res) => {
         bio: outboundLead.bio,
         profileLink: outboundLead.profileLink,
         message,
+        voice_note_url: voiceNoteUrl,
       },
     });
   } catch (err) {

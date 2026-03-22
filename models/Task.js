@@ -34,6 +34,7 @@ const TaskSchema = new mongoose.Schema(
       default: null,
     },
     message: { type: String, default: null },
+    voice_note_url: { type: String, default: null },
     status: {
       type: String,
       enum: ["pending", "in_progress", "completed", "failed"],

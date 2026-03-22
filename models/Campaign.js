@@ -19,6 +19,14 @@ const CampaignSchema = new mongoose.Schema(
       default: "draft",
     },
     messages: [{ type: String }],
+    voice_notes: [
+      {
+        url: { type: String, required: true },
+        label: { type: String, default: null },
+        duration_ms: { type: Number, default: null },
+        original_filename: { type: String, default: null },
+      },
+    ],
     outbound_account_ids: [
       {
         type: mongoose.Schema.Types.ObjectId,

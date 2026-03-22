@@ -209,13 +209,14 @@ async function checkStaleSenders() {
 
 }
 
-async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, sender_id, account_id, target, message, template_index }) {
+async function processDM({ campaign_id, campaign_lead_id, outbound_lead_id, sender_id, account_id, target, message, voice_note_url, template_index }) {
   // Create the actual Task for the extension to pick up
   const task = await Task.create({
     account_id,
     type: "send_dm",
     target,
-    message,
+    message: message || null,
+    voice_note_url: voice_note_url || null,
     outbound_lead_id,
     sender_id,
     campaign_id,
@@ -558,7 +559,9 @@ async function processTick() {
       }
 
       // Check for AI-personalized custom message first, fall back to template rotation
+      // Campaigns can have text messages, voice notes, or a mix — they rotate together
       let message;
+      let voiceNoteUrl = null;
       let messageIndex;
       let nextMessageIndex;
       if (campaignLead.custom_message) {
@@ -566,10 +569,28 @@ async function processTick() {
         messageIndex = null;
         nextMessageIndex = campaign.last_message_index || 0; // don't advance
       } else {
-        messageIndex = (campaign.last_message_index || 0) % campaign.messages.length;
-        const template = campaign.messages[messageIndex];
-        message = resolveTemplate(template, outboundLead);
-        nextMessageIndex = (messageIndex + 1) % campaign.messages.length;
+        // Build combined slot array: text messages + voice notes rotate together
+        const voiceNotes = campaign.voice_notes || [];
+        const totalSlots = campaign.messages.length + voiceNotes.length;
+
+        if (totalSlots === 0) {
+          logger.warn(`[scheduler] Campaign ${campaign.name} has no messages or voice notes — skipping`);
+          continue;
+        }
+
+        messageIndex = (campaign.last_message_index || 0) % totalSlots;
+        nextMessageIndex = (messageIndex + 1) % totalSlots;
+
+        if (messageIndex < campaign.messages.length) {
+          // Text message slot
+          const template = campaign.messages[messageIndex];
+          message = resolveTemplate(template, outboundLead);
+        } else {
+          // Voice note slot
+          const vnIndex = messageIndex - campaign.messages.length;
+          voiceNoteUrl = voiceNotes[vnIndex].url;
+          message = null;
+        }
       }
 
       // Advance round-robin indexes
@@ -626,6 +647,7 @@ async function processTick() {
         account_id: campaign.account_id.toString(),
         target: outboundLead.username,
         message,
+        voice_note_url: voiceNoteUrl,
         template_index: messageIndex,
       });
 
