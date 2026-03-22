@@ -73,6 +73,7 @@ const leadNoteRoutes = require("./routes/lead-notes");
 const leadTaskRoutes = require("./routes/lead-tasks");
 const invitationRoutes = require("./routes/invitations");
 const pushSubscriptionRoutes = require("./routes/push-subscriptions");
+const stripeRoutes = require("./routes/stripe");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -104,6 +105,20 @@ app.use(
     },
   }),
   igWebhookRoutes,
+);
+
+// Stripe webhook — needs raw body for signature verification
+app.use(
+  "/api/stripe/webhook",
+  webhookLimiter,
+  cors({ origin: true, credentials: false }),
+  express.raw({ type: "application/json" }),
+  (req, _res, next) => {
+    req.rawBody = req.body;
+    req.body = JSON.parse(req.body);
+    next();
+  },
+  stripeRoutes,
 );
 
 app.use(express.json({ limit: "10mb" }));
@@ -260,6 +275,7 @@ app.use("/api/instagram", igOAuthRoutes);
 app.use("/api/follow-ups", requireOutbound, followUpRoutes);
 app.use("/api/eod-reports", eodReportRoutes);
 app.use("/api/bookings", bookingRoutes);
+app.use("/api/stripe", stripeRoutes);
 app.use("/tracking", trackingRoutes);
 
 // Carousel feature routes

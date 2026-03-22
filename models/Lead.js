@@ -32,6 +32,8 @@ const LeadSchema = new mongoose.Schema(
     // utm attribution
     utm_source: { type: String, default: null },
     utm_medium: { type: String, default: null },
+    // additional emails for matching (Stripe, etc.)
+    emails: [{ type: String }],
   },
   {
     collection: "leads",

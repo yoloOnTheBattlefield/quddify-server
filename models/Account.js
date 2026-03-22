@@ -9,6 +9,7 @@ const AccountSchema = new mongoose.Schema(
     calendly_token: { type: String, default: null },
     calendly_user_uri: { type: String, default: null },
     ghl_lead_booked_webhook: { type: String, default: null },
+    stripe_webhook_secret: { type: String, default: null },
     openai_token: { type: String, default: null },
     claude_token: { type: String, default: null },
     gemini_token: { type: String, default: null },
@@ -62,6 +63,7 @@ const ENCRYPTED_FIELDS = [
   "calendly_token",
   "ig_oauth.access_token",
   "ig_oauth.page_access_token",
+  "stripe_webhook_secret",
 ];
 
 /**
