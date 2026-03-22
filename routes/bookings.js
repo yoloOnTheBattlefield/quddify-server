@@ -353,15 +353,31 @@ router.post("/import", async (req, res) => {
         continue;
       }
 
-      // Map Calendly status values
+      // Derive status from Calendly fields:
+      // - "canceled" column (Yes/No) → cancelled
+      // - "no_show" column (Yes/No) → no_show
+      // - "status" column (Active/Canceled/etc.) as fallback
+      // - past bookings without cancellation/no-show → completed
       let status = "scheduled";
-      if (row.status) {
-        const s = row.status.toLowerCase().trim();
+      const isCanceled = row.canceled && String(row.canceled).toLowerCase().trim() === "yes";
+      const isNoShow = row.no_show && String(row.no_show).toLowerCase().trim() === "yes";
+
+      if (isCanceled) {
+        status = "cancelled";
+      } else if (isNoShow) {
+        status = "no_show";
+      } else if (row.status) {
+        const s = String(row.status).toLowerCase().trim();
         if (s === "active" || s === "scheduled") status = "scheduled";
         else if (s === "completed") status = "completed";
         else if (s === "canceled" || s === "cancelled") status = "cancelled";
         else if (s === "no_show" || s === "no-show" || s === "no show") status = "no_show";
+      } else if (bookingDate < new Date()) {
+        status = "completed";
       }
+
+      // Build notes from event_type + notes
+      const notesParts = [row.event_type, row.notes].filter(Boolean);
 
       docs.push({
         account_id: accountId,
@@ -370,7 +386,7 @@ router.post("/import", async (req, res) => {
         booking_date: bookingDate,
         status,
         source: row.source || "inbound",
-        notes: row.notes || "",
+        notes: notesParts.join(" — ") || "",
         cash_collected: row.cash_collected ? Number(row.cash_collected) : null,
         contract_value: row.contract_value ? Number(row.contract_value) : null,
         utm_source: row.utm_source || null,
