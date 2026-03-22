@@ -17,6 +17,8 @@ const BookingSchema = new mongoose.Schema(
     cancelled_at: { type: Date, default: null },
     completed_at: { type: Date, default: null },
     score: { type: Number, default: null },
+    utm_source: { type: String, default: null },
+    utm_medium: { type: String, default: null },
   },
   { collection: "bookings", timestamps: true, versionKey: false },
 );
@@ -25,5 +27,6 @@ BookingSchema.index({ account_id: 1, booking_date: -1 });
 BookingSchema.index({ account_id: 1, status: 1 });
 BookingSchema.index({ lead_id: 1 });
 BookingSchema.index({ outbound_lead_id: 1 });
+BookingSchema.index({ account_id: 1, utm_source: 1 });
 
 module.exports = mongoose.model("Booking", BookingSchema);

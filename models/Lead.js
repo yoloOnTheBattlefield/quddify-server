@@ -29,6 +29,9 @@ const LeadSchema = new mongoose.Schema(
     //calendly
     email: { type: String, default: null },
     questions_and_answers: { type: Array, default: [] },
+    // utm attribution
+    utm_source: { type: String, default: null },
+    utm_medium: { type: String, default: null },
   },
   {
     collection: "leads",

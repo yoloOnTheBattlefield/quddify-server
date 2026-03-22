@@ -7,6 +7,7 @@ const AccountSchema = new mongoose.Schema(
     ghl: { type: String, default: null },
     calendly: { type: String, default: null },
     calendly_token: { type: String, default: null },
+    calendly_user_uri: { type: String, default: null },
     ghl_lead_booked_webhook: { type: String, default: null },
     openai_token: { type: String, default: null },
     claude_token: { type: String, default: null },

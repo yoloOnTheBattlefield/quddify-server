@@ -232,6 +232,7 @@ router.post("/", async (req, res) => {
     const {
       lead_id, outbound_lead_id, source, contact_name, ig_username,
       email, booking_date, status, cash_collected, contract_value, notes, score,
+      utm_source, utm_medium,
     } = req.body;
 
     if (!booking_date) {
@@ -252,6 +253,8 @@ router.post("/", async (req, res) => {
       contract_value: contract_value ?? null,
       notes: notes || "",
       score: score ?? null,
+      utm_source: utm_source || null,
+      utm_medium: utm_medium || null,
     });
 
     // Backfill outbound_lead_id onto the Lead so conversation lookup works
@@ -319,6 +322,76 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// POST /api/bookings/import — bulk import bookings from CSV/XLSX (parsed client-side)
+router.post("/import", async (req, res) => {
+  try {
+    const accountId = req.account._id;
+    const { rows } = req.body;
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: "No rows provided" });
+    }
+
+    const results = { imported: 0, skipped: 0, errors: [] };
+
+    const docs = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2; // +2 for 1-indexed + header row
+
+      // booking_date is required
+      if (!row.booking_date) {
+        results.errors.push({ row: rowNum, reason: "Missing booking date" });
+        results.skipped++;
+        continue;
+      }
+
+      const bookingDate = new Date(row.booking_date);
+      if (isNaN(bookingDate.getTime())) {
+        results.errors.push({ row: rowNum, reason: `Invalid date: ${row.booking_date}` });
+        results.skipped++;
+        continue;
+      }
+
+      // Map Calendly status values
+      let status = "scheduled";
+      if (row.status) {
+        const s = row.status.toLowerCase().trim();
+        if (s === "active" || s === "scheduled") status = "scheduled";
+        else if (s === "completed") status = "completed";
+        else if (s === "canceled" || s === "cancelled") status = "cancelled";
+        else if (s === "no_show" || s === "no-show" || s === "no show") status = "no_show";
+      }
+
+      docs.push({
+        account_id: accountId,
+        contact_name: row.contact_name || row.invitee_name || "",
+        email: row.email || null,
+        booking_date: bookingDate,
+        status,
+        source: row.source || "inbound",
+        notes: row.notes || "",
+        cash_collected: row.cash_collected ? Number(row.cash_collected) : null,
+        contract_value: row.contract_value ? Number(row.contract_value) : null,
+        utm_source: row.utm_source || null,
+        utm_medium: row.utm_medium || null,
+        ig_username: row.ig_username || null,
+      });
+    }
+
+    if (docs.length > 0) {
+      await Booking.insertMany(docs, { ordered: false });
+      results.imported = docs.length;
+    }
+
+    logger.info({ imported: results.imported, skipped: results.skipped }, "Bookings imported");
+    res.json(results);
+  } catch (err) {
+    logger.error({ err }, "Failed to import bookings");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // POST /api/bookings/sync — create booking records for leads that don't have one yet
 router.post("/sync", async (req, res) => {
   try {
@@ -349,6 +422,7 @@ router.post("/sync", async (req, res) => {
         booking_date: lead.booked_at || lead.updatedAt || new Date(),
         status: "scheduled",
         contract_value: lead.contract_value || null,
+        utm_source: "ig",
       }));
 
     // Find all inbound leads with booked_at that don't have a Booking yet
@@ -363,19 +437,35 @@ router.post("/sync", async (req, res) => {
     ).lean();
     const existingInboundSet = new Set(existingInbound.map((b) => b.lead_id.toString()));
 
+    // Collect outbound_lead_ids that are linked to inbound leads with bookings,
+    // so we don't create duplicate outbound bookings for the same person
+    const linkedOutboundIds = new Set(
+      bookedInbound
+        .filter((lead) => lead.outbound_lead_id)
+        .map((lead) => lead.outbound_lead_id.toString()),
+    );
+
+    // Filter out outbound bookings where the outbound lead is already linked to an inbound lead
+    const dedupedOutboundBookings = newOutboundBookings.filter(
+      (b) => !linkedOutboundIds.has(b.outbound_lead_id.toString()),
+    );
+
     const newInboundBookings = bookedInbound
       .filter((lead) => !existingInboundSet.has(lead._id.toString()))
       .map((lead) => ({
         account_id: accountId,
         lead_id: lead._id,
+        outbound_lead_id: lead.outbound_lead_id || null,
         source: "inbound",
         contact_name: lead.full_name || "",
         email: lead.email || null,
         booking_date: lead.booked_at || lead.updatedAt || new Date(),
         status: "scheduled",
+        utm_source: lead.utm_source || null,
+        utm_medium: lead.utm_medium || null,
       }));
 
-    const allNew = [...newOutboundBookings, ...newInboundBookings];
+    const allNew = [...dedupedOutboundBookings, ...newInboundBookings];
 
     if (allNew.length > 0) {
       await Booking.insertMany(allNew, { ordered: false });

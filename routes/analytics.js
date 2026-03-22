@@ -7,6 +7,7 @@ const CampaignLead = require("../models/CampaignLead");
 const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
 const Campaign = require("../models/Campaign");
+const Booking = require("../models/Booking");
 
 const router = express.Router();
 
@@ -548,6 +549,95 @@ router.get("/", async (req, res) => {
         ob_booked: counts.ob_booked,
       }));
 
+    // 8. SALES METRICS (from Booking model)
+    const bookingFilter = {};
+    if (isAdmin && account_id) {
+      const targetAccount = await Account.findOne({ ghl: account_id }).lean();
+      if (targetAccount) bookingFilter.account_id = targetAccount._id;
+    } else if (!isAdmin) {
+      bookingFilter.account_id = req.account._id;
+    }
+    if (start_date || end_date) {
+      bookingFilter.booking_date = {};
+      if (start_date) bookingFilter.booking_date.$gte = new Date(`${start_date}T00:00:00.000Z`);
+      if (end_date) bookingFilter.booking_date.$lte = new Date(`${end_date}T23:59:59.999Z`);
+    }
+
+    const bookings = await Booking.find(bookingFilter).lean();
+
+    const totalBookings = bookings.length;
+    const nonCancelled = bookings.filter((b) => b.status !== "cancelled");
+    const completedBookings = bookings.filter((b) => b.status === "completed");
+    const noShowBookings = bookings.filter((b) => b.status === "no_show");
+    const showUpDenom = completedBookings.length + noShowBookings.length;
+
+    const overallCloseRate = nonCancelled.length > 0 ? round2((completedBookings.length / nonCancelled.length) * 100) : 0;
+    const overallShowUpRate = showUpDenom > 0 ? round2((completedBookings.length / showUpDenom) * 100) : 0;
+
+    const cashValues = bookings.filter((b) => b.cash_collected > 0);
+    const totalRevenue = cashValues.reduce((s, b) => s + b.cash_collected, 0);
+    const avgDealValue = cashValues.length > 0 ? round2(totalRevenue / cashValues.length) : 0;
+
+    // Group by utm_source (derive for legacy bookings without utm_source)
+    const sourceGroups = {};
+    for (const b of bookings) {
+      const src = b.utm_source || (b.source === "outbound" ? "ig" : "direct");
+      if (!sourceGroups[src]) sourceGroups[src] = [];
+      sourceGroups[src].push(b);
+    }
+
+    const bySource = Object.entries(sourceGroups).map(([source, group]) => {
+      const nc = group.filter((b) => b.status !== "cancelled");
+      const comp = group.filter((b) => b.status === "completed");
+      const ns = group.filter((b) => b.status === "no_show");
+      const sud = comp.length + ns.length;
+      const rev = group.filter((b) => b.cash_collected > 0).reduce((s, b) => s + b.cash_collected, 0);
+      return {
+        source,
+        bookings: group.length,
+        completed: comp.length,
+        close_rate: nc.length > 0 ? round2((comp.length / nc.length) * 100) : 0,
+        show_up_rate: sud > 0 ? round2((comp.length / sud) * 100) : 0,
+        revenue: rev,
+      };
+    }).sort((a, b) => b.bookings - a.bookings);
+
+    // Group by utm_medium (top 10 by booking count)
+    const mediumGroups = {};
+    for (const b of bookings) {
+      const med = b.utm_medium || "unknown";
+      if (med === "unknown") continue;
+      if (!mediumGroups[med]) mediumGroups[med] = { source: b.utm_source || (b.source === "outbound" ? "ig" : "direct"), items: [] };
+      mediumGroups[med].items.push(b);
+    }
+
+    const byMedium = Object.entries(mediumGroups)
+      .map(([medium, { source, items }]) => {
+        const nc = items.filter((b) => b.status !== "cancelled");
+        const comp = items.filter((b) => b.status === "completed");
+        const rev = items.filter((b) => b.cash_collected > 0).reduce((s, b) => s + b.cash_collected, 0);
+        return {
+          medium,
+          source,
+          bookings: items.length,
+          completed: comp.length,
+          close_rate: nc.length > 0 ? round2((comp.length / nc.length) * 100) : 0,
+          revenue: rev,
+        };
+      })
+      .sort((a, b) => b.bookings - a.bookings)
+      .slice(0, 10);
+
+    const sales = {
+      total_bookings: totalBookings,
+      overall_close_rate: overallCloseRate,
+      overall_show_up_rate: overallShowUpRate,
+      total_revenue: totalRevenue,
+      avg_deal_value: avgDealValue,
+      by_source: bySource,
+      by_medium: byMedium,
+    };
+
     // Return all metrics
     res.json({
       funnel,
@@ -558,6 +648,7 @@ router.get("/", async (req, res) => {
       aging,
       cumulative,
       radar,
+      sales,
     });
   } catch (error) {
     logger.error("Analytics error:", error);
