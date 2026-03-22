@@ -137,6 +137,109 @@ router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
   }
 });
 
+// POST /leads/import — bulk import leads from Calendly CSV (parsed client-side)
+router.post("/import", async (req, res) => {
+  try {
+    const accountId = req.account.ghl;
+    const { rows } = req.body;
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: "No rows provided" });
+    }
+
+    const results = { imported: 0, updated: 0, skipped: 0, errors: [] };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2;
+
+      if (!row.first_name && !row.last_name && !row.email) {
+        results.errors.push({ row: rowNum, reason: "Missing name and email" });
+        results.skipped++;
+        continue;
+      }
+
+      // Parse booking date
+      let bookedAt = null;
+      if (row.booking_date) {
+        const parsed = new Date(row.booking_date);
+        if (!isNaN(parsed.getTime())) bookedAt = parsed;
+      }
+
+      // Derive status from canceled/no-show columns
+      const isCanceled = row.canceled && String(row.canceled).toLowerCase().trim() === "yes";
+      const isNoShow = row.no_show && String(row.no_show).toLowerCase().trim() === "yes";
+
+      let ghostedAt = null;
+      let closedAt = null;
+      if (isCanceled) {
+        ghostedAt = bookedAt || new Date();
+        bookedAt = null; // cancelled bookings aren't really booked
+      }
+
+      // Parse questions and answers (Q1/R1 through Q7/R7)
+      const questionsAndAnswers = [];
+      for (let q = 1; q <= 7; q++) {
+        const question = row[`question_${q}`];
+        const response = row[`response_${q}`];
+        if (question && response) {
+          questionsAndAnswers.push({ position: q, question, answer: response });
+        }
+      }
+
+      // Parse contract value from event price
+      const contractValue = row.contract_value ? Number(row.contract_value) : null;
+
+      const leadData = {
+        first_name: row.first_name || null,
+        last_name: row.last_name || null,
+        email: row.email || null,
+        account_id: accountId,
+        source: row.source || "calendly",
+        date_created: bookedAt ? bookedAt.toISOString() : new Date().toISOString(),
+        booked_at: isCanceled ? null : bookedAt,
+        ghosted_at: ghostedAt,
+        closed_at: closedAt,
+        contract_value: isNaN(contractValue) ? null : contractValue,
+        utm_source: row.utm_source || null,
+        utm_medium: row.utm_medium || null,
+        utm_campaign: row.utm_campaign || null,
+        ...(questionsAndAnswers.length > 0 && { questions_and_answers: questionsAndAnswers }),
+        ...(isNoShow && { summary: "No-show" }),
+        ...(row.cancellation_reason && { summary: `Cancelled: ${row.cancellation_reason}` }),
+      };
+
+      try {
+        // Deduplicate by email + account_id if email exists
+        if (row.email) {
+          const existing = await Lead.findOneAndUpdate(
+            { email: row.email, account_id: accountId },
+            { $set: leadData, $setOnInsert: { date_created: leadData.date_created } },
+            { upsert: true, new: true },
+          );
+          if (existing.createdAt && existing.updatedAt && existing.createdAt.getTime() === existing.updatedAt.getTime()) {
+            results.imported++;
+          } else {
+            results.updated++;
+          }
+        } else {
+          await Lead.create(leadData);
+          results.imported++;
+        }
+      } catch (err) {
+        results.errors.push({ row: rowNum, reason: err.message });
+        results.skipped++;
+      }
+    }
+
+    logger.info({ imported: results.imported, updated: results.updated, skipped: results.skipped }, "Leads imported");
+    res.json(results);
+  } catch (err) {
+    logger.error({ err }, "Failed to import leads");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // POST /leads/sync-outbound — backfill outbound leads with inbound funnel status
 router.post("/sync-outbound", async (req, res) => {
   try {
