@@ -213,12 +213,12 @@ router.post("/import", async (req, res) => {
         // Deduplicate by email + account_id if email exists
         if (row.email) {
           const { date_created, ...updateData } = leadData;
-          const existing = await Lead.findOneAndUpdate(
+          const result = await Lead.findOneAndUpdate(
             { email: row.email, account_id: accountId },
             { $set: updateData, $setOnInsert: { date_created } },
-            { upsert: true, new: true },
+            { upsert: true, new: true, rawResult: true },
           );
-          if (existing.createdAt && existing.updatedAt && existing.createdAt.getTime() === existing.updatedAt.getTime()) {
+          if (result.lastErrorObject?.upserted) {
             results.imported++;
           } else {
             results.updated++;
