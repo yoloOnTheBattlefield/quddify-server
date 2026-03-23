@@ -85,7 +85,7 @@ router.get("/", async (req, res) => {
 // get lead by id
 router.get("/:id", async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id).lean();
+    const lead = await Lead.findOne({ _id: req.params.id, account_id: req.account.ghl }).lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
     res.json(lead);
   } catch (error) {
@@ -108,9 +108,11 @@ router.post("/", validate(leadCreateSchema), async (req, res) => {
 // update lead
 router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
   try {
-    const lead = await Lead.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-    }).lean();
+    const lead = await Lead.findOneAndUpdate(
+      { _id: req.params.id, account_id: req.account.ghl },
+      req.body,
+      { new: true },
+    ).lean();
 
     if (!lead) return res.status(404).json({ error: "Not found" });
 
@@ -275,7 +277,7 @@ router.post("/sync-outbound", async (req, res) => {
 // delete lead
 router.delete("/:id", async (req, res) => {
   try {
-    const lead = await Lead.findByIdAndDelete(req.params.id);
+    const lead = await Lead.findOneAndDelete({ _id: req.params.id, account_id: req.account.ghl });
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     // Clean up related data

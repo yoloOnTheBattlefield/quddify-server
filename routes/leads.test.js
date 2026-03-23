@@ -149,6 +149,89 @@ describe("PATCH /api/leads/:id", () => {
     expect(res.status).toBe(200);
     expect(res.body.first_name).toBe("After");
   });
+
+  it("updates stage dates (follow_up_at, link_sent_at, etc.)", async () => {
+    const lead = await createLead();
+    const now = new Date().toISOString();
+
+    const res = await request(app)
+      .patch(`/api/leads/${lead._id}`)
+      .send({ follow_up_at: now, link_sent_at: now });
+
+    expect(res.status).toBe(200);
+    expect(res.body.follow_up_at).toBeTruthy();
+    expect(res.body.link_sent_at).toBeTruthy();
+  });
+
+  it("clears stage dates with null", async () => {
+    const lead = await createLead({ follow_up_at: new Date() });
+
+    const res = await request(app)
+      .patch(`/api/leads/${lead._id}`)
+      .send({ follow_up_at: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.follow_up_at).toBeNull();
+  });
+
+  it("updates ghosted_at", async () => {
+    const lead = await createLead();
+    const now = new Date().toISOString();
+
+    const res = await request(app)
+      .patch(`/api/leads/${lead._id}`)
+      .send({ ghosted_at: now });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ghosted_at).toBeTruthy();
+  });
+
+  it("updates email, ig_username, and source", async () => {
+    const lead = await createLead();
+
+    const res = await request(app)
+      .patch(`/api/leads/${lead._id}`)
+      .send({ email: "new@test.com", ig_username: "newhandle", source: "referral" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.email).toBe("new@test.com");
+    expect(res.body.ig_username).toBe("newhandle");
+    expect(res.body.source).toBe("referral");
+  });
+
+  it("updates score and contract_value", async () => {
+    const lead = await createLead();
+
+    const res = await request(app)
+      .patch(`/api/leads/${lead._id}`)
+      .send({ score: 8, contract_value: 5000 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.score).toBe(8);
+    expect(res.body.contract_value).toBe(5000);
+  });
+
+  it("returns 404 for lead from another account", async () => {
+    const lead = await Lead.create({
+      account_id: "other_account",
+      first_name: "Foreign",
+      date_created: new Date().toISOString(),
+    });
+
+    const res = await request(app)
+      .patch(`/api/leads/${lead._id}`)
+      .send({ score: 5 });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 for nonexistent lead", async () => {
+    const res = await request(app)
+      .patch(`/api/leads/${new mongoose.Types.ObjectId()}`)
+      .send({ score: 5 });
+
+    expect(res.status).toBe(404);
+  });
 });
 
 describe("DELETE /api/leads/:id", () => {
@@ -161,5 +244,20 @@ describe("DELETE /api/leads/:id", () => {
 
     const found = await Lead.findById(lead._id);
     expect(found).toBeNull();
+  });
+
+  it("returns 404 for lead from another account", async () => {
+    const lead = await Lead.create({
+      account_id: "other_account",
+      first_name: "Foreign",
+      date_created: new Date().toISOString(),
+    });
+
+    const res = await request(app).delete(`/api/leads/${lead._id}`);
+    expect(res.status).toBe(404);
+
+    // Lead should still exist
+    const found = await Lead.findById(lead._id);
+    expect(found).not.toBeNull();
   });
 });

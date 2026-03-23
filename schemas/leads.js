@@ -14,11 +14,25 @@ const leadCreateSchema = z.object({
 
 const leadUpdateSchema = z.object({
   body: z.object({
+    first_name: z.string().optional().nullable(),
+    last_name: z.string().optional().nullable(),
+    email: z.string().optional().nullable(),
+    emails: z.array(z.string()).optional(),
+    ig_username: z.string().optional().nullable(),
+    source: z.string().optional().nullable(),
     score: z.number().min(1).max(10).optional().nullable(),
     contract_value: z.number().min(0).optional().nullable(),
+    outbound_lead_id: z.string().optional().nullable(),
+    ig_thread_id: z.string().optional().nullable(),
+    // Stage dates
+    link_sent_at: z.string().datetime().optional().nullable(),
+    follow_up_at: z.string().datetime().optional().nullable(),
+    booked_at: z.string().datetime().optional().nullable(),
+    ghosted_at: z.string().datetime().optional().nullable(),
+    closed_at: z.string().datetime().optional().nullable(),
   }).strip(),
   query: z.object({}).strip(),
-  params: z.object({}).strip(),
+  params: z.object({ id: z.string() }).strip(),
 });
 
 module.exports = { leadCreateSchema, leadUpdateSchema };
