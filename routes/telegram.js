@@ -8,7 +8,8 @@ const router = express.Router();
 // POST /api/telegram/connect — save bot token + chat ID, send test message
 router.post("/connect", async (req, res) => {
   try {
-    const { bot_token, chat_id } = req.body;
+    const bot_token = (req.body.bot_token || "").trim();
+    const chat_id = (req.body.chat_id || "").trim();
     if (!bot_token || !chat_id) {
       return res.status(400).json({ error: "bot_token and chat_id are required" });
     }
@@ -28,9 +29,10 @@ router.post("/connect", async (req, res) => {
 
     if (!testRes.ok) {
       const err = await testRes.json().catch(() => ({}));
-      logger.error({ err }, "Telegram test message failed");
+      logger.error({ err, chat_id }, "Telegram test message failed");
+      const detail = err.description || "Unknown error";
       return res.status(400).json({
-        error: "Failed to send test message. Check your bot token and chat ID.",
+        error: `Telegram API error: ${detail}`,
       });
     }
 
