@@ -48,6 +48,8 @@ const AccountSchema = new mongoose.Schema(
     deleted: { type: Boolean, default: false },
     deleted_at: { type: Date, default: null },
     push_notifications_enabled: { type: Boolean, default: true },
+    telegram_bot_token: { type: String, default: null },
+    telegram_chat_id: { type: String, default: null },
   },
   { collection: "accounts", versionKey: false },
 );
@@ -64,6 +66,7 @@ const ENCRYPTED_FIELDS = [
   "ig_oauth.access_token",
   "ig_oauth.page_access_token",
   "stripe_webhook_secret",
+  "telegram_bot_token",
 ];
 
 /**

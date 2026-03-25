@@ -1,5 +1,24 @@
 # Features
 
+## Telegram Integration
+
+Send Telegram notifications when new inbound leads are created. Highlights when the inbound lead is linked to an outbound lead, showing the lead's username and the IG sender account that DMed them.
+
+### Files
+
+- `models/Account.js` — `telegram_bot_token` (encrypted) and `telegram_chat_id` fields
+- `services/telegramNotifier.js` — Sends Telegram messages via Bot API, resolves sender account from CampaignLead
+- `routes/telegram.js` — Connect/disconnect endpoints with test message validation
+- `routes/calendly.js` — Fires Telegram notification on Calendly webhook lead creation
+- `routes/leads.js` — Fires Telegram notification on direct lead creation
+
+### API Routes — `/api/telegram`
+
+| Method | Path        | Description                                          |
+| ------ | ----------- | ---------------------------------------------------- |
+| POST   | /connect    | Save bot token + chat ID, send test message          |
+| DELETE | /disconnect | Remove Telegram configuration                        |
+
 ## Advisory Module
 
 Track advisory/coaching clients, their sessions, and monthly business metrics.

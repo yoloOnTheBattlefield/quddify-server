@@ -4,6 +4,7 @@ const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
 const Account = require("../models/Account");
 const { encrypt, decrypt } = require("../utils/crypto");
+const { notifyNewLead } = require("../services/telegramNotifier");
 
 const router = express.Router();
 
@@ -250,6 +251,13 @@ router.post("/", async (req, res) => {
         logger.info({ leadId: existingLead._id }, "Existing lead updated");
         await syncOutboundLead(existingLead);
         await callGhlWebhook(account, existingLead);
+        // Telegram notification (fire-and-forget)
+        const outbound = existingLead.outbound_lead_id
+          ? await OutboundLead.findById(existingLead.outbound_lead_id).lean()
+          : null;
+        notifyNewLead(account, existingLead, outbound).catch((err) =>
+          logger.error({ err }, "Telegram notify error"),
+        );
         return res.json({ success: true, lead: existingLead });
       }
 
@@ -304,6 +312,15 @@ router.post("/", async (req, res) => {
     logger.info({ leadId: lead._id, source: "calendly" }, "Lead created/updated from Calendly");
 
     await callGhlWebhook(account, lead);
+
+    // Telegram notification (fire-and-forget)
+    const outbound = lead.outbound_lead_id
+      ? await OutboundLead.findById(lead.outbound_lead_id).lean()
+      : null;
+    notifyNewLead(account, lead, outbound).catch((err) =>
+      logger.error({ err }, "Telegram notify error"),
+    );
+
     return res.json({ success: true, lead });
   } catch (error) {
     logger.error({ err: error }, "Calendly webhook error");

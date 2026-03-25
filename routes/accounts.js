@@ -76,6 +76,8 @@ router.get("/me", async (req, res) => {
             connected_at: account.ig_oauth.connected_at,
           }
         : null,
+      telegram_connected: !!(account.telegram_bot_token && account.telegram_chat_id),
+      telegram_chat_id: account.telegram_chat_id || null,
     });
   } catch (error) {
     logger.error("Get account me error:", error);

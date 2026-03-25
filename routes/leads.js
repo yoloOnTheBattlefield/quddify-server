@@ -7,6 +7,7 @@ const LeadNote = require("../models/LeadNote");
 const LeadTask = require("../models/LeadTask");
 const validate = require("../middleware/validate");
 const { leadCreateSchema, leadUpdateSchema } = require("../schemas/leads");
+const { notifyNewLead } = require("../services/telegramNotifier");
 
 const router = express.Router();
 
@@ -98,6 +99,15 @@ router.get("/:id", async (req, res) => {
 router.post("/", validate(leadCreateSchema), async (req, res) => {
   try {
     const lead = await Lead.create(req.body);
+
+    // Telegram notification (fire-and-forget)
+    const outbound = lead.outbound_lead_id
+      ? await OutboundLead.findById(lead.outbound_lead_id).lean()
+      : null;
+    notifyNewLead(req.account, lead, outbound).catch((err) =>
+      logger.error({ err }, "Telegram notify error"),
+    );
+
     res.status(201).json(lead);
   } catch (error) {
     logger.error("Create lead error:", error);

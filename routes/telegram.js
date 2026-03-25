@@ -1,0 +1,63 @@
+const logger = require("../utils/logger").child({ module: "telegram" });
+const express = require("express");
+const Account = require("../models/Account");
+const { encrypt, decrypt } = require("../utils/crypto");
+
+const router = express.Router();
+
+// POST /api/telegram/connect — save bot token + chat ID, send test message
+router.post("/connect", async (req, res) => {
+  try {
+    const { bot_token, chat_id } = req.body;
+    if (!bot_token || !chat_id) {
+      return res.status(400).json({ error: "bot_token and chat_id are required" });
+    }
+
+    // Validate by sending a test message
+    const testRes = await fetch(
+      `https://api.telegram.org/bot${bot_token}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id,
+          text: "✅ Quddify CRM connected! You'll receive lead notifications here.",
+        }),
+      },
+    );
+
+    if (!testRes.ok) {
+      const err = await testRes.json().catch(() => ({}));
+      logger.error({ err }, "Telegram test message failed");
+      return res.status(400).json({
+        error: "Failed to send test message. Check your bot token and chat ID.",
+      });
+    }
+
+    await Account.findByIdAndUpdate(req.account._id, {
+      telegram_bot_token: encrypt(bot_token),
+      telegram_chat_id: chat_id,
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error({ err: error }, "Telegram connect error");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /api/telegram/disconnect — remove Telegram config
+router.delete("/disconnect", async (req, res) => {
+  try {
+    await Account.findByIdAndUpdate(req.account._id, {
+      telegram_bot_token: null,
+      telegram_chat_id: null,
+    });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error({ err: error }, "Telegram disconnect error");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+module.exports = router;

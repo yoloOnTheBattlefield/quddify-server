@@ -76,6 +76,7 @@ const leadTaskRoutes = require("./routes/lead-tasks");
 const invitationRoutes = require("./routes/invitations");
 const pushSubscriptionRoutes = require("./routes/push-subscriptions");
 const stripeRoutes = require("./routes/stripe");
+const telegramRoutes = require("./routes/telegram");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -285,6 +286,7 @@ app.use("/api/follow-ups", requireOutbound, followUpRoutes);
 app.use("/api/eod-reports", eodReportRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/stripe", stripeRoutes);
+app.use("/api/telegram", telegramRoutes);
 app.use("/tracking", trackingRoutes);
 
 // Carousel feature routes
