@@ -53,45 +53,22 @@ function getEffectiveDailyLimit(campaign, outboundAcct) {
   return Math.max(Math.ceil(baseLimit * dayNumber / campaign.warmup_days), 1);
 }
 
-// Calculate seconds between each message based on REMAINING quota and REMAINING time.
-// This ensures the daily limit is always reached — if the campaign starts late or
-// tasks get stuck, subsequent sends speed up to compensate.
-function calculateDelay(campaign, totalDailyLimit, sentToday) {
-  const tz = campaign.schedule.timezone || "America/New_York";
+// Calculate seconds between each message using the full active window.
+// Delay is constant throughout the day — no speed-up if the campaign starts late.
+function calculateDelay(campaign, totalDailyLimit) {
   const endHour = campaign.schedule.active_hours_end || 21;
   const startHour = campaign.schedule.active_hours_start || 9;
   const totalDailyMessages = Math.max(totalDailyLimit, 1);
 
-  // Calculate remaining time in active window (in seconds)
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(now);
-  const currentHour = parseInt(parts.find((p) => p.type === "hour").value, 10);
-  const currentMin = parseInt(parts.find((p) => p.type === "minute").value, 10);
-  const currentTimeInSeconds = currentHour * 3600 + currentMin * 60;
-  const endTimeInSeconds = endHour * 3600;
-  const remainingSeconds = Math.max(endTimeInSeconds - currentTimeInSeconds, 1800); // min 30 min buffer
-
-  // Calculate remaining messages to send
-  const alreadySent = sentToday || 0;
-  const remainingMessages = Math.max(totalDailyMessages - alreadySent, 1);
-
-  // Spread remaining messages across remaining time
-  const baseDelay = remainingSeconds / remainingMessages;
+  // Spread messages evenly across the full active window
+  const windowSeconds = (endHour - startHour) * 3600;
+  const baseDelay = windowSeconds / totalDailyMessages;
 
   // Add ±20% jitter so it doesn't look robotic
   const jitter = baseDelay * 0.2;
   const delay = baseDelay + (Math.random() * 2 - 1) * jitter;
 
-  // Floor: full-window spread (never slower than if we had all day)
-  const fullWindowDelay = ((endHour - startHour) * 3600) / totalDailyMessages;
-
-  return Math.max(Math.round(Math.min(delay, fullWindowDelay)), 30); // min 30 seconds
+  return Math.max(Math.round(delay), 30); // min 30 seconds
 }
 
 function calculateBurstDelay(campaign) {
@@ -377,19 +354,10 @@ async function processTick() {
         return sum + getEffectiveDailyLimit(campaign, acct);
       }, 0);
 
-      // Count how many have been sent today (across all senders for this campaign)
-      const todayStartForDelay = new Date();
-      todayStartForDelay.setHours(0, 0, 0, 0);
-      const sentTodayTotal = await CampaignLead.countDocuments({
-        campaign_id: campaign._id,
-        status: { $in: ["sent", "queued"] },
-        updatedAt: { $gte: todayStartForDelay },
-      });
-
       // Calculate how long to wait between sends
       const delaySec = campaign.schedule.burst_enabled
         ? calculateBurstDelay(campaign)
-        : calculateDelay(campaign, totalDailyLimit, sentTodayTotal);
+        : calculateDelay(campaign, totalDailyLimit);
 
       // Check if enough time has passed since last send (skip in test mode)
       if (!isTestMode && campaign.last_sent_at) {
