@@ -2,6 +2,7 @@ const logger = require("../utils/logger").child({ module: "manychat" });
 const express = require("express");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
+const { notifyNewLead } = require("../services/telegramNotifier");
 
 const validate = require("../middleware/validate");
 const { webhookSchema } = require("../schemas/manychat");
@@ -76,6 +77,14 @@ router.post("/webhook", validate(webhookSchema), async (req, res) => {
 
     logger.info(
       `[manychat] Lead upserted: ${username} (trigger: ${trigger_type || "unknown"}, cross: ${crossChannel})`,
+    );
+
+    // Telegram notification (fire-and-forget)
+    const obLeadForNotify = lead.outbound_lead_id
+      ? await OutboundLead.findById(lead.outbound_lead_id).lean()
+      : null;
+    notifyNewLead(req.account, lead, obLeadForNotify).catch((err) =>
+      logger.error({ err }, "Telegram notify error"),
     );
 
     res.json({
