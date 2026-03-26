@@ -26,7 +26,10 @@ function normalizeTag(tag) {
 
 /**
  * Try to find a matching OutboundLead for an inbound GHL lead.
- * Matches by: full name (case-insensitive) or email.
+ *
+ * Uses the same partial regex search as GET /outbound-leads?search=…
+ * so that "Romolo Marini" matches "Romolo Marini | Dubai | Immobilienexperte".
+ * Matches on fullName or username, plus email as a fallback.
  */
 async function findMatchingOutboundLead(accountId, { first_name, last_name, email }) {
   if (!accountId) return null;
@@ -35,23 +38,27 @@ async function findMatchingOutboundLead(accountId, { first_name, last_name, emai
   const account = await Account.findOne({ ghl: accountId }).lean();
   if (!account) return null;
 
-  // Try email match first (most reliable)
+  const fullName = [first_name, last_name].filter(Boolean).join(" ").trim();
+
+  // Try name-based partial match (same logic as outbound-leads search)
+  if (fullName) {
+    const byName = await OutboundLead.findOne({
+      account_id: account._id,
+      $or: [
+        { fullName: { $regex: escapeRegex(fullName), $options: "i" } },
+        { username: { $regex: escapeRegex(fullName), $options: "i" } },
+      ],
+    }).lean();
+    if (byName) return byName;
+  }
+
+  // Fallback: email match
   if (email) {
     const byEmail = await OutboundLead.findOne({
       account_id: account._id,
       email: { $regex: new RegExp(`^${escapeRegex(email.trim())}$`, "i") },
     }).lean();
     if (byEmail) return byEmail;
-  }
-
-  // Try full name match
-  const fullName = [first_name, last_name].filter(Boolean).join(" ").trim();
-  if (fullName) {
-    const byName = await OutboundLead.findOne({
-      account_id: account._id,
-      fullName: { $regex: new RegExp(`^${escapeRegex(fullName)}$`, "i") },
-    }).lean();
-    if (byName) return byName;
   }
 
   return null;

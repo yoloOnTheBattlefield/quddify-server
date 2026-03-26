@@ -211,19 +211,19 @@ describe("POST /api/ghl/webhook", () => {
     expect(lead.source).toBe("ghl");
   });
 
-  it("links new lead to outbound lead by full name", async () => {
+  it("links new lead to outbound lead by full name (partial match)", async () => {
     await OutboundLead.create({
       account_id: account._id,
-      username: "johndoe_ig",
-      fullName: "John Doe",
-      followingKey: "johndoe_ig::scrape",
+      username: "romolo_ig",
+      fullName: "Romolo Marini | Dubai | Immobilienexperte",
+      followingKey: "romolo_ig::scrape",
     });
 
     const res = await request(app)
       .post("/api/ghl/webhook")
       .send({
-        first_name: "John",
-        last_name: "Doe",
+        first_name: "Romolo",
+        last_name: "Marini",
         contact_id: "ghl_cross1",
         location: { id: ghl },
       });
