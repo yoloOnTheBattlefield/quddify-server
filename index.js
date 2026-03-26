@@ -94,6 +94,7 @@ const { recoverStuckJobs } = require("./services/jobRecovery");
 const campaignScheduler = require("./services/campaignScheduler");
 const deepScrapeScheduler = require("./services/deepScrapeScheduler");
 const youtubeScheduler = require("./services/youtubeScheduler");
+const midnightReportScheduler = require("./services/midnightReportScheduler");
 
 const app = express();
 const server = http.createServer(app);
@@ -372,6 +373,7 @@ connectDB()
     campaignScheduler.start();
     deepScrapeScheduler.start();
     youtubeScheduler.start();
+    midnightReportScheduler.start();
 
     logger.info("Startup complete");
   })
