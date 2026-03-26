@@ -1,4 +1,5 @@
 const logger = require("../utils/logger").child({ module: "ghl-webhook" });
+const escapeRegex = require("../utils/escapeRegex");
 const express = require("express");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
@@ -23,10 +24,43 @@ function normalizeTag(tag) {
   return String(tag).toLowerCase().replace(/\s+/g, "_").replace(/-+/g, "_");
 }
 
+/**
+ * Try to find a matching OutboundLead for an inbound GHL lead.
+ * Matches by: full name (case-insensitive) or email.
+ */
+async function findMatchingOutboundLead(accountId, { first_name, last_name, email }) {
+  if (!accountId) return null;
+
+  // Resolve the Account's _id (outbound leads use ObjectId, not ghl string)
+  const account = await Account.findOne({ ghl: accountId }).lean();
+  if (!account) return null;
+
+  // Try email match first (most reliable)
+  if (email) {
+    const byEmail = await OutboundLead.findOne({
+      account_id: account._id,
+      email: { $regex: new RegExp(`^${escapeRegex(email.trim())}$`, "i") },
+    }).lean();
+    if (byEmail) return byEmail;
+  }
+
+  // Try full name match
+  const fullName = [first_name, last_name].filter(Boolean).join(" ").trim();
+  if (fullName) {
+    const byName = await OutboundLead.findOne({
+      account_id: account._id,
+      fullName: { $regex: new RegExp(`^${escapeRegex(fullName)}$`, "i") },
+    }).lean();
+    if (byName) return byName;
+  }
+
+  return null;
+}
+
 // POST /api/ghl/webhook — replaces the n8n "DM tracking sheets" workflow
 router.post("/webhook", async (req, res) => {
   try {
-    const { first_name, last_name, contact_id, date_created, location, tags } = req.body;
+    const { first_name, last_name, contact_id, date_created, location, tags, email } = req.body;
 
     if (!contact_id) {
       return res.status(400).json({ error: "Missing contact_id" });
@@ -44,25 +78,59 @@ router.post("/webhook", async (req, res) => {
     const existing = await Lead.findOne({ contact_id });
 
     if (!existing) {
-      // ---- New lead: insert ----
+      // ---- New lead: try to cross-reference with outbound leads ----
+      const outboundMatch = await findMatchingOutboundLead(accountId, { first_name, last_name, email });
+
       const lead = await Lead.create({
         first_name: first_name || null,
         last_name: last_name || null,
         contact_id,
         date_created: date_created || new Date().toISOString(),
         account_id: accountId,
+        source: "ghl",
+        ...(email && { email }),
+        ...(outboundMatch && { outbound_lead_id: outboundMatch._id }),
       });
+
+      if (outboundMatch) {
+        logger.info(
+          { leadId: lead._id, outboundId: outboundMatch._id, username: outboundMatch.username },
+          "GHL webhook: inbound lead linked to outbound",
+        );
+      }
 
       logger.info({ leadId: lead._id, contact_id }, "GHL webhook: new lead created");
 
       // Telegram notification (fire-and-forget)
       if (account) {
-        notifyNewLead(account, lead, null).catch((err) =>
+        notifyNewLead(account, lead, outboundMatch).catch((err) =>
           logger.error({ err }, "Telegram notify error"),
         );
       }
 
-      return res.json({ success: true, action: "created", lead_id: lead._id });
+      return res.json({
+        success: true,
+        action: "created",
+        lead_id: lead._id,
+        cross_channel: !!outboundMatch,
+      });
+    }
+
+    // ---- Existing lead without outbound link: try to cross-reference now ----
+    if (!existing.outbound_lead_id) {
+      const outboundMatch = await findMatchingOutboundLead(accountId, {
+        first_name: existing.first_name,
+        last_name: existing.last_name,
+        email: existing.email || email,
+      });
+      if (outboundMatch) {
+        await Lead.findByIdAndUpdate(existing._id, { outbound_lead_id: outboundMatch._id });
+        existing.outbound_lead_id = outboundMatch._id;
+        logger.info(
+          { leadId: existing._id, outboundId: outboundMatch._id },
+          "GHL webhook: existing lead linked to outbound",
+        );
+      }
     }
 
     // ---- Existing lead: parse tags and update funnel field ----

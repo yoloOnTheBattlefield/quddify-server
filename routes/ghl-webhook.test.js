@@ -4,6 +4,7 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 const request = require("supertest");
 
 const Lead = require("../models/Lead");
+const OutboundLead = require("../models/OutboundLead");
 const Account = require("../models/Account");
 const ghlWebhookRouter = require("./ghl-webhook");
 
@@ -38,6 +39,7 @@ afterAll(async () => {
 
 afterEach(async () => {
   await Lead.deleteMany({});
+  await OutboundLead.deleteMany({});
   mockFetch.mockClear();
 });
 
@@ -193,5 +195,94 @@ describe("POST /api/ghl/webhook", () => {
       });
 
     expect(res.body.action).toBe("no_tags");
+  });
+
+  it("sets source to ghl on new leads", async () => {
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "Source",
+        contact_id: "ghl_src",
+        location: { id: ghl },
+      });
+
+    expect(res.body.action).toBe("created");
+    const lead = await Lead.findOne({ contact_id: "ghl_src" });
+    expect(lead.source).toBe("ghl");
+  });
+
+  it("links new lead to outbound lead by full name", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      username: "johndoe_ig",
+      fullName: "John Doe",
+      followingKey: "johndoe_ig::scrape",
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "John",
+        last_name: "Doe",
+        contact_id: "ghl_cross1",
+        location: { id: ghl },
+      });
+
+    expect(res.body.action).toBe("created");
+    expect(res.body.cross_channel).toBe(true);
+
+    const lead = await Lead.findOne({ contact_id: "ghl_cross1" });
+    expect(lead.outbound_lead_id).toBeTruthy();
+  });
+
+  it("links new lead to outbound lead by email", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      username: "jane_ig",
+      email: "jane@example.com",
+      followingKey: "jane_ig::scrape",
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "Jane",
+        contact_id: "ghl_cross2",
+        email: "jane@example.com",
+        location: { id: ghl },
+      });
+
+    expect(res.body.cross_channel).toBe(true);
+    const lead = await Lead.findOne({ contact_id: "ghl_cross2" });
+    expect(lead.outbound_lead_id).toBeTruthy();
+  });
+
+  it("links existing lead to outbound on tag update", async () => {
+    const ob = await OutboundLead.create({
+      account_id: account._id,
+      username: "existing_ob",
+      fullName: "Already Here",
+      followingKey: "existing_ob::scrape",
+    });
+
+    await Lead.create({
+      contact_id: "ghl_cross3",
+      account_id: ghl,
+      first_name: "Already",
+      last_name: "Here",
+      date_created: "2026-03-20",
+    });
+
+    await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        contact_id: "ghl_cross3",
+        location: { id: ghl },
+        tags: "link_sent",
+      });
+
+    const lead = await Lead.findOne({ contact_id: "ghl_cross3" });
+    expect(lead.outbound_lead_id.toString()).toBe(ob._id.toString());
+    expect(lead.link_sent_at).toBeTruthy();
   });
 });
