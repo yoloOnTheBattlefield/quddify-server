@@ -77,6 +77,7 @@ const invitationRoutes = require("./routes/invitations");
 const pushSubscriptionRoutes = require("./routes/push-subscriptions");
 const stripeRoutes = require("./routes/stripe");
 const telegramRoutes = require("./routes/telegram");
+const ghlWebhookRoutes = require("./routes/ghl-webhook");
 
 const { auth } = require("./middleware/auth");
 const requireOutbound = require("./middleware/requireOutbound");
@@ -247,6 +248,7 @@ app.post("/accounts/login", authLimiter, accountRoutes);
 app.post("/accounts/register", authLimiter, accountRoutes);
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/calendly", webhookLimiter, calendlyRoutes);
+app.use("/api/ghl", webhookLimiter, ghlWebhookRoutes);
 app.get("/api/health", healthRoutes);
 app.get("/api/debug", healthRoutes);
 app.use("/api/invitations", invitationRoutes);

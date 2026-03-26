@@ -19,6 +19,32 @@ Send Telegram notifications when new inbound leads are created. Highlights when 
 | POST   | /connect    | Save bot token + chat ID, send test message          |
 | DELETE | /disconnect | Remove Telegram configuration                        |
 
+## GHL Webhook
+
+Replaces the n8n "DM tracking sheets" workflow. Receives GHL contact webhooks, creates or updates leads based on tags, syncs outbound funnel status, and fires Telegram notifications.
+
+### Files
+
+- `routes/ghl-webhook.js` — Webhook endpoint: upsert lead by contact_id, map GHL tags to funnel fields
+
+### API Routes — `/api/ghl` (public, no auth)
+
+| Method | Path     | Description                                          |
+| ------ | -------- | ---------------------------------------------------- |
+| POST   | /webhook | Create lead or update funnel field from GHL tags     |
+
+### Tag Mapping
+
+| GHL Tag           | Lead Field      |
+| ----------------- | --------------- |
+| ghosted           | ghosted_at      |
+| lead_booked       | booked_at       |
+| booking_link      | booked_at       |
+| booking_process   | qualified_at    |
+| follow_up/followup| follow_up_at    |
+| low_ticket        | low_ticket      |
+| link_sent         | link_sent_at    |
+
 ## Advisory Module
 
 Track advisory/coaching clients, their sessions, and monthly business metrics.
