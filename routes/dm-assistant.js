@@ -8,7 +8,7 @@ const { analyzeConversation } = require("../services/dmAssistantService");
 // Receives scraped DM data from the Chrome extension, syncs to DB, returns AI suggestion
 router.post("/analyze", async (req, res) => {
   try {
-    const { thread_id, messages, prospect, outbound_account_id, sender_id } = req.body;
+    const { thread_id, messages, prospect, outbound_account_id, sender_id, sender_handle, lead_status } = req.body;
 
     if (!thread_id) {
       return res.status(400).json({ error: "thread_id is required" });
@@ -26,6 +26,8 @@ router.post("/analyze", async (req, res) => {
       messages,
       prospect: prospect || {},
       outboundAccountId: outbound_account_id || req.outboundAccount?._id || null,
+      senderHandle: sender_handle || req.outboundAccount?.username || null,
+      leadStatus: lead_status || null,
     });
 
     res.json(result);
