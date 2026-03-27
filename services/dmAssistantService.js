@@ -3,6 +3,7 @@ const Account = require("../models/Account");
 const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const OutboundLead = require("../models/OutboundLead");
+const FollowUp = require("../models/FollowUp");
 const logger = require("../utils/logger").child({ module: "dmAssistant" });
 
 // ── OpenAI Client ──────────────────────────────────────
@@ -316,6 +317,17 @@ Generate the next reply.`;
     };
   }
 
+  // Auto-create OutboundLead + FollowUp for new prospects, update status for existing ones
+  await upsertLeadAndFollowUp({
+    accountId,
+    outboundAccountId,
+    threadId,
+    prospect,
+    dbProspect,
+    statusRecommendation: parsed.status_recommendation,
+    constraintIdentified: parsed.constraint_identified,
+  });
+
   return {
     suggestion: parsed.suggested_reply,
     phase: parsed.phase,
@@ -325,6 +337,88 @@ Generate the next reply.`;
     needs_human: parsed.needs_human || false,
     thread_id: threadId,
   };
+}
+
+// ── Auto-create/update OutboundLead + FollowUp ─────────
+
+async function upsertLeadAndFollowUp({ accountId, outboundAccountId, threadId, prospect, dbProspect, statusRecommendation, constraintIdentified }) {
+  try {
+    const username = (prospect?.username || "").replace(/^@/, "");
+    if (!username) return;
+
+    // Upsert OutboundLead — create if this prospect doesn't exist yet
+    let lead = dbProspect;
+    if (!lead) {
+      lead = await OutboundLead.findOneAndUpdate(
+        { account_id: accountId, username },
+        {
+          $setOnInsert: {
+            account_id: accountId,
+            username,
+            followingKey: `dm_assistant_${username}`,
+            fullName: prospect?.displayName || null,
+            bio: prospect?.bio || null,
+            profileLink: `https://instagram.com/${username}`,
+            source: "dm_assistant",
+            isMessaged: true,
+            dmDate: new Date(),
+            replied: true,
+            replied_at: new Date(),
+          },
+          $set: {
+            ig_thread_id: threadId,
+          },
+        },
+        { upsert: true, new: true, lean: true },
+      );
+      logger.info(`[dm-assistant] Upserted OutboundLead for @${username} (${lead._id})`);
+    } else {
+      // Update thread ID if not set
+      if (!lead.ig_thread_id) {
+        await OutboundLead.updateOne({ _id: lead._id }, { $set: { ig_thread_id: threadId } });
+      }
+    }
+
+    // Map AI status_recommendation to FollowUp status enum
+    const validStatuses = [
+      "need_reply", "waiting_for_them", "qualifying", "audit_offered",
+      "recording_audit", "audit_sent", "follow_up_later", "hot_lead",
+      "link_sent", "booked", "not_interested",
+    ];
+    const followUpStatus = validStatuses.includes(statusRecommendation)
+      ? statusRecommendation
+      : "need_reply";
+
+    // Upsert FollowUp — create if doesn't exist, update status if it does
+    await FollowUp.findOneAndUpdate(
+      { outbound_lead_id: lead._id, account_id: accountId },
+      {
+        $setOnInsert: {
+          outbound_lead_id: lead._id,
+          account_id: accountId,
+          outbound_account_id: outboundAccountId || null,
+        },
+        $set: {
+          status: followUpStatus,
+          last_activity: new Date(),
+        },
+      },
+      { upsert: true, new: true },
+    );
+
+    // Store constraint on the lead if identified
+    if (constraintIdentified) {
+      await OutboundLead.updateOne(
+        { _id: lead._id },
+        { $set: { unqualified_reason: constraintIdentified, qualified: true } },
+      );
+    }
+
+    logger.info(`[dm-assistant] FollowUp for @${username} → status: ${followUpStatus}`);
+  } catch (err) {
+    // Don't fail the whole analysis
+    logger.error("[dm-assistant] upsertLeadAndFollowUp error:", err.message);
+  }
 }
 
 // ── Sync scraped messages to DB ────────────────────────

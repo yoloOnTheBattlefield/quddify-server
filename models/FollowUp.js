@@ -22,8 +22,13 @@ const FollowUpSchema = new mongoose.Schema(
       enum: [
         "need_reply",
         "waiting_for_them",
+        "qualifying",
+        "audit_offered",
+        "recording_audit",
+        "audit_sent",
         "follow_up_later",
         "hot_lead",
+        "link_sent",
         "booked",
         "not_interested",
       ],
