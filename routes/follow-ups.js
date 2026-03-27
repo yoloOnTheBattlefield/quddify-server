@@ -147,6 +147,7 @@ router.get("/", async (req, res) => {
               "lead.replied_at": 1,
               "lead.dmDate": 1,
               "lead.message": 1,
+              "lead.ig_thread_id": 1,
               "lead.source_seeds": 1,
               "outbound_account.username": 1,
             },
