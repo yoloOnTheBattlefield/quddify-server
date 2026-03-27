@@ -5,6 +5,7 @@ const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
 const Account = require("../models/Account");
 const { notifyNewLead } = require("../services/telegramNotifier");
+const { emitToAccount } = require("../services/socketManager");
 
 const router = express.Router();
 
@@ -99,11 +100,19 @@ router.post("/webhook", async (req, res) => {
         ...(outboundMatch && { outbound_lead_id: outboundMatch._id }),
       });
 
-      if (outboundMatch) {
+      if (outboundMatch && account) {
         logger.info(
           { leadId: lead._id, outboundId: outboundMatch._id, username: outboundMatch.username },
           "GHL webhook: inbound lead linked to outbound",
         );
+
+        // Push to extension via WebSocket
+        emitToAccount(account._id.toString(), "inbound:conversion", {
+          name: [first_name, last_name].filter(Boolean).join(" "),
+          outbound_username: outboundMatch.username || null,
+          sender_username: null, // resolved async by Telegram notifier
+          lead_id: lead._id.toString(),
+        });
       }
 
       logger.info({ leadId: lead._id, contact_id }, "GHL webhook: new lead created");
@@ -137,6 +146,16 @@ router.post("/webhook", async (req, res) => {
           { leadId: existing._id, outboundId: outboundMatch._id },
           "GHL webhook: existing lead linked to outbound",
         );
+
+        // Push to extension via WebSocket
+        if (account) {
+          emitToAccount(account._id.toString(), "inbound:conversion", {
+            name: [existing.first_name, existing.last_name].filter(Boolean).join(" "),
+            outbound_username: outboundMatch.username || null,
+            sender_username: null,
+            lead_id: existing._id.toString(),
+          });
+        }
       }
     }
 
