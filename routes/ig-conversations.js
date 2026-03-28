@@ -33,18 +33,26 @@ router.get("/", async (req, res) => {
 // GET /api/ig-conversations/by-lead/:leadId — find conversation for a lead using all available identifiers
 router.get("/by-lead/:leadId", async (req, res) => {
   try {
-    // Look up the lead to get all possible linking fields
-    const lead = await Lead.findById(req.params.leadId).lean();
+    const OutboundLead = require("../models/OutboundLead");
 
-    // Build $or query covering every way a conversation can be linked to this lead
-    const orClauses = [{ lead_id: req.params.leadId }];
+    // Try both inbound Lead and OutboundLead — the ID could be either
+    const [lead, outboundLead] = await Promise.all([
+      Lead.findById(req.params.leadId).lean().catch(() => null),
+      OutboundLead.findById(req.params.leadId).lean().catch(() => null),
+    ]);
+
+    // Build $or query covering every way a conversation can be linked
+    const orClauses = [
+      { lead_id: req.params.leadId },
+      { outbound_lead_id: req.params.leadId },
+    ];
     if (lead?.ig_thread_id) orClauses.push({ instagram_thread_id: lead.ig_thread_id });
     if (lead?.outbound_lead_id) orClauses.push({ outbound_lead_id: lead.outbound_lead_id });
+    if (outboundLead?.ig_thread_id) orClauses.push({ instagram_thread_id: outboundLead.ig_thread_id });
 
     let conversation = await IgConversation.findOne({ $or: orClauses }).lean();
 
-    // Fallback: match by ig_username in the participant_usernames map
-    // Fallback: find outbound_lead_id via the Booking that links this inbound lead
+    // Fallback: find outbound_lead_id via Booking
     if (!conversation) {
       const booking = await Booking.findOne({ lead_id: req.params.leadId, outbound_lead_id: { $ne: null } })
         .select("outbound_lead_id")
@@ -54,8 +62,10 @@ router.get("/by-lead/:leadId", async (req, res) => {
       }
     }
 
-    if (!conversation && lead?.ig_username) {
-      const username = lead.ig_username.replace(/^@/, "").toLowerCase();
+    // Fallback: match by ig_username in participant_usernames map
+    const igUsername = lead?.ig_username || outboundLead?.username;
+    if (!conversation && igUsername) {
+      const username = igUsername.replace(/^@/, "").toLowerCase();
       const [match] = await IgConversation.aggregate([
         {
           $addFields: {
