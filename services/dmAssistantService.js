@@ -261,11 +261,16 @@ async function analyzeConversation({ accountId, threadId, messages, prospect, ou
   }).join("\n");
 
   // Determine current lead status from DB or from what was passed
-  const currentStatus = leadStatus
-    || dbProspect?.link_sent ? "audit_sent"
-    : dbProspect?.replied ? "need_reply"
-    : dbProspect?.isMessaged ? "waiting_for_them"
-    : "unknown";
+  let currentStatus = "unknown";
+  if (leadStatus) {
+    currentStatus = leadStatus;
+  } else if (dbProspect?.link_sent) {
+    currentStatus = "audit_sent";
+  } else if (dbProspect?.replied) {
+    currentStatus = "need_reply";
+  } else if (dbProspect?.isMessaged) {
+    currentStatus = "waiting_for_them";
+  }
 
   // Build user message matching the template
   const prospectBio = prospect?.bio || dbProspect?.bio || "Not available";
