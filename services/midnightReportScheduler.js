@@ -47,50 +47,56 @@ async function sendReportForAccount(
   const todayEnd = new Date();
   todayEnd.setHours(23, 59, 59, 999);
 
-  const accountFilter = { account_id: account._id };
+  // Outbound models use ObjectId, inbound Lead uses GHL string
+  const outboundFilter = { account_id: account._id };
+  const inboundFilter = { account_id: account.ghl || account._id.toString() };
+
+  // date_created on Lead is a string (ISO), so compare as strings
+  const todayIsoStart = todayStart.toISOString();
+  const todayIsoEnd = todayEnd.toISOString();
 
   // Outbound: DMs sent today
   const dmsSent = await CampaignLead.countDocuments({
-    ...accountFilter,
+    ...outboundFilter,
     status: { $in: ["sent", "delivered", "replied"] },
     sent_at: { $gte: todayStart, $lte: todayEnd },
   });
 
   // Outbound: replies today
   const outboundReplied = await OutboundLead.countDocuments({
-    ...accountFilter,
+    ...outboundFilter,
     replied: true,
     replied_at: { $gte: todayStart, $lte: todayEnd },
   });
 
   // Outbound: booked today
   const outboundBooked = await OutboundLead.countDocuments({
-    ...accountFilter,
+    ...outboundFilter,
     booked: true,
     booked_at: { $gte: todayStart, $lte: todayEnd },
   });
 
-  // Inbound: new leads today
+  // Inbound: new leads today (date_created is an ISO string)
   const inboundLeads = await Lead.countDocuments({
-    ...accountFilter,
-    date_created: { $gte: todayStart, $lte: todayEnd },
+    ...inboundFilter,
+    date_created: { $gte: todayIsoStart, $lte: todayIsoEnd },
   });
 
   // Inbound: booked today
   const inboundBooked = await Lead.countDocuments({
-    ...accountFilter,
+    ...inboundFilter,
     booked_at: { $gte: todayStart, $lte: todayEnd },
   });
 
   // Inbound: closed today
   const inboundClosed = await Lead.countDocuments({
-    ...accountFilter,
+    ...inboundFilter,
     closed_at: { $gte: todayStart, $lte: todayEnd },
   });
 
   // Bookings created today
   const bookingsToday = await Booking.countDocuments({
-    ...accountFilter,
+    ...outboundFilter,
     createdAt: { $gte: todayStart, $lte: todayEnd },
   });
 
@@ -98,7 +104,7 @@ async function sendReportForAccount(
   const revenueAgg = await Booking.aggregate([
     {
       $match: {
-        ...accountFilter,
+        ...outboundFilter,
         createdAt: { $gte: todayStart, $lte: todayEnd },
         cash_collected: { $gt: 0 },
       },
