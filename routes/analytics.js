@@ -1863,4 +1863,80 @@ router.get("/outbound/weekly-heatmap", async (req, res) => {
   }
 });
 
+// GET /analytics/outbound/sources — performance per scraping source
+router.get("/outbound/sources", async (req, res) => {
+  try {
+    const filter = await buildOutboundFilter(req);
+    const leads = await OutboundLead.find(filter)
+      .select("source source_seeds replied booked link_sent contract_value score")
+      .lean();
+
+    // Group by normalized source value
+    const sourceMap = {};
+
+    for (const lead of leads) {
+      // Determine the source label: use source_seeds first, fall back to source field
+      let sources = [];
+      if (lead.source_seeds && lead.source_seeds.length > 0) {
+        sources = lead.source_seeds;
+      } else if (lead.source) {
+        sources = lead.source.split(",").map((s) => s.trim());
+      } else {
+        sources = ["unknown"];
+      }
+
+      for (let raw of sources) {
+        const key = raw.replace(/^@+/, "").trim().toLowerCase() || "unknown";
+        if (!sourceMap[key]) {
+          sourceMap[key] = {
+            source: key,
+            sent: 0,
+            replied: 0,
+            link_sent: 0,
+            booked: 0,
+            contracts: 0,
+            contract_value: 0,
+            total_score: 0,
+            scored_count: 0,
+          };
+        }
+        const s = sourceMap[key];
+        s.sent++;
+        if (lead.replied) s.replied++;
+        if (lead.link_sent) s.link_sent++;
+        if (lead.booked) s.booked++;
+        if (lead.contract_value > 0) {
+          s.contracts++;
+          s.contract_value += lead.contract_value;
+        }
+        if (lead.score != null) {
+          s.total_score += lead.score;
+          s.scored_count++;
+        }
+      }
+    }
+
+    const results = Object.values(sourceMap)
+      .map((s) => ({
+        source: s.source,
+        sent: s.sent,
+        replied: s.replied,
+        link_sent: s.link_sent,
+        booked: s.booked,
+        contracts: s.contracts,
+        contract_value: s.contract_value,
+        reply_rate: s.sent > 0 ? round2((s.replied / s.sent) * 100) : 0,
+        link_sent_rate: s.replied > 0 ? round2((s.link_sent / s.replied) * 100) : 0,
+        book_rate: s.sent > 0 ? round2((s.booked / s.sent) * 100) : 0,
+        avg_score: s.scored_count > 0 ? round2(s.total_score / s.scored_count) : null,
+      }))
+      .sort((a, b) => b.sent - a.sent);
+
+    res.json({ sources: results });
+  } catch (err) {
+    logger.error("Source analytics error:", err);
+    res.status(500).json({ error: "Failed to fetch source analytics" });
+  }
+});
+
 module.exports = router;
