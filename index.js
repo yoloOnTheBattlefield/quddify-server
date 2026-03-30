@@ -222,6 +222,10 @@ const connectDB = async () => {
     await Lead.syncIndexes();
     const Channel = require("./models/Channel");
     await Channel.syncIndexes();
+    const User = require("./models/User");
+    await User.syncIndexes();
+    const Payment = require("./models/Payment");
+    await Payment.syncIndexes();
   }
 
   return cachedConnection;

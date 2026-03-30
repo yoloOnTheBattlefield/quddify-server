@@ -73,5 +73,6 @@ OutboundAccountSchema.index({ account_id: 1, username: 1 }, { unique: true });
 OutboundAccountSchema.index({ account_id: 1, status: 1 });
 OutboundAccountSchema.index({ account_id: 1, isBlacklisted: 1 });
 OutboundAccountSchema.index({ browser_token: 1 }, { unique: true, partialFilterExpression: { browser_token: { $type: "string" } } });
+OutboundAccountSchema.index({ "ig_oauth.ig_user_id": 1 }, { sparse: true });
 
 module.exports = mongoose.model("OutboundAccount", OutboundAccountSchema);

@@ -22,5 +22,6 @@ const PaymentSchema = new mongoose.Schema(
 PaymentSchema.index({ account_id: 1, lead_id: 1 });
 PaymentSchema.index({ stripe_event_id: 1 }, { unique: true });
 PaymentSchema.index({ account_id: 1, customer_email: 1 });
+PaymentSchema.index({ lead_id: 1, payment_date: -1 });
 
 module.exports = mongoose.model("Payment", PaymentSchema);

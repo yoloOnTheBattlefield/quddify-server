@@ -187,7 +187,7 @@ router.post("/webhook", async (req, res) => {
       return res.json({ success: true, action: "already_set", field: fieldToUpdate, lead_id: existing._id });
     }
 
-    const today = new Date().toISOString().slice(0, 10); // yyyy-mm-dd
+    const today = new Date();
     const updated = await Lead.findByIdAndUpdate(
       existing._id,
       { [fieldToUpdate]: today },
