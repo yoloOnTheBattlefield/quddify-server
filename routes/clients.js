@@ -20,10 +20,12 @@ function sanitizeIgOAuth(client) {
   return obj;
 }
 
-// GET /api/clients — list all clients for account
+// GET /api/clients — list all clients for account (role 2 only sees own client)
 router.get("/", async (req, res) => {
   try {
-    const clients = await Client.find({ account_id: req.account._id }).sort({ created_at: -1 });
+    const filter = { account_id: req.account._id };
+    if (req.user?.role === 2) filter.user_id = req.user.userId;
+    const clients = await Client.find(filter).sort({ created_at: -1 });
     res.json(clients.map(sanitizeIgOAuth));
   } catch (err) {
     logger.error("Failed to list clients:", err);
