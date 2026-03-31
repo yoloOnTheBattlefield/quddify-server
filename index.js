@@ -156,6 +156,7 @@ const allowedOrigins = [
   "https://quddify-app.app",
   "https://www.quddify-app.app",
   "https://quddify-app.vercel.app",
+  "https://carousel-app-six.vercel.app",
 ];
 
 app.use(
