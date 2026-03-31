@@ -1,16 +1,6 @@
-const OpenAI = require("openai");
-const Account = require("../../models/Account");
 const Client = require("../../models/Client");
+const { getOpenAIClient } = require("../../utils/aiClients");
 const logger = require("../../utils/logger").child({ module: "nichePlaybookGenerator" });
-
-async function getOpenAIClient(accountId) {
-  const account = await Account.findById(accountId);
-  const token = account?.openai_token
-    ? Account.decryptField(account.openai_token)
-    : process.env.OPENAI;
-  if (!token) throw new Error("No OpenAI token available");
-  return new OpenAI({ apiKey: token });
-}
 
 const NICHE_PLAYBOOK_PROMPT = `You are a content strategist who adapts copywriting frameworks to specific niches.
 
@@ -70,7 +60,7 @@ async function generateNichePlaybook(clientId, accountId) {
   if (!client) throw new Error(`Client ${clientId} not found`);
 
   const niche = client.niche || "fitness";
-  const openai = await getOpenAIClient(accountId);
+  const openai = await getOpenAIClient({ accountId, clientId });
 
   logger.info(`Generating niche playbook for "${niche}" (client: ${client.name})`);
 

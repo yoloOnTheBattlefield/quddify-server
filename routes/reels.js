@@ -4,7 +4,8 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const logger = require("../utils/logger").child({ module: "reels" });
-const storage = require("../services/storageService");
+const os = require("os");
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "uploads");
 const { generateReels, probeVideo } = require("../services/reelGenerator");
 
 const router = express.Router();
@@ -52,7 +53,7 @@ router.post("/generate", upload.single("video"), async (req, res) => {
 
     const accountId = req.account._id.toString();
     const batchId = crypto.randomUUID();
-    const tmpDir = path.join(storage.UPLOAD_DIR, "_tmp", batchId);
+    const tmpDir = path.join(UPLOAD_DIR, "_tmp", batchId);
     fs.mkdirSync(tmpDir, { recursive: true });
 
     // Write uploaded video to temp
@@ -67,7 +68,7 @@ router.post("/generate", upload.single("video"), async (req, res) => {
     if (req.body.maxDuration) opts.maxDuration = parseInt(req.body.maxDuration, 10) || 10;
 
     // Output directory
-    const outDir = path.join(storage.UPLOAD_DIR, accountId, "reels", batchId);
+    const outDir = path.join(UPLOAD_DIR, accountId, "reels", batchId);
 
     logger.info(`Generating ${captions.length} reels for batch ${batchId}`);
     const outputPaths = await generateReels(srcVideoPath, captions, outDir, opts);
@@ -98,7 +99,7 @@ router.post("/probe", upload.single("video"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No video file" });
 
-    const tmpPath = path.join(storage.UPLOAD_DIR, "_tmp", `probe_${Date.now()}.mp4`);
+    const tmpPath = path.join(UPLOAD_DIR, "_tmp", `probe_${Date.now()}.mp4`);
     fs.mkdirSync(path.dirname(tmpPath), { recursive: true });
     fs.writeFileSync(tmpPath, req.file.buffer);
 

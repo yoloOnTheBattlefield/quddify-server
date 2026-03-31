@@ -3,7 +3,8 @@ const { z } = require("zod");
 const create = z.object({
   body: z.object({
     name: z.string().min(1),
-    slug: z.string().min(1).regex(/^[a-z0-9-]+$/),
+    email: z.string().email().optional(),
+    password: z.string().min(6).optional(),
     niche: z.string().optional(),
     sales_rep_name: z.string().optional(),
     brand_kit: z.object({
@@ -51,6 +52,15 @@ const update = z.object({
       secondary_cta: z.string().optional(),
       cta_enabled: z.boolean().optional(),
     }).optional(),
+    special_instructions: z.string().optional(),
+    ai_integrations: z.object({
+      claude_token: z.string().nullable().optional(),
+      openai_token: z.string().nullable().optional(),
+      gemini_token: z.string().nullable().optional(),
+    }).optional(),
+    ig_username: z.string().nullable().optional(),
+    ig_bio: z.string().nullable().optional(),
+    ig_profile_picture_url: z.string().nullable().optional(),
     google_drive_folder_id: z.string().nullable().optional(),
     face_reference_images: z.array(z.string()).optional(),
   }),

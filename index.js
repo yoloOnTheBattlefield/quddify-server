@@ -132,8 +132,8 @@ app.use(express.json({ limit: "10mb" }));
 // Security headers
 app.use(helmet());
 
-// Serve uploaded files (images, thumbnails, exports)
-const { UPLOAD_DIR } = require("./services/storageService");
+// Serve local temp files (reels video processing)
+const UPLOAD_DIR = process.env.UPLOAD_DIR || require("path").join(__dirname, "uploads");
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 // Assign a unique request ID to every request

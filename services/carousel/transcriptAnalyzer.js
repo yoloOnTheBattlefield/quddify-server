@@ -1,29 +1,7 @@
-const OpenAI = require("openai");
-const Anthropic = require("@anthropic-ai/sdk").default;
 const Transcript = require("../../models/Transcript");
 const Client = require("../../models/Client");
-const Account = require("../../models/Account");
+const { getClaudeClient, getOpenAIClient } = require("../../utils/aiClients");
 const logger = require("../../utils/logger").child({ module: "transcriptAnalyzer" });
-
-// ── Clients ──────────────────────────────────────────────
-
-async function getOpenAIClient(accountId) {
-  const account = await Account.findById(accountId);
-  const token = account?.openai_token
-    ? Account.decryptField(account.openai_token)
-    : process.env.OPENAI;
-  if (!token) throw new Error("No OpenAI token available");
-  return new OpenAI({ apiKey: token });
-}
-
-async function getClaudeClient(accountId) {
-  const account = await Account.findById(accountId);
-  const token = account?.claude_token
-    ? Account.decryptField(account.claude_token)
-    : process.env.CLAUDE;
-  if (!token) throw new Error("No Claude token available — add CLAUDE to your .env or set claude_token on the account");
-  return new Anthropic({ apiKey: token });
-}
 
 // ── Speaker detection ────────────────────────────────────
 
@@ -213,13 +191,13 @@ async function analyzeTranscript(transcriptId, modelOverride) {
     logger.info(`Detected speakers — Coach: "${coach}", Lead: "${lead || "unknown"}"`);
 
     // Stage 1: Always use GPT-4o-mini for cleanup (~$0.001)
-    const openai = await getOpenAIClient(transcript.account_id);
+    const openai = await getOpenAIClient({ accountId: transcript.account_id });
     const cleanedText = await cleanupTranscript(openai, transcript.raw_text, transcript.call_type, coach, lead);
 
     // Stage 2: Extract with chosen model (niche-aware, speaker-aware)
     let result;
     if (model === "claude-sonnet") {
-      const claude = await getClaudeClient(transcript.account_id);
+      const claude = await getClaudeClient({ accountId: transcript.account_id });
       result = await extractWithClaude(claude, cleanedText, transcript.call_type, niche, coach, lead);
     } else {
       // "gpt-4o" or "gpt-4o-mini"
@@ -298,7 +276,7 @@ Pick the angle most likely to drive saves and DMs. Be specific, not generic.`;
 
   // Use GPT-4o for angle extraction (always available via OPENAI env var)
   const accountId = transcripts[0].account_id;
-  const openai = await getOpenAIClient(accountId);
+  const openai = await getOpenAIClient({ accountId });
 
   const response = await openai.chat.completions.create({
     model: "gpt-4o",

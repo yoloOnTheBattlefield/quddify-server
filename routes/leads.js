@@ -86,7 +86,12 @@ router.get("/", async (req, res) => {
 // get lead by id
 router.get("/:id", async (req, res) => {
   try {
-    const lead = await Lead.findOne({ _id: req.params.id, account_id: req.account.ghl }).lean();
+    const filter = { _id: req.params.id };
+    // Admins (role 0) can view leads from any account
+    if (req.user?.role !== 0) {
+      filter.account_id = req.account.ghl || req.account._id.toString();
+    }
+    const lead = await Lead.findOne(filter).lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
     res.json(lead);
   } catch (error) {
@@ -118,8 +123,12 @@ router.post("/", validate(leadCreateSchema), async (req, res) => {
 // update lead
 router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
   try {
+    const filter = { _id: req.params.id };
+    if (req.user?.role !== 0) {
+      filter.account_id = req.account.ghl || req.account._id.toString();
+    }
     const lead = await Lead.findOneAndUpdate(
-      { _id: req.params.id, account_id: req.account.ghl },
+      filter,
       req.body,
       { new: true },
     ).lean();
@@ -287,7 +296,11 @@ router.post("/sync-outbound", async (req, res) => {
 // delete lead
 router.delete("/:id", async (req, res) => {
   try {
-    const lead = await Lead.findOneAndDelete({ _id: req.params.id, account_id: req.account.ghl });
+    const deleteFilter = { _id: req.params.id };
+    if (req.user?.role !== 0) {
+      deleteFilter.account_id = req.account.ghl || req.account._id.toString();
+    }
+    const lead = await Lead.findOneAndDelete(deleteFilter);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     // Clean up related data

@@ -1,50 +1,49 @@
-const fs = require("fs");
-const path = require("path");
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const logger = require("../utils/logger").child({ module: "storageService" });
 
-// Local filesystem storage for MVP
-// Files stored under ./uploads/<key>
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "uploads");
+const R2_ENDPOINT = "https://9c5193bf3a9854908c9ece70be00110b.r2.cloudflarestorage.com";
+const BUCKET = "carousels";
 
-function ensureDir(filePath) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
+const s3 = new S3Client({
+  region: "auto",
+  endpoint: R2_ENDPOINT,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+  },
+});
 
-async function upload(key, buffer, _contentType) {
-  const filePath = path.join(UPLOAD_DIR, key);
-  ensureDir(filePath);
-  fs.writeFileSync(filePath, buffer);
+async function upload(key, buffer, contentType) {
+  await s3.send(new PutObjectCommand({
+    Bucket: BUCKET,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType,
+  }));
   logger.info(`Stored file: ${key}`);
   return key;
 }
 
-/**
- * For local storage, just return the serve URL.
- * The express static middleware will serve files from /uploads.
- */
-async function getPresignedUrl(key, _expiresIn = 3600) {
-  return `/uploads/${key}`;
-}
-
-async function getFilePath(key) {
-  return path.join(UPLOAD_DIR, key);
+async function getPresignedUrl(key, expiresIn = 3600) {
+  const url = await getSignedUrl(
+    s3,
+    new GetObjectCommand({ Bucket: BUCKET, Key: key }),
+    { expiresIn },
+  );
+  return url;
 }
 
 async function getBuffer(key) {
-  const filePath = path.join(UPLOAD_DIR, key);
-  if (!fs.existsSync(filePath)) throw new Error(`File not found: ${key}`);
-  return fs.readFileSync(filePath);
+  const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  const chunks = [];
+  for await (const chunk of res.Body) chunks.push(chunk);
+  return Buffer.concat(chunks);
 }
 
 async function remove(key) {
-  const filePath = path.join(UPLOAD_DIR, key);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-    logger.info(`Deleted file: ${key}`);
-  }
+  await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
+  logger.info(`Deleted file: ${key}`);
 }
 
-module.exports = { upload, getPresignedUrl, getFilePath, getBuffer, remove, UPLOAD_DIR };
+module.exports = { upload, getPresignedUrl, getBuffer, remove };

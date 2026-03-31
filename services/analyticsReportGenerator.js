@@ -1,23 +1,11 @@
-const Anthropic = require("@anthropic-ai/sdk").default;
 const mongoose = require("mongoose");
-const Account = require("../models/Account");
 const OutboundLead = require("../models/OutboundLead");
 const CampaignLead = require("../models/CampaignLead");
 const Campaign = require("../models/Campaign");
 const SenderAccount = require("../models/SenderAccount");
 const AnalyticsReport = require("../models/AnalyticsReport");
+const { getClaudeClient } = require("../utils/aiClients");
 const logger = require("../utils/logger").child({ module: "analyticsReportGenerator" });
-
-// ── Claude Client ────────────────────────────────────────
-
-async function getClaudeClient(accountId) {
-  const account = await Account.findById(accountId);
-  const token = account?.claude_token
-    ? Account.decryptField(account.claude_token)
-    : process.env.CLAUDE;
-  if (!token) throw new Error("No Claude token available — add CLAUDE to your .env or set claude_token on the account");
-  return new Anthropic({ apiKey: token });
-}
 
 // ── Filter Builders ──────────────────────────────────────
 
@@ -543,7 +531,7 @@ async function generateReport(accountId, { startDate, endDate, campaignId }) {
     };
   }
 
-  const claude = await getClaudeClient(accountId);
+  const claude = await getClaudeClient({ accountId });
   const dateRange = { start: startDate || "all time", end: endDate || "today" };
 
   const response = await claude.messages.create({

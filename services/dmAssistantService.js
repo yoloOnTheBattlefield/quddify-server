@@ -1,21 +1,9 @@
-const OpenAI = require("openai");
-const Account = require("../models/Account");
 const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const OutboundLead = require("../models/OutboundLead");
 const FollowUp = require("../models/FollowUp");
+const { getOpenAIClient } = require("../utils/aiClients");
 const logger = require("../utils/logger").child({ module: "dmAssistant" });
-
-// ── OpenAI Client ──────────────────────────────────────
-
-async function getOpenAIClient(accountId) {
-  const account = await Account.findById(accountId);
-  const token = account?.openai_token
-    ? Account.decryptField(account.openai_token)
-    : process.env.OPENAI;
-  if (!token) throw new Error("No OpenAI token available");
-  return new OpenAI({ apiKey: token });
-}
 
 // ── DM Script System Prompt ────────────────────────────
 
@@ -239,7 +227,7 @@ CRITICAL RULES
 // ── Conversation Analysis ──────────────────────────────
 
 async function analyzeConversation({ accountId, threadId, messages, prospect, outboundAccountId, senderHandle, leadStatus }) {
-  const openai = await getOpenAIClient(accountId);
+  const openai = await getOpenAIClient({ accountId });
 
   // Try to enrich prospect info from the database
   let dbProspect = null;

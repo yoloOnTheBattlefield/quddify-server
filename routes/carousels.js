@@ -4,7 +4,22 @@ const Carousel = require("../models/Carousel");
 const CarouselJob = require("../models/CarouselJob");
 const validate = require("../middleware/validate");
 const carouselSchemas = require("../schemas/carousels");
+const { getPresignedUrl } = require("../services/storageService");
 const logger = require("../utils/logger").child({ module: "carousels" });
+
+async function attachSlideUrls(carousel) {
+  if (!carousel?.slides?.length) return carousel;
+  const obj = carousel.toObject ? carousel.toObject() : { ...carousel };
+  obj.slides = await Promise.all(
+    obj.slides.map(async (slide) => {
+      if (slide.rendered_key) {
+        slide.rendered_url = await getPresignedUrl(slide.rendered_key, 3600);
+      }
+      return slide;
+    }),
+  );
+  return obj;
+}
 
 // GET /api/carousels?client_id=xxx
 router.get("/", async (req, res) => {
@@ -13,7 +28,8 @@ router.get("/", async (req, res) => {
     if (req.query.client_id) filter.client_id = req.query.client_id;
     if (req.query.status) filter.status = req.query.status;
     const carousels = await Carousel.find(filter).sort({ created_at: -1 }).limit(50);
-    res.json(carousels);
+    const withUrls = await Promise.all(carousels.map(attachSlideUrls));
+    res.json(withUrls);
   } catch (err) {
     logger.error("Failed to list carousels:", err);
     res.status(500).json({ error: "Failed to list carousels" });
@@ -25,10 +41,138 @@ router.get("/:id", async (req, res) => {
   try {
     const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
-    res.json(carousel);
+    res.json(await attachSlideUrls(carousel));
   } catch (err) {
     logger.error("Failed to get carousel:", err);
     res.status(500).json({ error: "Failed to get carousel" });
+  }
+});
+
+// POST /api/carousels/generate-brief — AI-generate content brief from client data + transcripts
+router.post("/generate-brief", validate(carouselSchemas.generateBrief), async (req, res) => {
+  try {
+    const { client_id, transcript_ids, goal } = req.body;
+
+    const Client = require("../models/Client");
+    const Transcript = require("../models/Transcript");
+    const Anthropic = require("@anthropic-ai/sdk").default;
+    const Account = require("../models/Account");
+
+    const [client, transcripts] = await Promise.all([
+      Client.findById(client_id),
+      Transcript.find({ _id: { $in: transcript_ids } }),
+    ]);
+    if (!client) return res.status(404).json({ error: "Client not found" });
+
+    // Build transcript excerpts (truncate to keep prompt reasonable)
+    const transcriptText = transcripts
+      .map((t) => (t.cleaned_text || t.raw_text || "").slice(0, 2000))
+      .join("\n---\n")
+      .slice(0, 6000);
+
+    const goalDescriptions = {
+      saveable_educational: "Maximize saves — highly educational, real value people want to bookmark",
+      polarizing_authority: "Bold takes that spark debate and position authority",
+      emotional_story: "Story-driven emotional connection through vulnerability and transformation",
+      conversion_focused: "Drive DMs and conversions — agitate problem, present solution, clear next step",
+    };
+
+    const account = await Account.findById(req.account._id);
+    const token = account?.claude_token
+      ? Account.decryptField(account.claude_token)
+      : process.env.CLAUDE;
+    if (!token) return res.status(500).json({ error: "No Claude token available" });
+
+    const claude = new Anthropic({ apiKey: token });
+
+    const response = await claude.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      temperature: 0.6,
+      system: `You generate content brief suggestions for Instagram carousel slides. Return ONLY valid JSON, no markdown fencing.`,
+      messages: [{
+        role: "user",
+        content: `Generate a content brief for a 7-slide Instagram carousel.
+
+CLIENT: ${client.name}
+NICHE: ${client.niche || "general"}
+${client.voice_profile?.raw_text ? `VOICE: ${client.voice_profile.raw_text.slice(0, 500)}` : ""}
+${client.niche_playbook ? `PLAYBOOK: ${client.niche_playbook.slice(0, 800)}` : ""}
+${client.cta_defaults?.primary_cta ? `DEFAULT CTA: ${client.cta_defaults.primary_cta}` : ""}
+GOAL: ${goalDescriptions[goal] || goal || "educational"}
+
+TRANSCRIPT EXCERPTS:
+${transcriptText || "No transcripts provided — generate based on niche and client profile."}
+
+Generate a content brief with these fields. Each field should be a short, punchy direction (not final copy — just guidance for the AI copywriter). Keep each field under 20 words.
+
+Return JSON:
+{
+  "topic": "the main topic or offer",
+  "hook": "the bold claim or outcome for slide 1",
+  "problem": "the pain point for slide 2",
+  "solution": "the answer/big idea for slide 3",
+  "features": ["feature 1", "feature 2", "feature 3", "feature 4"],
+  "details": "differentiator or depth for slide 5",
+  "steps": ["step 1", "step 2", "step 3"],
+  "cta": "call to action for final slide"
+}`,
+      }],
+    });
+
+    let content = response.content?.[0]?.text;
+    if (!content) return res.status(500).json({ error: "Empty AI response" });
+    content = content.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+    const brief = JSON.parse(content);
+    res.json(brief);
+  } catch (err) {
+    logger.error("Failed to generate brief:", err);
+    res.status(500).json({ error: "Failed to generate content brief" });
+  }
+});
+
+// POST /api/carousels/generate-from-topic — simple topic-based generation (no transcripts)
+router.post("/generate-from-topic", validate(carouselSchemas.generateFromTopic), async (req, res) => {
+  try {
+    const { client_id, topic, goal, slide_count, additional_instructions } = req.body;
+
+    const Client = require("../models/Client");
+    const client = await Client.findById(client_id);
+    if (!client) return res.status(404).json({ error: "Client not found" });
+
+    const carousel = await Carousel.create({
+      client_id,
+      account_id: req.account._id,
+      topic,
+      transcript_ids: [],
+      goal: goal || "saveable_educational",
+      status: "queued",
+    });
+
+    const job = await CarouselJob.create({
+      carousel_id: carousel._id,
+      account_id: req.account._id,
+      status: "queued",
+    });
+
+    // Run topic-based pipeline in background
+    const { runTopicPipeline } = require("../services/carousel/topicPipeline");
+    runTopicPipeline({
+      carouselId: carousel._id.toString(),
+      jobId: job._id.toString(),
+      io: req.app.get("io"),
+      topic,
+      goal: goal || "saveable_educational",
+      slideCount: slide_count || null,
+      additionalInstructions: additional_instructions || "",
+    }).catch((err) => {
+      logger.error("Background topic pipeline failed:", err);
+    });
+
+    res.status(201).json({ carousel, job });
+  } catch (err) {
+    logger.error("Failed to generate carousel from topic:", err);
+    res.status(500).json({ error: "Failed to generate carousel" });
   }
 });
 
@@ -81,6 +225,67 @@ router.post("/generate", validate(carouselSchemas.generate), async (req, res) =>
   } catch (err) {
     logger.error("Failed to generate carousel:", err);
     res.status(500).json({ error: "Failed to generate carousel" });
+  }
+});
+
+// GET /api/carousels/:id/download — download all slides as a zip
+// Supports ?token= query param for direct browser downloads (window.open)
+router.get("/:id/download", async (req, res) => {
+  try {
+    // Allow token via query param for direct browser download (no auth header)
+    if (!req.account && req.query.token) {
+      const jwt = require("jsonwebtoken");
+      const Account = require("../models/Account");
+      const { JWT_SECRET } = require("../middleware/auth");
+      const decoded = jwt.verify(req.query.token, JWT_SECRET);
+      const account = await Account.findById(decoded.accountId).lean();
+      if (!account) return res.status(401).json({ error: "Invalid token" });
+      req.account = account;
+    }
+    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    if (!carousel) return res.status(404).json({ error: "Carousel not found" });
+
+    const renderedSlides = (carousel.slides || []).filter((s) => s.rendered_key);
+    if (renderedSlides.length === 0) return res.status(404).json({ error: "No rendered slides" });
+
+    const archiver = require("archiver");
+    const { getBuffer } = require("../services/storageService");
+
+    const archive = archiver("zip", { zlib: { level: 1 } });
+    const safeTopic = (carousel.topic || "carousel").replace(/[^a-zA-Z0-9-_ ]/g, "").slice(0, 40).trim();
+    res.set("Content-Type", "application/zip");
+    res.set("Content-Disposition", `attachment; filename="${safeTopic}.zip"`);
+    archive.pipe(res);
+
+    for (const slide of renderedSlides) {
+      const buffer = await getBuffer(slide.rendered_key);
+      archive.append(buffer, { name: `slide-${slide.position}.png` });
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    logger.error("Failed to download carousel zip:", err);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to download" });
+  }
+});
+
+// GET /api/carousels/:id/slides/:position/download — proxy slide image from R2
+router.get("/:id/slides/:position/download", async (req, res) => {
+  try {
+    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    if (!carousel) return res.status(404).json({ error: "Carousel not found" });
+
+    const slide = carousel.slides.find((s) => s.position === Number(req.params.position));
+    if (!slide?.rendered_key) return res.status(404).json({ error: "Slide not rendered" });
+
+    const { getBuffer } = require("../services/storageService");
+    const buffer = await getBuffer(slide.rendered_key);
+    res.set("Content-Type", "image/png");
+    res.set("Content-Disposition", `attachment; filename="slide-${slide.position}.png"`);
+    res.send(buffer);
+  } catch (err) {
+    logger.error("Failed to download slide:", err);
+    res.status(500).json({ error: "Failed to download slide" });
   }
 });
 
@@ -301,6 +506,125 @@ router.post("/:id/slides/:position/rerender", async (req, res) => {
   } catch (err) {
     logger.error("Failed to re-render slide:", err);
     res.status(500).json({ error: "Failed to re-render slide" });
+  }
+});
+
+// POST /api/carousels/:id/chat-edit — conversational slide editing via AI
+router.post("/:id/chat-edit", async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message || typeof message !== "string") {
+      return res.status(400).json({ error: "message is required" });
+    }
+
+    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    if (!carousel) return res.status(404).json({ error: "Carousel not found" });
+    if (!carousel.slides || carousel.slides.length === 0) {
+      return res.status(400).json({ error: "Carousel has no slides" });
+    }
+
+    const Anthropic = require("@anthropic-ai/sdk").default;
+    const Account = require("../models/Account");
+
+    const account = await Account.findById(req.account._id);
+    const token = account?.claude_token
+      ? Account.decryptField(account.claude_token)
+      : process.env.CLAUDE;
+    if (!token) return res.status(500).json({ error: "No Claude token available" });
+
+    const claude = new Anthropic({ apiKey: token });
+
+    // Build slide context for the AI
+    const slideContext = carousel.slides
+      .map((s) => `Slide ${s.position} (${s.role}): "${s.copy}"`)
+      .join("\n");
+
+    const response = await claude.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2048,
+      temperature: 0.5,
+      system: `You are a carousel copy editor. The user will ask you to modify specific slides or the overall carousel copy. Apply their instruction precisely. Return ONLY valid JSON, no markdown fencing.
+
+Return format:
+{
+  "updated_slides": [{ "position": <number>, "copy": "<new copy>" }],
+  "assistant_message": "<brief confirmation of what you changed>"
+}
+
+Rules:
+- Only include slides you actually changed in updated_slides
+- Keep the same tone and voice as the original copy
+- Be concise — carousel text should be punchy, not verbose
+- If the user references a slide number, modify that slide
+- If the instruction is general (e.g. "make it shorter"), apply to all slides`,
+      messages: [{
+        role: "user",
+        content: `Current carousel (${carousel.slides.length} slides):\n${slideContext}\n\nInstruction: ${message}`,
+      }],
+    });
+
+    let content = response.content?.[0]?.text;
+    if (!content) return res.status(500).json({ error: "Empty AI response" });
+    content = content.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+
+    const result = JSON.parse(content);
+    const updatedSlides = result.updated_slides || [];
+
+    // Apply updates to carousel
+    for (const update of updatedSlides) {
+      const slideIndex = carousel.slides.findIndex((s) => s.position === update.position);
+      if (slideIndex !== -1) {
+        carousel.slides[slideIndex].copy = update.copy;
+      }
+    }
+    await carousel.save();
+
+    // Re-render updated slides
+    if (updatedSlides.length > 0) {
+      try {
+        const { renderSlides } = require("../services/carousel/slideRenderer");
+        const slidesToRender = updatedSlides
+          .map((u) => carousel.slides.find((s) => s.position === u.position))
+          .filter(Boolean);
+
+        const imageSelections = slidesToRender.map((s) => ({
+          position: s.position,
+          image_key: s.image_key || null,
+          image_id: s.image_id || null,
+          extra_image_keys: s.extra_image_keys || [],
+        }));
+
+        const rendered = await renderSlides({
+          carouselId: carousel._id.toString(),
+          clientId: carousel.client_id.toString(),
+          accountId: carousel.account_id.toString(),
+          slides: slidesToRender,
+          imageSelections,
+          templateId: carousel.template_id?.toString(),
+          lutId: carousel.lut_id?.toString() || null,
+        });
+
+        // Update rendered keys
+        for (const r of rendered) {
+          const idx = carousel.slides.findIndex((s) => s.position === r.position);
+          if (idx !== -1) carousel.slides[idx].rendered_key = r.rendered_key;
+        }
+        await carousel.save();
+      } catch (renderErr) {
+        logger.error("Failed to re-render slides after chat edit:", renderErr);
+        // Non-fatal — copy is already updated, rendering can be retried
+      }
+    }
+
+    const updated = await Carousel.findById(carousel._id);
+    res.json({
+      carousel: updated,
+      updated_slides: updatedSlides,
+      assistant_message: result.assistant_message || "Slides updated.",
+    });
+  } catch (err) {
+    logger.error("Failed to chat-edit carousel:", err);
+    res.status(500).json({ error: "Failed to process edit instruction" });
   }
 });
 

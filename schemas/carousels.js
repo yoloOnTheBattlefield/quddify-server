@@ -22,4 +22,22 @@ const generate = z.object({
   }),
 });
 
-module.exports = { generate };
+const generateBrief = z.object({
+  body: z.object({
+    client_id: z.string().min(1),
+    transcript_ids: z.array(z.string().min(1)).min(1),
+    goal: z.enum(["saveable_educational", "polarizing_authority", "emotional_story", "conversion_focused"]).optional(),
+  }),
+});
+
+const generateFromTopic = z.object({
+  body: z.object({
+    client_id: z.string().min(1),
+    topic: z.string().min(1),
+    goal: z.enum(["saveable_educational", "polarizing_authority", "emotional_story", "conversion_focused"]).optional(),
+    slide_count: z.number().min(5).max(20).optional(),
+    additional_instructions: z.string().optional(),
+  }),
+});
+
+module.exports = { generate, generateBrief, generateFromTopic };

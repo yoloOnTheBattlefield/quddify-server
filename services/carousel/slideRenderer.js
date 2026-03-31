@@ -1,308 +1,310 @@
 const puppeteer = require("puppeteer");
-const path = require("path");
-const fs = require("fs");
-const { getBuffer, upload, getFilePath } = require("../storageService");
+const { getBuffer, upload } = require("../storageService");
 const { parseCubeFile, applyLutToBuffer } = require("../lutParser");
 const Client = require("../../models/Client");
 const ClientImage = require("../../models/ClientImage");
 const ClientLut = require("../../models/ClientLut");
-const CarouselTemplate = require("../../models/CarouselTemplate");
 const logger = require("../../utils/logger").child({ module: "slideRenderer" });
 
-const SLIDE_WIDTH = 1080;
-const SLIDE_HEIGHT = 1350;
+const SLIDE_WIDTH = 420;
+const SLIDE_HEIGHT = 525;
+const SCALE = 1080 / 420;
 
-// ── Shared helpers ──────────────────────────────────────
+// ── Color system ──────────────────────────────────────
 
-function formatCopy(copy) {
-  return (copy || "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => `<span class="line">${l}</span>`)
-    .join("");
+function hexToHSL(hex) {
+  hex = (hex || "#e94560").replace("#", "");
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0, l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      case b: h = ((r - g) / d + 4) / 6; break;
+    }
+  }
+  return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
 }
 
-function imgCSS(base64, mime) {
-  if (!base64) return "";
-  return `background-image: url(data:${mime || "image/jpeg"};base64,${base64}); background-size: cover; background-position: center;`;
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => { const k = (n + h / 30) % 12; return l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1); };
+  return "#" + [f(0), f(8), f(4)].map((x) => Math.round(x * 255).toString(16).padStart(2, "0")).join("");
 }
 
-function fontLinks(fontHeading, fontBody) {
-  return `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=${fontHeading.replace(/ /g, "+")}:wght@400;600;800&family=${fontBody.replace(/ /g, "+")}:wght@400;600;700&display=swap" rel="stylesheet">`;
-}
-
-function sharedCSS(brandKit, textStyle, fontHeading, fontBody) {
-  const bk = brandKit || {};
-  const accentColor = bk.accent_color || "#e94560";
-  const textLight = bk.text_color_light || "#ffffff";
-  const fontSize = { large: "64px", medium: "48px", small: "36px" }[textStyle.size || "medium"];
-  const fontWeight = { bold: "800", semibold: "600", normal: "400" }[textStyle.weight || "bold"];
-  const textTransform = textStyle.case === "uppercase" ? "uppercase" : "none";
-
-  return `
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { width: ${SLIDE_WIDTH}px; height: ${SLIDE_HEIGHT}px; overflow: hidden; font-family: '${fontBody}', sans-serif; }
-    .slide { width: ${SLIDE_WIDTH}px; height: ${SLIDE_HEIGHT}px; position: relative; overflow: hidden; }
-    .overlay { position: absolute; inset: 0; z-index: 1; }
-    .text-container { position: relative; z-index: 2; padding: 60px 80px; display: flex; flex-direction: column; gap: 16px; }
-    .line { display: block; font-family: '${fontHeading}', sans-serif; font-size: ${fontSize}; font-weight: ${fontWeight}; text-transform: ${textTransform}; color: ${textLight}; line-height: 1.2; letter-spacing: -0.02em; margin-bottom: 12px; }
-    .slide-number { position: absolute; bottom: 40px; right: 50px; font-family: '${fontBody}', sans-serif; font-size: 20px; color: rgba(255,255,255,0.4); z-index: 2; }
-    .accent-bar { width: 60px; height: 5px; background: ${accentColor}; border-radius: 3px; margin-bottom: 20px; }
-    .cta-badge { display: inline-block; background: ${accentColor}; color: ${textLight}; font-family: '${fontBody}', sans-serif; font-size: 28px; font-weight: 700; padding: 16px 40px; border-radius: 12px; margin-top: 24px; text-align: center; }
-  `;
-}
-
-function wrap(head, body, slide) {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8">${head}</head><body>${body}<div class="slide-number">${slide.position}</div></body></html>`;
-}
-
-// ── Composition builders ──────────────────────────────────────
-
-function buildSingleHero(slide, brandKit, vs, images, fontHeading, fontBody) {
-  const bk = brandKit || {};
-  const primaryColor = bk.primary_color || "#1a1a2e";
-  const secondaryColor = bk.secondary_color || "#16213e";
-  const accentColor = bk.accent_color || "#e94560";
-  const overlayOpacity = vs.overlay_opacity ?? 0.55;
-  const textPosition = vs.text_position || "center";
-  const textStyle = vs.text_style || {};
-  const textAlign = textStyle.alignment || "center";
-  const img = images[0];
-
-  const posMap = {
-    center: "align-items: center; justify-content: center;",
-    top: "align-items: flex-start; justify-content: center; padding-top: 120px;",
-    bottom: "align-items: flex-end; justify-content: center; padding-bottom: 120px;",
-    left: "align-items: center; justify-content: flex-start; padding-left: 80px;",
-    right: "align-items: center; justify-content: flex-end; padding-right: 80px;",
+function derivePalette(primaryHex) {
+  const hsl = hexToHSL(primaryHex);
+  const isWarm = hsl.h < 60 || hsl.h > 300;
+  return {
+    primary: primaryHex || "#e94560",
+    light: hslToHex(hsl.h, Math.min(hsl.s, 70), Math.min(hsl.l + 20, 80)),
+    dark: hslToHex(hsl.h, Math.min(hsl.s + 10, 90), Math.max(hsl.l - 30, 15)),
+    lightBg: isWarm ? "#FAF8F5" : "#F5F7FA",
+    lightBorder: isWarm ? "#EDE9E3" : "#E2E6EC",
+    darkBg: isWarm ? "#1A1918" : "#0F172A",
   };
-
-  const hookBar = slide.role === "hook"
-    ? `<div class="accent-bar" style="margin: 0 ${textAlign === "center" ? "auto" : "0"} 20px;"></div>`
-    : "";
-  const ctaBadge = slide.role === "cta" ? '<div class="cta-badge">Get Started</div>' : "";
-
-  return wrap(
-    `${fontLinks(fontHeading, fontBody)}<style>
-      ${sharedCSS(brandKit, textStyle, fontHeading, fontBody)}
-      .slide { display: flex; flex-direction: column; ${posMap[textPosition] || posMap.center}
-        ${img ? imgCSS(img.base64, img.mime) : `background: linear-gradient(135deg, ${primaryColor} 0%, ${secondaryColor} 100%);`} }
-      .text-container { text-align: ${textAlign}; }
-    </style>`,
-    `<div class="slide">
-      ${img ? `<div class="overlay" style="background: rgba(0,0,0,${overlayOpacity});"></div>` : ""}
-      <div class="text-container">${hookBar}${formatCopy(slide.copy)}${ctaBadge}</div>
-    </div>`,
-    slide,
-  );
 }
 
-function buildTextOnly(slide, brandKit, vs, _images, fontHeading, fontBody) {
-  const bk = brandKit || {};
-  const primaryColor = bk.primary_color || "#1a1a2e";
-  const secondaryColor = bk.secondary_color || "#16213e";
-  const accentColor = bk.accent_color || "#e94560";
-  const textStyle = vs.text_style || {};
+// ── Background ──────────────────────────────────────
 
-  return wrap(
-    `${fontLinks(fontHeading, fontBody)}<style>
-      ${sharedCSS(brandKit, textStyle, fontHeading, fontBody)}
-      .slide { display: flex; flex-direction: column; align-items: center; justify-content: center;
-        background: linear-gradient(135deg, ${primaryColor} 0%, ${secondaryColor} 100%); }
-      .text-container { text-align: center; max-width: 900px; }
-      .line { font-size: 72px; font-weight: 800; }
-      .accent-line { width: 80px; height: 6px; background: ${accentColor}; border-radius: 3px; margin: 0 auto 30px; }
-    </style>`,
-    `<div class="slide">
-      <div class="text-container"><div class="accent-line"></div>${formatCopy(slide.copy)}</div>
-    </div>`,
-    slide,
-  );
+function getSlideBg(slide, index) {
+  // Use AI-specified bg if available
+  const bg = (slide.bg || "").toLowerCase();
+  if (bg === "light" || bg === "dark" || bg === "gradient") return bg;
+  // Fallback by role
+  const role = (slide.role || "").toLowerCase().replace(/\s+/g, "_");
+  const map = { hook: "light", problem: "dark", pain: "dark", tension: "dark", solution: "gradient", features: "light", details: "dark", "how-to": "light", steps: "light", cta: "gradient" };
+  return map[role] || (index % 2 === 0 ? "light" : "dark");
 }
 
-function buildSplitCollage(slide, brandKit, vs, images, fontHeading, fontBody) {
-  const bk = brandKit || {};
-  const primaryColor = bk.primary_color || "#1a1a2e";
-  const overlayOpacity = vs.overlay_opacity ?? 0.55;
-  const textStyle = vs.text_style || {};
-  const mainImg = images[0];
-  const insets = images.slice(1, 4);
-
-  const insetHTML = insets.length > 0
-    ? insets.map((img) => `<div class="inset" style="${imgCSS(img.base64, img.mime)}"></div>`).join("")
-    : '<div class="inset"></div><div class="inset"></div><div class="inset"></div>';
-
-  return wrap(
-    `${fontLinks(fontHeading, fontBody)}<style>
-      ${sharedCSS(brandKit, textStyle, fontHeading, fontBody)}
-      .slide { display: flex; ${mainImg ? imgCSS(mainImg.base64, mainImg.mime) : `background: ${primaryColor};`} }
-      .overlay { background: rgba(0,0,0,${overlayOpacity}); }
-      .left-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; z-index: 2; }
-      .text-container { text-align: left; padding: 60px 40px 60px 60px; }
-      .right-col { width: 320px; display: flex; flex-direction: column; gap: 4px; padding: 4px; z-index: 2; }
-      .inset { flex: 1; background-color: #222; background-size: cover; background-position: center; border: 3px solid #000; border-radius: 4px; }
-    </style>`,
-    `<div class="slide">
-      ${mainImg ? '<div class="overlay"></div>' : ""}
-      <div class="left-col"><div class="text-container">${formatCopy(slide.copy)}</div></div>
-      <div class="right-col">${insetHTML}</div>
-    </div>`,
-    slide,
-  );
+function getBgCSS(bgType, palette) {
+  if (bgType === "light") return `background:${palette.lightBg};`;
+  if (bgType === "dark") return `background:${palette.darkBg};`;
+  return `background:linear-gradient(165deg,${palette.dark} 0%,${palette.primary} 50%,${palette.light} 100%);`;
 }
 
-function buildGrid2x2(slide, brandKit, vs, images, fontHeading, fontBody) {
-  const bk = brandKit || {};
-  const primaryColor = bk.primary_color || "#1a1a2e";
-  const overlayOpacity = vs.overlay_opacity ?? 0.6;
-  const textStyle = vs.text_style || {};
-
-  const cells = [0, 1, 2, 3].map((i) => {
-    const img = images[i];
-    return `<div class="cell" style="${img ? imgCSS(img.base64, img.mime) : `background: ${primaryColor};`}"></div>`;
-  }).join("");
-
-  return wrap(
-    `${fontLinks(fontHeading, fontBody)}<style>
-      ${sharedCSS(brandKit, textStyle, fontHeading, fontBody)}
-      .slide { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
-      .cell { background-size: cover; background-position: center; }
-      .overlay { background: rgba(0,0,0,${overlayOpacity}); }
-      .text-container { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; z-index: 2; padding: 80px; }
-    </style>`,
-    `<div class="slide">
-      ${cells}
-      <div class="overlay"></div>
-      <div class="text-container">${formatCopy(slide.copy)}</div>
-    </div>`,
-    slide,
-  );
+function getColors(bgType) {
+  if (bgType === "light") return { heading: "var(--dark-bg)", body: "#8A8580", tag: "var(--primary)", border: "var(--light-border)" };
+  return { heading: "#fff", body: "rgba(255,255,255,0.65)", tag: bgType === "dark" ? "var(--light)" : "rgba(255,255,255,0.6)", border: "rgba(255,255,255,0.08)" };
 }
 
-function buildBeforeAfter(slide, brandKit, vs, images, fontHeading, fontBody) {
-  const bk = brandKit || {};
-  const primaryColor = bk.primary_color || "#1a1a2e";
-  const textLight = bk.text_color_light || "#ffffff";
-  const textStyle = vs.text_style || {};
-  const imgLeft = images[0];
-  const imgRight = images[1] || images[0];
+// ── Component HTML builders ──────────────────────────
 
-  return wrap(
-    `${fontLinks(fontHeading, fontBody)}<style>
-      ${sharedCSS(brandKit, textStyle, fontHeading, fontBody)}
-      .slide { display: flex; flex-direction: column; background: ${primaryColor}; }
-      .images { display: flex; flex: 1; gap: 4px; padding: 4px 4px 0; }
-      .half { flex: 1; background-size: cover; background-position: center; border-radius: 4px; position: relative; }
-      .half-label { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); color: ${textLight}; font-family: '${fontHeading}', sans-serif; font-size: 22px; font-weight: 700; padding: 8px 20px; border-radius: 6px; text-transform: uppercase; }
-      .text-container { text-align: center; padding: 30px 60px 50px; }
-      .line { font-size: 40px; }
-    </style>`,
-    `<div class="slide">
-      <div class="images">
-        <div class="half" style="${imgLeft ? imgCSS(imgLeft.base64, imgLeft.mime) : ''}"><div class="half-label">Before</div></div>
-        <div class="half" style="${imgRight ? imgCSS(imgRight.base64, imgRight.mime) : ''}"><div class="half-label">After</div></div>
-      </div>
-      <div class="text-container">${formatCopy(slide.copy)}</div>
-    </div>`,
-    slide,
-  );
+function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+
+function progressBarHTML(index, total, bgType) {
+  const pct = ((index + 1) / total) * 100;
+  const isLight = bgType === "light";
+  const track = isLight ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.12)";
+  const fill = isLight ? "var(--primary)" : "#fff";
+  const label = isLight ? "rgba(0,0,0,0.3)" : "rgba(255,255,255,0.4)";
+  return `<div class="progress-bar"><div class="progress-track" style="background:${track}"><div class="progress-fill" style="width:${pct}%;background:${fill}"></div></div><span class="progress-label" style="color:${label}">${index + 1}/${total}</span></div>`;
 }
 
-function buildLifestyleGrid(slide, brandKit, vs, images, fontHeading, fontBody) {
-  const bk = brandKit || {};
-  const primaryColor = bk.primary_color || "#1a1a2e";
-  const overlayOpacity = vs.overlay_opacity ?? 0.55;
-  const textStyle = vs.text_style || {};
-
-  const cells = [0, 1, 2, 3].map((i) => {
-    const img = images[i];
-    return `<div class="cell" style="${img ? imgCSS(img.base64, img.mime) : `background: ${primaryColor};`}"></div>`;
-  }).join("");
-
-  return wrap(
-    `${fontLinks(fontHeading, fontBody)}<style>
-      ${sharedCSS(brandKit, textStyle, fontHeading, fontBody)}
-      .slide { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 4px; padding: 4px; background: #000; }
-      .cell { background-size: cover; background-position: center; border-radius: 4px; }
-      .overlay { background: rgba(0,0,0,${overlayOpacity}); border-radius: 0; }
-      .text-container { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; z-index: 2; padding: 80px; }
-    </style>`,
-    `<div class="slide">
-      ${cells}
-      <div class="overlay"></div>
-      <div class="text-container">${formatCopy(slide.copy)}</div>
-    </div>`,
-    slide,
-  );
+function swipeArrowHTML(bgType) {
+  const isLight = bgType === "light";
+  const bg = isLight ? "rgba(0,0,0,0.06)" : "rgba(255,255,255,0.08)";
+  const stroke = isLight ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.35)";
+  return `<div class="swipe-arrow" style="background:linear-gradient(to right,transparent,${bg})"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`;
 }
 
-const COMPOSITION_BUILDERS = {
-  single_hero: buildSingleHero,
-  text_only: buildTextOnly,
-  split_collage: buildSplitCollage,
-  grid_2x2: buildGrid2x2,
-  before_after: buildBeforeAfter,
-  lifestyle_grid: buildLifestyleGrid,
-};
+function tagLabelHTML(text, colors, hasImage) {
+  if (!text) return "";
+  const shadow = hasImage ? "text-shadow:1px 1px 6px rgba(0,0,0,0.8);" : "";
+  return `<div class="tag-label" style="color:${colors.tag};${shadow}">${esc(text)}</div>`;
+}
 
-const IMAGES_NEEDED = {
-  single_hero: 1,
-  text_only: 0,
-  split_collage: 4,
-  grid_2x2: 4,
-  before_after: 2,
-  lifestyle_grid: 4,
-};
+function logoLockupHTML(name, bgType) {
+  const initial = (name || "B")[0].toUpperCase();
+  const nameColor = bgType === "light" ? "var(--dark-bg)" : "#fff";
+  return `<div class="logo-lockup"><div class="logo-circle"><span>${initial}</span></div><span class="logo-name" style="color:${nameColor}">${esc(name)}</span></div>`;
+}
+
+function featuresHTML(features, colors) {
+  if (!features || !features.length) return "";
+  return `<div class="features">${features.map((f, i) =>
+    `<div class="feature-row" style="border-bottom:${i < features.length - 1 ? `1px solid ${colors.border}` : "none"}">
+      <span class="feature-icon" style="color:var(--primary)">${f.icon || "•"}</span>
+      <div class="feature-text"><span class="feature-label" style="color:${colors.heading}">${esc(f.label)}</span><span class="feature-desc" style="color:${colors.body}">${esc(f.description || "")}</span></div>
+    </div>`
+  ).join("")}</div>`;
+}
+
+function stepsHTML(steps, colors) {
+  if (!steps || !steps.length) return "";
+  return `<div class="steps">${steps.map((s, i) =>
+    `<div class="step-row" style="border-bottom:${i < steps.length - 1 ? `1px solid ${colors.border}` : "none"}">
+      <span class="step-num">${String(i + 1).padStart(2, "0")}</span>
+      <div class="step-text"><span class="step-title" style="color:${colors.heading}">${esc(s.title)}</span><span class="step-desc" style="color:${colors.body}">${esc(s.description || "")}</span></div>
+    </div>`
+  ).join("")}</div>`;
+}
+
+function pillsHTML(pills, bgType, hasImage) {
+  if (!pills || !pills.length) return "";
+  const isLight = bgType === "light";
+  return `<div class="pills">${pills.map((p) => {
+    if (p.strikethrough) {
+      const border = hasImage ? "rgba(255,255,255,0.2)" : (isLight ? "rgba(0,0,0,0.1)" : "rgba(255,255,255,0.1)");
+      const color = hasImage ? "rgba(255,255,255,0.6)" : (isLight ? "#8A8580" : "#6B6560");
+      const bg = hasImage ? "rgba(0,0,0,0.4)" : "transparent";
+      return `<span class="pill" style="background:${bg};border:1px solid ${border};color:${color};text-decoration:line-through;">${esc(p.label)}</span>`;
+    }
+    const bg = hasImage ? "rgba(0,0,0,0.4)" : (isLight ? "rgba(0,0,0,0.04)" : "rgba(255,255,255,0.06)");
+    const color = hasImage ? "#fff" : (isLight ? "var(--primary)" : "var(--light)");
+    return `<span class="pill" style="background:${bg};color:${color}">${esc(p.label)}</span>`;
+  }).join("")}</div>`;
+}
+
+function quoteBoxHTML(quote, bgType, hasImage) {
+  if (!quote) return "";
+  const isLight = bgType === "light";
+  const bg = hasImage ? "rgba(0,0,0,0.45)" : (isLight ? "rgba(0,0,0,0.04)" : "rgba(0,0,0,0.15)");
+  const border = hasImage ? "rgba(255,255,255,0.15)" : (isLight ? "rgba(0,0,0,0.06)" : "rgba(255,255,255,0.08)");
+  const labelColor = hasImage ? "rgba(255,255,255,0.5)" : (isLight ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.5)");
+  const textColor = hasImage ? "#fff" : (isLight ? "#1a1a1a" : "#fff");
+  return `<div class="quote-box" style="background:${bg};border:1px solid ${border}">
+    <div class="quote-label" style="color:${labelColor}">${esc(quote.label || "")}</div>
+    <div class="quote-text" style="color:${textColor}">&ldquo;${esc(quote.text)}&rdquo;</div>
+  </div>`;
+}
+
+function ctaButtonHTML(text) {
+  if (!text) return "";
+  return `<div class="cta-wrap"><div class="cta-btn">${esc(text)}</div></div>`;
+}
+
+function bodyTextHTML(text, colors, hasImage) {
+  if (!text) return "";
+  const shadow = hasImage ? "text-shadow:1px 1px 4px rgba(0,0,0,0.6);" : "";
+  return `<div class="body-text" style="color:${colors.body};${shadow}">${esc(text)}</div>`;
+}
+
+// ── Main slide builder ──────────────────────────────
+
+function buildSlideHTML(slide, index, total, palette, brandName, imageData) {
+  const bgType = getSlideBg(slide, index);
+  const isLast = index === total - 1;
+  const isFirst = index === 0;
+  const isCTA = (slide.role || "").toLowerCase() === "cta";
+  const isHook = (slide.role || "").toLowerCase() === "hook";
+  const colors = getColors(bgType);
+  const hFont = palette._headingFont;
+  const bFont = palette._bodyFont;
+
+  const isCenter = isHook || isCTA || bgType === "gradient";
+  const hasStructured = slide.features || slide.steps;
+  const justify = hasStructured ? "flex-end" : (isCenter ? "center" : "flex-end");
+
+  // Background
+  let bgCSS = getBgCSS(bgType, palette);
+  let overlayHTML = "";
+  const hasImage = imageData && slide.composition !== "text_only";
+  if (hasImage) {
+    bgCSS = `background-image:url(data:${imageData.mime};base64,${imageData.base64});background-size:cover;background-position:center;`;
+    overlayHTML = `<div class="overlay"></div>`;
+  }
+
+  // Effective colors when image is present
+  const effectiveBg = hasImage ? "dark" : bgType;
+  const effectiveColors = hasImage ? getColors("dark") : colors;
+  const headingColor = hasImage ? "#fff" : colors.heading;
+  const textShadow = hasImage ? "text-shadow:2px 2px 8px rgba(0,0,0,0.8);" : "";
+
+  // Build content blocks
+  let content = "";
+  if ((isFirst || isCTA) && brandName) content += logoLockupHTML(brandName, effectiveBg);
+  const tagColors = hasImage ? { ...effectiveColors, tag: "rgba(255,255,255,0.85)" } : effectiveColors;
+  content += tagLabelHTML(slide.tag, tagColors, hasImage);
+  // Headline
+  const copyLines = (slide.copy || "").split("\n").filter((l) => l.trim());
+  content += copyLines.map((line) => `<div class="headline" style="color:${headingColor};${textShadow}">${esc(line)}</div>`).join("");
+  // Body
+  const bodyColors = hasImage ? { ...effectiveColors, body: "rgba(255,255,255,0.85)" } : effectiveColors;
+  content += bodyTextHTML(slide.body, bodyColors, hasImage);
+  // Rich content
+  content += featuresHTML(slide.features, effectiveColors);
+  content += stepsHTML(slide.steps, effectiveColors);
+  content += pillsHTML(slide.pills, effectiveBg, hasImage);
+  content += quoteBoxHTML(slide.quote, effectiveBg, hasImage);
+  // CTA button
+  if (isCTA) content += ctaButtonHTML(slide.cta_text || "Get Started");
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=${encodeURIComponent(hFont)}:wght@300;400;600;700&family=${encodeURIComponent(bFont)}:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --primary:${palette.primary}; --light:${palette.light}; --dark:${palette.dark}; --light-bg:${palette.lightBg}; --light-border:${palette.lightBorder}; --dark-bg:${palette.darkBg}; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:${SLIDE_WIDTH}px; height:${SLIDE_HEIGHT}px; overflow:hidden; font-family:'${bFont}',sans-serif; }
+  .slide { width:${SLIDE_WIDTH}px; height:${SLIDE_HEIGHT}px; position:relative; overflow:hidden; ${bgCSS} }
+  .overlay { position:absolute; inset:0; background:linear-gradient(to bottom,rgba(0,0,0,0.3) 0%,rgba(0,0,0,0.45) 40%,rgba(0,0,0,0.7) 100%); z-index:1; }
+  .content { position:absolute; inset:0; z-index:5; display:flex; flex-direction:column; padding:36px 36px 52px; justify-content:${justify}; }
+
+  /* Typography */
+  .headline { font-family:'${hFont}',serif; font-size:28px; font-weight:600; letter-spacing:-0.4px; line-height:1.12; margin-bottom:6px; }
+  .body-text { font-size:14px; font-weight:400; line-height:1.52; margin-top:10px; }
+  .tag-label { font-size:10px; font-weight:600; letter-spacing:2px; text-transform:uppercase; margin-bottom:16px; }
+
+  /* Logo lockup */
+  .logo-lockup { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
+  .logo-circle { width:40px; height:40px; border-radius:50%; background:var(--primary); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .logo-circle span { color:#fff; font-size:18px; font-weight:600; }
+  .logo-name { font-size:13px; font-weight:600; letter-spacing:0.5px; }
+
+  /* Progress bar */
+  .progress-bar { position:absolute; bottom:0; left:0; right:0; padding:16px 28px 20px; z-index:10; display:flex; align-items:center; gap:10px; }
+  .progress-track { flex:1; height:3px; border-radius:2px; overflow:hidden; }
+  .progress-fill { height:100%; border-radius:2px; }
+  .progress-label { font-size:11px; font-weight:500; }
+
+  /* Swipe arrow */
+  .swipe-arrow { position:absolute; right:0; top:0; bottom:0; width:48px; z-index:9; display:flex; align-items:center; justify-content:center; }
+
+  /* Features */
+  .features { margin-top:16px; width:100%; }
+  .feature-row { display:flex; align-items:flex-start; gap:14px; padding:10px 0; }
+  .feature-icon { font-size:15px; width:18px; text-align:center; flex-shrink:0; line-height:22px; }
+  .feature-text { display:flex; flex-direction:column; }
+  .feature-label { font-size:14px; font-weight:600; }
+  .feature-desc { font-size:12px; margin-top:2px; }
+
+  /* Steps */
+  .steps { margin-top:16px; width:100%; }
+  .step-row { display:flex; align-items:flex-start; gap:16px; padding:14px 0; }
+  .step-num { font-family:'${hFont}',serif; font-size:26px; font-weight:300; color:var(--primary); min-width:34px; line-height:1; flex-shrink:0; }
+  .step-text { display:flex; flex-direction:column; }
+  .step-title { font-size:14px; font-weight:600; }
+  .step-desc { font-size:12px; margin-top:2px; }
+
+  /* Pills */
+  .pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+  .pill { font-size:11px; padding:5px 12px; border-radius:20px; white-space:nowrap; }
+
+  /* Quote box */
+  .quote-box { padding:16px; border-radius:12px; margin-top:16px; }
+  .quote-label { font-size:13px; margin-bottom:6px; }
+  .quote-text { font-family:'${hFont}',serif; font-size:15px; font-style:italic; line-height:1.4; }
+
+  /* CTA button */
+  .cta-wrap { display:flex; justify-content:center; margin-top:24px; }
+  .cta-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:12px 28px; background:var(--light-bg); color:var(--dark); font-weight:600; font-size:14px; border-radius:28px; text-align:center; }
+</style>
+</head><body>
+<div class="slide">
+  ${overlayHTML}
+  <div class="content">${content}</div>
+  ${progressBarHTML(index, total, hasImage ? "dark" : bgType)}
+  ${!isLast ? swipeArrowHTML(hasImage ? "dark" : bgType) : ""}
+</div>
+</body></html>`;
+}
 
 // ── Image loading ──────────────────────────────────────
 
 async function loadImage(key, lutData, lutSize) {
   let buffer = await getBuffer(key);
   let mime = key.endsWith(".png") ? "image/png" : "image/jpeg";
-
   if (lutData && lutSize) {
-    try {
-      buffer = await applyLutToBuffer(buffer, lutData, lutSize);
-      mime = "image/png";
-    } catch (err) {
-      logger.warn(`LUT application failed for ${key}: ${err.message}`);
-    }
+    try { buffer = await applyLutToBuffer(buffer, lutData, lutSize); mime = "image/png"; }
+    catch (err) { logger.warn(`LUT failed for ${key}: ${err.message}`); }
   }
-
   return { base64: buffer.toString("base64"), mime };
 }
 
-async function fetchExtraImages(clientId, count, excludeKeys, lutData, lutSize) {
-  if (count <= 0) return [];
-
-  const filter = { client_id: clientId, status: "ready" };
-  if (excludeKeys.length > 0) {
-    filter.storage_key = { $nin: excludeKeys };
-  }
-
-  const extras = await ClientImage.find(filter).sort({ quality_score: -1 }).limit(count).lean();
-
-  const loaded = [];
-  for (const img of extras) {
-    try {
-      loaded.push(await loadImage(img.storage_key, lutData, lutSize));
-    } catch (err) {
-      logger.warn(`Could not load extra image ${img.storage_key}: ${err.message}`);
-    }
-  }
-  return loaded;
-}
-
-// ── Puppeteer rendering ──────────────────────────────────────
+// ── Puppeteer rendering ──────────────────────────────
 
 async function renderSlideToBuffer(browser, html) {
   const page = await browser.newPage();
-  await page.setViewport({ width: SLIDE_WIDTH, height: SLIDE_HEIGHT, deviceScaleFactor: 1 });
+  await page.setViewport({ width: SLIDE_WIDTH, height: SLIDE_HEIGHT, deviceScaleFactor: SCALE });
   await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.evaluate(() =>
-    Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 5000))])
-  );
+  await page.evaluate(() => Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 5000))]));
   const buffer = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: SLIDE_WIDTH, height: SLIDE_HEIGHT } });
   await page.close();
   return buffer;
@@ -311,97 +313,52 @@ async function renderSlideToBuffer(browser, html) {
 // ── Main ──────────────────────────────────────
 
 async function renderSlides({ carouselId, clientId, accountId, slides, imageSelections, templateId, lutId }) {
-  const [client, template, lutDoc] = await Promise.all([
+  const [client, lutDoc] = await Promise.all([
     Client.findById(clientId),
-    templateId ? CarouselTemplate.findById(templateId) : null,
     lutId ? ClientLut.findById(lutId) : null,
   ]);
 
-  let lutData = null;
-  let lutSize = 0;
+  let lutData = null, lutSize = 0;
   if (lutDoc) {
     try {
       const lutBuffer = await getBuffer(lutDoc.storage_key);
       const parsed = parseCubeFile(lutBuffer.toString("utf-8"));
-      lutData = parsed.data;
-      lutSize = parsed.size;
-      logger.info(`Loaded LUT "${lutDoc.name}" (${lutSize}x${lutSize}x${lutSize})`);
-    } catch (err) {
-      logger.warn(`Could not load LUT ${lutId}: ${err.message}`);
-    }
+      lutData = parsed.data; lutSize = parsed.size;
+    } catch (err) { logger.warn(`Could not load LUT ${lutId}: ${err.message}`); }
   }
 
   const brandKit = client?.brand_kit || {};
-  const visualStructure = template?.visual_structure || {};
-  const fontHeading = brandKit.font_heading || "Montserrat";
-  const fontBody = brandKit.font_body || "Inter";
-
-  const usedImageKeys = new Set();
-  imageSelections.forEach((s) => { if (s.image_key) usedImageKeys.add(s.image_key); });
+  const palette = derivePalette(brandKit.primary_color);
+  palette._headingFont = brandKit.font_heading || "Playfair Display";
+  palette._bodyFont = brandKit.font_body || "DM Sans";
+  const brandName = client?.name || "";
 
   let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    });
-
+    browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
     const results = [];
 
     for (const slide of slides) {
       const selection = imageSelections.find((s) => s.position === slide.position);
-      const composition = slide.composition || "single_hero";
-      const needed = IMAGES_NEEDED[composition] || 1;
+      const index = slide.position - 1;
 
-      // Load primary image
-      const slideImages = [];
-      if (selection?.image_key && needed > 0) {
-        try {
-          slideImages.push(await loadImage(selection.image_key, lutData, lutSize));
-        } catch (err) {
-          logger.warn(`Could not load image for slide ${slide.position}: ${err.message}`);
-        }
+      let imageData = null;
+      if (selection?.image_key && slide.composition !== "text_only") {
+        try { imageData = await loadImage(selection.image_key, lutData, lutSize); }
+        catch (err) { logger.warn(`Could not load image for slide ${slide.position}: ${err.message}`); }
       }
 
-      // Load pre-selected extra images first (from imageSelector)
-      const preSelectedExtras = selection?.extra_image_keys || [];
-      for (const extraKey of preSelectedExtras) {
-        if (slideImages.length >= needed) break;
-        try {
-          slideImages.push(await loadImage(extraKey, lutData, lutSize));
-          usedImageKeys.add(extraKey);
-        } catch (err) {
-          logger.warn(`Could not load pre-selected extra image ${extraKey}: ${err.message}`);
-        }
-      }
-
-      // Fetch remaining extra images if still needed (fallback to random high-quality)
-      if (needed > slideImages.length && composition !== "text_only") {
-        const extras = await fetchExtraImages(
-          clientId,
-          needed - slideImages.length,
-          [...usedImageKeys],
-          lutData,
-          lutSize,
-        );
-        slideImages.push(...extras);
-      }
-
-      const builder = COMPOSITION_BUILDERS[composition] || COMPOSITION_BUILDERS.single_hero;
-      const html = builder(slide, brandKit, visualStructure, slideImages, fontHeading, fontBody);
+      const html = buildSlideHTML(slide, index, slides.length, palette, brandName, imageData);
       const pngBuffer = await renderSlideToBuffer(browser, html);
-
       const key = `carousels/${carouselId}/slide-${slide.position}.png`;
       await upload(key, pngBuffer, "image/png");
-
       results.push({ position: slide.position, rendered_key: key, size: pngBuffer.length });
-      logger.info(`Rendered slide ${slide.position} [${composition}] (${pngBuffer.length} bytes)`);
+      logger.info(`Rendered slide ${slide.position} [${slide.role}] (${pngBuffer.length} bytes)`);
     }
-
     return results;
   } finally {
     if (browser) await browser.close();
   }
 }
 
-module.exports = { renderSlides, COMPOSITION_BUILDERS };
+module.exports = { renderSlides };

@@ -24,7 +24,7 @@ const uploadMiddleware = multer({
 
 // POST /api/client-images/upload
 // Form data: client_id (string), images (file[])
-router.post("/upload", uploadMiddleware.array("images", 20), async (req, res) => {
+router.post("/upload", uploadMiddleware.array("images", 10), async (req, res) => {
   try {
     const { client_id } = req.body;
     if (!client_id) return res.status(400).json({ error: "client_id is required" });
@@ -36,52 +36,58 @@ router.post("/upload", uploadMiddleware.array("images", 20), async (req, res) =>
       return res.status(400).json({ error: "No files uploaded" });
     }
 
+    // Process all files in parallel
+    const results = await Promise.allSettled(req.files.map(async (file) => {
+      const metadata = await sharp(file.buffer).metadata();
+      const width = metadata.width || 0;
+      const height = metadata.height || 0;
+
+      // Generate thumbnail
+      const thumbnailBuffer = await sharp(file.buffer)
+        .resize(400, null, { withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toBuffer();
+
+      const imageId = new mongoose.Types.ObjectId();
+      const ext = file.mimetype === "image/png" ? "png" : "jpg";
+      const originalKey = `${req.account._id}/${client_id}/images/originals/${imageId}.${ext}`;
+      const thumbnailKey = `${req.account._id}/${client_id}/images/thumbnails/${imageId}.webp`;
+
+      // Upload original and thumbnail to S3 in parallel
+      await Promise.all([
+        s3Upload(originalKey, file.buffer, file.mimetype),
+        s3Upload(thumbnailKey, thumbnailBuffer, "image/webp"),
+      ]);
+
+      // Create DB record
+      const image = await ClientImage.create({
+        _id: imageId,
+        client_id,
+        account_id: req.account._id,
+        storage_key: originalKey,
+        thumbnail_key: thumbnailKey,
+        original_filename: file.originalname,
+        mime_type: file.mimetype,
+        width,
+        height,
+        file_size: file.size,
+        aspect_ratio: width && height ? width / height : 1,
+        is_portrait: height > width,
+        status: "processing",
+        source: "manual_upload",
+        total_uses: 0,
+        used_in_carousels: [],
+      });
+
+      return image;
+    }));
+
     const created = [];
-
-    for (const file of req.files) {
-      try {
-        const metadata = await sharp(file.buffer).metadata();
-        const width = metadata.width || 0;
-        const height = metadata.height || 0;
-
-        // Generate thumbnail
-        const thumbnailBuffer = await sharp(file.buffer)
-          .resize(400, null, { withoutEnlargement: true })
-          .webp({ quality: 80 })
-          .toBuffer();
-
-        const imageId = new mongoose.Types.ObjectId();
-        const ext = file.mimetype === "image/png" ? "png" : "jpg";
-        const originalKey = `${req.account._id}/${client_id}/images/originals/${imageId}.${ext}`;
-        const thumbnailKey = `${req.account._id}/${client_id}/images/thumbnails/${imageId}.webp`;
-
-        // Upload to S3
-        await s3Upload(originalKey, file.buffer, file.mimetype);
-        await s3Upload(thumbnailKey, thumbnailBuffer, "image/webp");
-
-        // Create DB record
-        const image = await ClientImage.create({
-          _id: imageId,
-          client_id,
-          account_id: req.account._id,
-          storage_key: originalKey,
-          thumbnail_key: thumbnailKey,
-          original_filename: file.originalname,
-          mime_type: file.mimetype,
-          width,
-          height,
-          file_size: file.size,
-          aspect_ratio: width && height ? width / height : 1,
-          is_portrait: height > width,
-          status: "processing",
-          source: "manual_upload",
-          total_uses: 0,
-          used_in_carousels: [],
-        });
-
-        created.push(image);
-      } catch (err) {
-        logger.error(`Failed to process upload ${file.originalname}:`, err);
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === "fulfilled") {
+        created.push(results[i].value);
+      } else {
+        logger.error(`Failed to process upload ${req.files[i].originalname}:`, results[i].reason);
       }
     }
 
@@ -98,11 +104,12 @@ router.post("/upload", uploadMiddleware.array("images", 20), async (req, res) =>
     res.status(201).json({
       uploaded: created.length,
       failed: req.files.length - created.length,
+      image_ids: created.map((img) => img._id.toString()),
       images: created,
     });
   } catch (err) {
-    logger.error("Upload failed:", err);
-    res.status(500).json({ error: "Upload failed" });
+    logger.error({ err, stack: err.stack }, "Upload failed:");
+    res.status(500).json({ error: err.message || "Upload failed" });
   }
 });
 
@@ -141,6 +148,44 @@ router.post("/retag", async (req, res) => {
   } catch (err) {
     logger.error("Re-tag failed:", err);
     res.status(500).json({ error: "Re-tag failed" });
+  }
+});
+
+// POST /api/client-images/retry-tag
+// Body: { image_ids: string[] } — retry tagging for specific failed images
+router.post("/retry-tag", async (req, res) => {
+  try {
+    const { image_ids } = req.body;
+    if (!image_ids || !Array.isArray(image_ids) || image_ids.length === 0) {
+      return res.status(400).json({ error: "image_ids array is required" });
+    }
+
+    const images = await ClientImage.find({
+      _id: { $in: image_ids },
+      account_id: req.account._id,
+      status: "failed",
+    });
+
+    if (images.length === 0) {
+      return res.json({ queued: 0, message: "No failed images to retry" });
+    }
+
+    await ClientImage.updateMany(
+      { _id: { $in: images.map((i) => i._id) } },
+      { $set: { status: "processing" } },
+    );
+
+    const { tagImageBatch } = require("../services/carousel/imageTagging");
+    const imageIds = images.map((img) => img._id.toString());
+
+    tagImageBatch(imageIds, 3).catch((err) => {
+      logger.error("Retry tagging failed:", err);
+    });
+
+    res.json({ queued: images.length });
+  } catch (err) {
+    logger.error("Retry tag failed:", err);
+    res.status(500).json({ error: "Retry tag failed" });
   }
 });
 

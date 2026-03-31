@@ -1,35 +1,14 @@
-const { GoogleGenAI } = require("@google/genai");
-const Anthropic = require("@anthropic-ai/sdk").default;
 const sharp = require("sharp");
 const https = require("https");
 const http = require("http");
-const Account = require("../models/Account");
 const ThumbnailJob = require("../models/ThumbnailJob");
 const ClientImage = require("../models/ClientImage");
 const Notification = require("../models/Notification");
 const Client = require("../models/Client");
 const ThumbnailTemplate = require("../models/ThumbnailTemplate");
-const { decrypt } = require("../utils/crypto");
 const { upload, getBuffer } = require("./storageService");
+const { getClaudeClient, getGeminiClient } = require("../utils/aiClients");
 const logger = require("../utils/logger").child({ module: "thumbnailService" });
-
-// ---------------------------------------------------------------------------
-// AI Clients
-// ---------------------------------------------------------------------------
-
-async function getGeminiClient(accountId) {
-  const account = await Account.findById(accountId, "gemini_token").lean();
-  const apiKey = (account && decrypt(account.gemini_token)) || process.env.GEMINI;
-  if (!apiKey) throw new Error("No Gemini API key configured");
-  return new GoogleGenAI({ apiKey });
-}
-
-async function getClaudeClient(accountId) {
-  const account = await Account.findById(accountId, "claude_token").lean();
-  const token = (account && Account.decryptField(account.claude_token)) || process.env.CLAUDE;
-  if (!token) throw new Error("No Claude API key configured");
-  return new Anthropic({ apiKey: token });
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -558,7 +537,7 @@ async function runThumbnailPipeline({ jobId, io }) {
 
     const client = await Client.findById(clientId).lean();
     const brandStyle = buildBrandStyle(client);
-    const gemini = await getGeminiClient(accountId);
+    const gemini = await getGeminiClient({ accountId, clientId });
 
     // Load template if selected
     let template = null;
@@ -596,7 +575,7 @@ async function runThumbnailPipeline({ jobId, io }) {
     await updateJobStatus(jobId, "generating", "Crafting 4 unique concepts with AI...", 15, io);
     let concepts;
     try {
-      const claude = await getClaudeClient(accountId);
+      const claude = await getClaudeClient({ accountId, clientId });
       concepts = await craftPromptsWithAI(job.topic, brandStyle, exampleNotes, claude);
       if (!concepts) concepts = craftStaticPrompts(job.topic);
     } catch {
@@ -721,7 +700,7 @@ async function iterateThumbnail({ jobId, label, feedback, io }) {
   const accountId = job.account_id.toString();
   const clientId = job.client_id.toString();
 
-  const gemini = await getGeminiClient(accountId);
+  const gemini = await getGeminiClient({ accountId, clientId });
   const headshot = await ClientImage.findById(job.headshot_image_id);
   const headshotBuffer = await getBuffer(headshot.storage_key);
   const prevBuffer = await getBuffer(concept.output_key);

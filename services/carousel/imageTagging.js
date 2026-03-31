@@ -1,8 +1,7 @@
-const OpenAI = require("openai");
 const { getBuffer } = require("../storageService");
 const ClientImage = require("../../models/ClientImage");
-const Account = require("../../models/Account");
 const { TAG_VOCABULARY } = require("./tagVocabulary");
+const { getOpenAIClient } = require("../../utils/aiClients");
 const logger = require("../../utils/logger").child({ module: "imageTagging" });
 
 function buildSystemPrompt() {
@@ -49,33 +48,24 @@ Return ONLY valid JSON:
     "color_palette": ["from list above"],
     "composition": ["from list above"]
   },
-  "quality_score": 0-100,
-  "face_visibility_score": 0-100,
-  "energy_level": 0-100,
+  "quality_score": 1-10,
+  "face_visibility_score": 0-10,
+  "energy_level": 1-10,
   "text_safe_zones": { "top": true/false, "bottom": true/false, "left": true/false, "right": true/false },
   "subject_position": "center|left-third|right-third",
   "suitable_as_cover": true/false,
   "summary": "one sentence description"
 }
 
-Scoring guidelines:
-- quality_score: 80+ for sharp, well-lit, well-composed photos. 50-79 for acceptable. Below 50 for blurry/dark/poorly composed.
-- face_visibility_score: 90+ for clear, front-facing. 60-89 for partially visible. 30-59 for small/side. 0-29 for no face.
-- energy_level: 90+ for intense action/dynamic poses. 60-89 for active/engaged. 30-59 for calm/neutral. 0-29 for still/serene/passive.
+Scoring guidelines (be critical and spread scores across the full range — avoid clustering around 80-90):
+- quality_score: Score 1-10 (integer). 10 = magazine-quality (perfect sharpness, lighting, composition). 7-9 = good (well-lit, mostly sharp, decent composition). 4-6 = average (minor issues — slightly soft, mediocre lighting, busy background). 1-3 = poor (blurry, dark, bad framing, low resolution). Most casual phone photos should score 5-7, not 8+.
+- face_visibility_score: Score 1-10. 10 = clear front-facing portrait. 7-9 = face clearly visible but angled/partial. 4-6 = face small or side-profile. 1-3 = face barely visible or obscured. 0 = no face at all.
+- energy_level: Score 1-10. 10 = intense action/dynamic pose. 7-9 = active, engaged, expressive. 4-6 = calm, relaxed, neutral pose. 1-3 = still, passive, static.
 - text_safe_zones: true if that area has enough empty/simple space to overlay text legibly.
-- suitable_as_cover: true if the image would work as a strong carousel cover (eye-catching, clear subject, good composition).`;
+- suitable_as_cover: true only if the image would genuinely stand out as a carousel cover (eye-catching, clear subject, strong composition, good lighting). Most images should be false.`;
 }
 
 const SYSTEM_PROMPT = buildSystemPrompt();
-
-async function getOpenAIClient(accountId) {
-  const account = await Account.findById(accountId);
-  const token = account?.openai_token
-    ? Account.decryptField(account.openai_token)
-    : process.env.OPENAI;
-  if (!token) throw new Error("No OpenAI token available");
-  return new OpenAI({ apiKey: token });
-}
 
 async function tagImage(imageId) {
   const image = await ClientImage.findById(imageId);
@@ -90,7 +80,7 @@ async function tagImage(imageId) {
     const mimeType = image.mime_type || "image/jpeg";
     const dataUrl = `data:${mimeType};base64,${base64}`;
 
-    const openai = await getOpenAIClient(image.account_id);
+    const openai = await getOpenAIClient({ accountId: image.account_id, clientId: image.client_id });
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",

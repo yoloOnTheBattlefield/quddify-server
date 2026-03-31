@@ -1,32 +1,10 @@
-const OpenAI = require("openai");
-const Anthropic = require("@anthropic-ai/sdk").default;
-const Account = require("../../models/Account");
 const Client = require("../../models/Client");
 const SwipeFile = require("../../models/SwipeFile");
 const CarouselTemplate = require("../../models/CarouselTemplate");
 const { extractBestAngle } = require("./transcriptAnalyzer");
 const { getPlaybook } = require("./copyPlaybook");
+const { getClaudeClient, getOpenAIClient } = require("../../utils/aiClients");
 const logger = require("../../utils/logger").child({ module: "copyGenerator" });
-
-// ── AI Clients ──────────────────────────────────────────
-
-async function getOpenAIClient(accountId) {
-  const account = await Account.findById(accountId);
-  const token = account?.openai_token
-    ? Account.decryptField(account.openai_token)
-    : process.env.OPENAI;
-  if (!token) throw new Error("No OpenAI token available");
-  return new OpenAI({ apiKey: token });
-}
-
-async function getClaudeClient(accountId) {
-  const account = await Account.findById(accountId);
-  const token = account?.claude_token
-    ? Account.decryptField(account.claude_token)
-    : process.env.CLAUDE;
-  if (!token) throw new Error("No Claude token available — add CLAUDE to your .env or set claude_token on the account");
-  return new Anthropic({ apiKey: token });
-}
 
 // ── Model config ──────────────────────────────────────────
 
@@ -88,8 +66,8 @@ function buildStylePrompt(swipeFile) {
 
 // ── AI callers ──────────────────────────────────────────
 
-async function callClaude(accountId, modelId, systemPrompt, userPrompt) {
-  const claude = await getClaudeClient(accountId);
+async function callClaude({ accountId, clientId }, modelId, systemPrompt, userPrompt) {
+  const claude = await getClaudeClient({ accountId, clientId });
   const response = await claude.messages.create({
     model: modelId,
     max_tokens: 2048,
@@ -106,8 +84,8 @@ async function callClaude(accountId, modelId, systemPrompt, userPrompt) {
   return JSON.parse(content);
 }
 
-async function callOpenAI(accountId, modelId, systemPrompt, userPrompt) {
-  const openai = await getOpenAIClient(accountId);
+async function callOpenAI({ accountId, clientId }, modelId, systemPrompt, userPrompt) {
+  const openai = await getOpenAIClient({ accountId, clientId });
   const response = await openai.chat.completions.create({
     model: modelId,
     messages: [
@@ -232,9 +210,9 @@ Return ONLY valid JSON (no markdown fencing, no extra text):
   // Call the selected model
   let result;
   if (modelConfig.provider === "anthropic") {
-    result = await callClaude(accountId, modelConfig.model, systemPrompt, userPrompt);
+    result = await callClaude({ accountId, clientId }, modelConfig.model, systemPrompt, userPrompt);
   } else {
-    result = await callOpenAI(accountId, modelConfig.model, systemPrompt, userPrompt);
+    result = await callOpenAI({ accountId, clientId }, modelConfig.model, systemPrompt, userPrompt);
   }
 
   logger.info(`Generated copy for carousel: ${result.slides?.length} slides (${modelKey})`);

@@ -123,7 +123,7 @@ async function scrapeChannels(accountId) {
 
     if (channelId) update.channel_id = channelId;
 
-    const video = await Video.findOneAndUpdate(
+    await Video.findOneAndUpdate(
       { video_id: videoId },
       {
         $set: update,
@@ -142,25 +142,57 @@ async function scrapeChannels(accountId) {
     videoCount++;
   }
 
-  // Map Apify's UC-style channel IDs back to our channel docs and update metadata
-  const videoChannelIds = [...new Set(items.map((i) => i.channelId || i.channelName).filter(Boolean))];
+  // Map Apify's UC-style channel IDs back to our channel docs and update metadata.
+  // Apify groups items by channelId; we match each UC ID to one of our channel docs
+  // by checking if the channel's handle or channel_id appears in any item's channelUrl
+  // or channel-related fields. We also fall back to positional matching if only one
+  // UC ID is unmatched and only one channel is unmatched.
   const now2 = new Date();
+  const ucIds = [...new Set(items.map((i) => i.channelId).filter(Boolean))];
+  const unmatchedChannels = [];
+
   for (const ch of channels) {
-    // Find videos whose channelUrl contains the channel handle
-    const handle = ch.channel_url?.split("/").pop(); // e.g. "@gradyssells"
-    const matchedVideo = items.find((i) => {
-      const vChannelUrl = i.channelUrl || "";
-      return vChannelUrl.includes(handle) || vChannelUrl.includes(ch.channel_id);
+    const handle = (ch.channel_url?.split("/").pop() || ch.channel_id || "").toLowerCase();
+    const matchedItem = items.find((i) => {
+      const channelUrl = (i.channelUrl || "").toLowerCase();
+      const channelName = (i.channelName || "").toLowerCase();
+      return (
+        channelUrl.includes(handle) ||
+        channelName.includes(handle.replace("@", "")) ||
+        (ch.yt_channel_id && i.channelId === ch.yt_channel_id)
+      );
     });
-    if (matchedVideo) {
-      const ytChannelId = matchedVideo.channelId || matchedVideo.channelName;
+
+    if (matchedItem) {
+      const ytChannelId = matchedItem.channelId;
       const updateFields = { last_scraped_at: now2 };
       if (ytChannelId) updateFields.yt_channel_id = ytChannelId;
-      if (matchedVideo.channelName && !ch.channel_name) {
-        updateFields.channel_name = matchedVideo.channelName;
+      if (matchedItem.channelName && !ch.channel_name) {
+        updateFields.channel_name = matchedItem.channelName;
       }
       await Channel.updateOne({ _id: ch._id }, { $set: updateFields });
+    } else {
+      unmatchedChannels.push(ch);
     }
+  }
+
+  // Fallback: if exactly one channel is unmatched and exactly one UC ID is unused,
+  // they must correspond to each other.
+  const matchedUcIds = new Set(
+    channels
+      .filter((ch) => ch.yt_channel_id)
+      .map((ch) => ch.yt_channel_id),
+  );
+  const unusedUcIds = ucIds.filter((id) => !matchedUcIds.has(id));
+  if (unmatchedChannels.length === 1 && unusedUcIds.length === 1) {
+    const ch = unmatchedChannels[0];
+    const ytChannelId = unusedUcIds[0];
+    const matchedItem = items.find((i) => i.channelId === ytChannelId);
+    const updateFields = { yt_channel_id: ytChannelId, last_scraped_at: now2 };
+    if (matchedItem?.channelName && !ch.channel_name) {
+      updateFields.channel_name = matchedItem.channelName;
+    }
+    await Channel.updateOne({ _id: ch._id }, { $set: updateFields });
   }
 
   logger.info(`Stored/updated ${videoCount} video(s)`);
