@@ -647,14 +647,17 @@ router.get("/:id/stats", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    // Compute replied/booked/without_message counts
-    const campaignLeadOutboundIds = await CampaignLead.find({ campaign_id: campaign._id }).distinct("outbound_lead_id");
+    // Compute replied/booked/without_message counts — only for leads actually sent in THIS campaign
+    const sentOutboundIds = await CampaignLead.find({
+      campaign_id: campaign._id,
+      status: { $in: ["sent", "delivered", "replied"] },
+    }).distinct("outbound_lead_id");
     const [repliedCount, bookedCount, withoutMessageCount] = await Promise.all([
-      campaignLeadOutboundIds.length > 0
-        ? OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true })
+      sentOutboundIds.length > 0
+        ? OutboundLead.countDocuments({ _id: { $in: sentOutboundIds }, replied: true })
         : 0,
-      campaignLeadOutboundIds.length > 0
-        ? OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, booked: true })
+      sentOutboundIds.length > 0
+        ? OutboundLead.countDocuments({ _id: { $in: sentOutboundIds }, booked: true })
         : 0,
       CampaignLead.countDocuments({ campaign_id: campaign._id, custom_message: null }),
     ]);
@@ -698,11 +701,15 @@ router.post("/:id/recalc-stats", async (req, res) => {
     }
     stats.without_message = withoutMessageCount;
 
-    // Compute replied/booked from OutboundLead booleans (manual toggles)
-    const [repliedCount, bookedCount] = campaignLeadOutboundIds.length > 0
+    // Compute replied/booked from OutboundLead booleans — only for leads actually sent in THIS campaign
+    const sentOutboundIds = await CampaignLead.find({
+      campaign_id: campaign._id,
+      status: { $in: ["sent", "delivered", "replied"] },
+    }).distinct("outbound_lead_id");
+    const [repliedCount, bookedCount] = sentOutboundIds.length > 0
       ? await Promise.all([
-          OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, replied: true }),
-          OutboundLead.countDocuments({ _id: { $in: campaignLeadOutboundIds }, booked: true }),
+          OutboundLead.countDocuments({ _id: { $in: sentOutboundIds }, replied: true }),
+          OutboundLead.countDocuments({ _id: { $in: sentOutboundIds }, booked: true }),
         ])
       : [0, 0];
     stats.replied = repliedCount;
