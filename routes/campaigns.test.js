@@ -403,6 +403,207 @@ describe("POST /api/campaigns/:id/leads", () => {
   });
 });
 
+describe("POST /api/campaigns/:id/start — AI personalization", () => {
+  it("allows start when campaign has AI-generated messages but no templates", async () => {
+    const oa = await OutboundAccount.create({ account_id: accountId, username: "ai_sender" });
+    const c = await createCampaign({
+      status: "draft",
+      messages: [],
+      outbound_account_ids: [oa._id],
+      ai_personalization: { enabled: true, status: "completed", progress: 1, total: 1 },
+    });
+    const ol = await OutboundLead.create({
+      account_id: accountId,
+      followingKey: "ai_target",
+      username: "ai_target",
+    });
+    await CampaignLead.create({
+      campaign_id: c._id,
+      outbound_lead_id: ol._id,
+      status: "pending",
+      custom_message: "are you still relying on live launches?",
+    });
+
+    const res = await request(app).post(`/api/campaigns/${c._id}/start`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("active");
+  });
+
+  it("rejects start with no messages AND no AI personalization", async () => {
+    const oa = await OutboundAccount.create({ account_id: accountId, username: "no_msg_sender" });
+    const c = await createCampaign({
+      status: "draft",
+      messages: [],
+      outbound_account_ids: [oa._id],
+      ai_personalization: { enabled: false, status: "idle" },
+    });
+    const ol = await OutboundLead.create({
+      account_id: accountId,
+      followingKey: "no_msg_target",
+      username: "no_msg_target",
+    });
+    await CampaignLead.create({
+      campaign_id: c._id,
+      outbound_lead_id: ol._id,
+      status: "pending",
+    });
+
+    const res = await request(app).post(`/api/campaigns/${c._id}/start`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/message/i);
+  });
+
+  it("rejects start when AI personalization is still generating", async () => {
+    const oa = await OutboundAccount.create({ account_id: accountId, username: "gen_sender" });
+    const c = await createCampaign({
+      status: "draft",
+      messages: [],
+      outbound_account_ids: [oa._id],
+      ai_personalization: { enabled: true, status: "generating", progress: 5, total: 100 },
+    });
+    const ol = await OutboundLead.create({
+      account_id: accountId,
+      followingKey: "gen_target",
+      username: "gen_target",
+    });
+    await CampaignLead.create({
+      campaign_id: c._id,
+      outbound_lead_id: ol._id,
+      status: "pending",
+    });
+
+    const res = await request(app).post(`/api/campaigns/${c._id}/start`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/message/i);
+  });
+});
+
+describe("GET /api/campaigns/:id/next-send", () => {
+  it("returns estimate for active campaign with online senders", async () => {
+    const oa = await OutboundAccount.create({
+      account_id: accountId,
+      username: "next_sender",
+      status: "ready",
+    });
+    await SenderAccount.create({
+      account_id: accountId,
+      ig_username: "next_sender",
+      outbound_account_id: oa._id,
+      status: "online",
+      last_seen: new Date(),
+    });
+
+    const c = await createCampaign({
+      status: "active",
+      outbound_account_ids: [oa._id],
+      stats: { total: 10, pending: 5, queued: 0, sent: 5, failed: 0, skipped: 0 },
+    });
+
+    const res = await request(app).get(`/api/campaigns/${c._id}/next-send`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("active");
+    expect(res.body.online_senders).toBe(1);
+    expect(res.body.total_senders).toBe(1);
+    expect(res.body.delay_seconds).toBeGreaterThan(0);
+    expect(res.body.next_send_at).toBeDefined();
+  });
+
+  it("returns paused status for non-active campaign", async () => {
+    const c = await createCampaign({ status: "paused" });
+
+    const res = await request(app).get(`/api/campaigns/${c._id}/next-send`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("paused");
+    expect(res.body.reason).toMatch(/paused/i);
+    expect(res.body.next_send_at).toBeNull();
+  });
+
+  it("reports no senders linked", async () => {
+    const c = await createCampaign({
+      status: "active",
+      outbound_account_ids: [],
+    });
+
+    const res = await request(app).get(`/api/campaigns/${c._id}/next-send`);
+    expect(res.status).toBe(200);
+    expect(res.body.reason).toMatch(/no sender/i);
+  });
+
+  it("reports no senders online", async () => {
+    const oa = await OutboundAccount.create({
+      account_id: accountId,
+      username: "offline_ns",
+      status: "ready",
+    });
+    await SenderAccount.create({
+      account_id: accountId,
+      ig_username: "offline_ns",
+      outbound_account_id: oa._id,
+      status: "offline",
+      last_seen: new Date(Date.now() - 120_000),
+    });
+
+    const c = await createCampaign({
+      status: "active",
+      outbound_account_ids: [oa._id],
+      stats: { total: 10, pending: 5, queued: 0, sent: 5, failed: 0, skipped: 0 },
+      schedule: { active_hours_start: 0, active_hours_end: 24, timezone: "UTC", skip_active_hours: true },
+    });
+
+    const res = await request(app).get(`/api/campaigns/${c._id}/next-send`);
+    expect(res.status).toBe(200);
+    expect(res.body.reason).toMatch(/no senders online/i);
+  });
+
+  it("returns 404 for wrong account", async () => {
+    const c = await Campaign.create({
+      account_id: new mongoose.Types.ObjectId(),
+      name: "Other",
+      messages: ["hi"],
+      status: "active",
+    });
+
+    const res = await request(app).get(`/api/campaigns/${c._id}/next-send`);
+    expect(res.status).toBe(404);
+  });
+
+  it("handles campaign with burst mode", async () => {
+    const oa = await OutboundAccount.create({
+      account_id: accountId,
+      username: "burst_sender",
+      status: "ready",
+    });
+    await SenderAccount.create({
+      account_id: accountId,
+      ig_username: "burst_sender",
+      outbound_account_id: oa._id,
+      status: "online",
+      last_seen: new Date(),
+    });
+
+    const c = await createCampaign({
+      status: "active",
+      outbound_account_ids: [oa._id],
+      stats: { total: 10, pending: 5, queued: 0, sent: 5, failed: 0, skipped: 0 },
+      schedule: {
+        active_hours_start: 0,
+        active_hours_end: 24,
+        timezone: "UTC",
+        burst_enabled: true,
+        messages_per_group: 5,
+      },
+      burst_break_until: new Date(Date.now() + 300_000),
+      burst_sent_in_group: 0,
+    });
+
+    const res = await request(app).get(`/api/campaigns/${c._id}/next-send`);
+    expect(res.status).toBe(200);
+    expect(res.body.burst_enabled).toBe(true);
+    expect(res.body.burst_on_break).toBe(true);
+    expect(res.body.reason).toMatch(/burst.*break/i);
+  });
+});
+
 describe("POST /api/campaigns/:id/recalc-stats", () => {
   it("recalculates stats from campaign leads", async () => {
     const c = await createCampaign();
