@@ -204,29 +204,28 @@ const connectDB = async () => {
   });
   logger.info("MongoDB connected");
 
-  // Sync indexes once per process
+  // Sync indexes once per process (non-fatal — must not block scheduler startup)
   if (!indexesFixed) {
     indexesFixed = true;
-    const Account = require("./models/Account");
-    await Account.syncIndexes();
-    const OutboundLead = require("./models/OutboundLead");
-    await OutboundLead.syncIndexes();
-    const SenderAccount = require("./models/SenderAccount");
-    await SenderAccount.syncIndexes();
-    const OutboundAccountModel = require("./models/OutboundAccount");
-    await OutboundAccountModel.syncIndexes();
-    const IgConversation = require("./models/IgConversation");
-    await IgConversation.syncIndexes();
-    const IgMessage = require("./models/IgMessage");
-    await IgMessage.syncIndexes();
-    const Lead = require("./models/Lead");
-    await Lead.syncIndexes();
-    const Channel = require("./models/Channel");
-    await Channel.syncIndexes();
-    const User = require("./models/User");
-    await User.syncIndexes();
-    const Payment = require("./models/Payment");
-    await Payment.syncIndexes();
+    const models = [
+      require("./models/Account"),
+      require("./models/OutboundLead"),
+      require("./models/SenderAccount"),
+      require("./models/OutboundAccount"),
+      require("./models/IgConversation"),
+      require("./models/IgMessage"),
+      require("./models/Lead"),
+      require("./models/Channel"),
+      require("./models/User"),
+      require("./models/Payment"),
+    ];
+    for (const Model of models) {
+      try {
+        await Model.syncIndexes();
+      } catch (err) {
+        logger.warn(`[startup] syncIndexes failed for ${Model.modelName}: ${err.message}`);
+      }
+    }
   }
 
   return cachedConnection;

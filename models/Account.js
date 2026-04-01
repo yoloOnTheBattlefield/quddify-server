@@ -88,7 +88,7 @@ AccountSchema.statics.decryptField = function (value) {
  */
 AccountSchema.statics.ENCRYPTED_FIELDS = ENCRYPTED_FIELDS;
 
-AccountSchema.index({ ghl: 1 }, { unique: true, partialFilterExpression: { ghl: { $type: "string" } } });
+AccountSchema.index({ ghl: 1 }, { partialFilterExpression: { ghl: { $type: "string" } } });
 AccountSchema.index({ "ig_oauth.ig_user_id": 1 }, { sparse: true });
 
 module.exports = mongoose.model("Account", AccountSchema);
