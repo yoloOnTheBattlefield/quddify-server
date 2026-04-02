@@ -259,7 +259,10 @@ router.post("/conversation", async (req, res) => {
 
     // Build the update payload
     const update = {};
-    if (conversation) update.chat_memory = conversation;
+    if (conversation) {
+      update.chat_memory = conversation;
+      update.last_conversation_at = new Date();
+    }
 
     // Find existing lead by contact_id, or create if new
     let lead = await Lead.findOne({ contact_id });
@@ -273,6 +276,7 @@ router.post("/conversation", async (req, res) => {
         ? await findMatchingOutboundLead(ghlLocationId, { first_name, last_name, email })
         : null;
 
+      const now = new Date();
       lead = await Lead.create({
         first_name: first_name || null,
         last_name: last_name || null,
@@ -283,15 +287,22 @@ router.post("/conversation", async (req, res) => {
         ...(email && { email }),
         ...(outboundMatch && { outbound_lead_id: outboundMatch._id }),
         ...update,
+        ...(conversation && { first_conversation_at: now, conversation_count: 1 }),
       });
 
       logger.info({ leadId: lead._id, contact_id }, "GHL conversation webhook: new lead created");
       return res.json({ success: true, action: "created", lead_id: lead._id });
     }
 
-    // Update existing lead with chat_memory
+    // Update existing lead with chat_memory + conversation timestamp
     if (Object.keys(update).length > 0) {
-      await Lead.findByIdAndUpdate(lead._id, update);
+      if (!lead.first_conversation_at) {
+        update.first_conversation_at = new Date();
+      }
+      await Lead.findByIdAndUpdate(lead._id, {
+        $set: update,
+        $inc: { conversation_count: 1 },
+      });
     }
 
     logger.info({ leadId: lead._id, contact_id }, "GHL conversation webhook: chat_memory updated");

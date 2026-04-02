@@ -438,6 +438,90 @@ describe("POST /api/ghl/conversation", () => {
   });
 });
 
+describe("POST /api/ghl/conversation — timestamp tracking", () => {
+  it("sets first_conversation_at and last_conversation_at on new lead", async () => {
+    const before = new Date();
+    await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_ts_new",
+      first_name: "Timestamp",
+      location: { id: ghl },
+      customData: { conversation: "\nBot: hi\nUser: hello" },
+    });
+
+    const lead = await Lead.findOne({ contact_id: "ghl_ts_new" });
+    expect(lead.first_conversation_at).toBeTruthy();
+    expect(lead.last_conversation_at).toBeTruthy();
+    expect(new Date(lead.first_conversation_at).getTime()).toBeGreaterThanOrEqual(before.getTime());
+    expect(lead.conversation_count).toBe(1);
+  });
+
+  it("increments conversation_count on subsequent updates", async () => {
+    await Lead.create({
+      contact_id: "ghl_ts_inc",
+      account_id: account._id.toString(),
+      first_name: "Counter",
+      date_created: new Date().toISOString(),
+      first_conversation_at: new Date("2026-03-01"),
+      last_conversation_at: new Date("2026-03-01"),
+      conversation_count: 5,
+    });
+
+    await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_ts_inc",
+      location: { id: ghl },
+      customData: { conversation: "\nBot: updated\nUser: yes" },
+    });
+
+    const lead = await Lead.findOne({ contact_id: "ghl_ts_inc" });
+    expect(lead.conversation_count).toBe(6);
+    expect(new Date(lead.last_conversation_at).getTime()).toBeGreaterThan(new Date("2026-03-01").getTime());
+    // first_conversation_at should NOT change
+    expect(new Date(lead.first_conversation_at).getTime()).toBe(new Date("2026-03-01").getTime());
+  });
+
+  it("sets first_conversation_at on existing lead if missing", async () => {
+    await Lead.create({
+      contact_id: "ghl_ts_missing",
+      account_id: account._id.toString(),
+      first_name: "NoFirst",
+      date_created: new Date().toISOString(),
+      conversation_count: 0,
+    });
+
+    await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_ts_missing",
+      location: { id: ghl },
+      customData: { conversation: "\nBot: hello\nUser: hi" },
+    });
+
+    const lead = await Lead.findOne({ contact_id: "ghl_ts_missing" });
+    expect(lead.first_conversation_at).toBeTruthy();
+    expect(lead.last_conversation_at).toBeTruthy();
+    expect(lead.conversation_count).toBe(1);
+  });
+
+  it("does NOT update timestamps when no conversation in payload", async () => {
+    const fixedDate = new Date("2026-03-15");
+    await Lead.create({
+      contact_id: "ghl_ts_noconv",
+      account_id: account._id.toString(),
+      first_name: "NoConv",
+      date_created: new Date().toISOString(),
+      last_conversation_at: fixedDate,
+      conversation_count: 3,
+    });
+
+    await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_ts_noconv",
+      location: { id: ghl },
+    });
+
+    const lead = await Lead.findOne({ contact_id: "ghl_ts_noconv" });
+    expect(lead.conversation_count).toBe(3); // unchanged
+    expect(new Date(lead.last_conversation_at).getTime()).toBe(fixedDate.getTime()); // unchanged
+  });
+});
+
 describe("POST /api/ghl/webhook — account_id resolution", () => {
   it("stores CRM account ObjectId instead of GHL location ID on new lead", async () => {
     const res = await request(app)

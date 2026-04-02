@@ -35,6 +35,10 @@ const LeadSchema = new mongoose.Schema(
     utm_source: { type: String, default: null },
     utm_medium: { type: String, default: null },
     utm_campaign: { type: String, default: null },
+    // conversation timestamps
+    last_conversation_at: { type: Date, default: null },
+    first_conversation_at: { type: Date, default: null },
+    conversation_count: { type: Number, default: 0 },
     // additional emails for matching (Stripe, etc.)
     emails: [{ type: String }],
   },

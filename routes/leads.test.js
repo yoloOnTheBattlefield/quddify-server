@@ -4,6 +4,7 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 const request = require("supertest");
 
 const Lead = require("../models/Lead");
+const OutboundLead = require("../models/OutboundLead");
 const leadsRouter = require("./leads");
 
 let mongoServer;
@@ -32,11 +33,12 @@ afterAll(async () => {
 
 afterEach(async () => {
   await Lead.deleteMany({});
+  await OutboundLead.deleteMany({});
 });
 
 function createLead(overrides = {}) {
   return Lead.create({
-    account_id: ghl,
+    account_id: accountId.toString(),
     first_name: "Test",
     last_name: "User",
     date_created: new Date().toISOString(),
@@ -302,5 +304,96 @@ describe("GET /api/leads/:id/ghl-conversation", () => {
 
     const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /api/leads/:id — outbound lead population", () => {
+  it("populates outbound lead fields when linked", async () => {
+    const ob = await OutboundLead.create({
+      account_id: accountId,
+      username: "outbound_user",
+      fullName: "Outbound User",
+      followingKey: "outbound_user::scrape",
+      followersCount: 5000,
+      bio: "Coach & Consultant",
+      profileLink: "https://www.instagram.com/outbound_user/",
+      isMessaged: true,
+      dmDate: new Date("2026-03-15"),
+      replied: true,
+      replied_at: new Date("2026-03-16"),
+      booked: false,
+      source: "jeremyleeminer",
+    });
+
+    const lead = await createLead({
+      first_name: "Linked",
+      outbound_lead_id: ob._id,
+    });
+
+    const res = await request(app).get(`/api/leads/${lead._id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.outbound_lead_id).toBeTruthy();
+    expect(res.body.outbound_lead_id.username).toBe("outbound_user");
+    expect(res.body.outbound_lead_id.fullName).toBe("Outbound User");
+    expect(res.body.outbound_lead_id.followersCount).toBe(5000);
+    expect(res.body.outbound_lead_id.isMessaged).toBe(true);
+    expect(res.body.outbound_lead_id.dmDate).toBeTruthy();
+    expect(res.body.outbound_lead_id.replied).toBe(true);
+    expect(res.body.outbound_lead_id.replied_at).toBeTruthy();
+    expect(res.body.outbound_lead_id.source).toBe("jeremyleeminer");
+  });
+
+  it("returns null outbound_lead_id when not linked", async () => {
+    const lead = await createLead({ first_name: "NoLink" });
+
+    const res = await request(app).get(`/api/leads/${lead._id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.outbound_lead_id).toBeNull();
+  });
+
+  it("does not leak sensitive outbound fields", async () => {
+    const ob = await OutboundLead.create({
+      account_id: accountId,
+      username: "secret_user",
+      fullName: "Secret",
+      followingKey: "secret_user::scrape",
+      message: "Hey, this is the DM I sent you", // should not be in response
+      qualified: true,
+      unqualified_reason: null,
+    });
+
+    const lead = await createLead({ outbound_lead_id: ob._id });
+    const res = await request(app).get(`/api/leads/${lead._id}`);
+
+    // Only selected fields should be present
+    expect(res.body.outbound_lead_id.username).toBe("secret_user");
+    expect(res.body.outbound_lead_id.message).toBeUndefined();
+    expect(res.body.outbound_lead_id.qualified).toBeUndefined();
+    expect(res.body.outbound_lead_id.unqualified_reason).toBeUndefined();
+  });
+});
+
+describe("Lead conversation timestamps", () => {
+  it("stores conversation_count, first_conversation_at, last_conversation_at", async () => {
+    const lead = await createLead({
+      first_conversation_at: new Date("2026-03-01"),
+      last_conversation_at: new Date("2026-04-01"),
+      conversation_count: 15,
+    });
+
+    const res = await request(app).get(`/api/leads/${lead._id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.first_conversation_at).toBeTruthy();
+    expect(res.body.last_conversation_at).toBeTruthy();
+    expect(res.body.conversation_count).toBe(15);
+  });
+
+  it("defaults conversation fields to null/0", async () => {
+    const lead = await createLead();
+
+    const res = await request(app).get(`/api/leads/${lead._id}`);
+    expect(res.body.first_conversation_at).toBeNull();
+    expect(res.body.last_conversation_at).toBeNull();
+    expect(res.body.conversation_count).toBe(0);
   });
 });

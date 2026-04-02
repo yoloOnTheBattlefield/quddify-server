@@ -91,7 +91,9 @@ router.get("/:id", async (req, res) => {
     if (req.user?.role !== 0) {
       filter.account_id = req.account._id.toString();
     }
-    const lead = await Lead.findOne(filter).lean();
+    const lead = await Lead.findOne(filter)
+      .populate("outbound_lead_id", "username fullName bio followersCount profileLink isMessaged dmDate replied replied_at booked booked_at ig_thread_id source")
+      .lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
     res.json(lead);
   } catch (error) {
