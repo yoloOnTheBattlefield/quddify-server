@@ -637,4 +637,119 @@ describe("processTick integration", () => {
     const tasks = await Task.find({ campaign_id: campaign._id });
     expect(tasks).toHaveLength(0);
   });
+
+  it("auto-pauses campaign after 5 minutes with no online senders", async () => {
+    const oa = await OutboundAccount.create({
+      account_id: accountId,
+      username: "autopause_sender",
+      status: "ready",
+    });
+    // Sender is offline
+    await SenderAccount.create({
+      account_id: accountId,
+      ig_username: "autopause_sender",
+      outbound_account_id: oa._id,
+      status: "offline",
+      last_seen: new Date(Date.now() - 120_000),
+    });
+
+    const campaign = await Campaign.create({
+      account_id: accountId,
+      name: "Auto-Pause Campaign",
+      mode: "auto",
+      status: "active",
+      messages: ["Hi"],
+      outbound_account_ids: [oa._id],
+      // no_senders_since set 6 minutes ago — should trigger auto-pause
+      no_senders_since: new Date(Date.now() - 6 * 60 * 1000),
+      stats: { total: 1, pending: 1, queued: 0, sent: 0, failed: 0, skipped: 0 },
+      schedule: { active_hours_start: 0, active_hours_end: 24, timezone: "UTC", skip_active_hours: true },
+    });
+
+    await runOneTick();
+
+    const updated = await Campaign.findById(campaign._id);
+    expect(updated.status).toBe("paused");
+    expect(updated.no_senders_since).toBeNull();
+  });
+
+  it("sets no_senders_since on first tick with no online senders", async () => {
+    const oa = await OutboundAccount.create({
+      account_id: accountId,
+      username: "first_offline_sender",
+      status: "ready",
+    });
+    await SenderAccount.create({
+      account_id: accountId,
+      ig_username: "first_offline_sender",
+      outbound_account_id: oa._id,
+      status: "offline",
+      last_seen: new Date(Date.now() - 120_000),
+    });
+
+    const campaign = await Campaign.create({
+      account_id: accountId,
+      name: "Track Offline Campaign",
+      mode: "auto",
+      status: "active",
+      messages: ["Hi"],
+      outbound_account_ids: [oa._id],
+      no_senders_since: null,
+      stats: { total: 1, pending: 1, queued: 0, sent: 0, failed: 0, skipped: 0 },
+      schedule: { active_hours_start: 0, active_hours_end: 24, timezone: "UTC", skip_active_hours: true },
+    });
+
+    await runOneTick();
+
+    const updated = await Campaign.findById(campaign._id);
+    // Should still be active but with no_senders_since set
+    expect(updated.status).toBe("active");
+    expect(updated.no_senders_since).toBeTruthy();
+  });
+
+  it("clears no_senders_since when a sender comes back online", async () => {
+    const oa = await OutboundAccount.create({
+      account_id: accountId,
+      username: "comeback_sender",
+      status: "ready",
+    });
+    // Sender is online
+    await SenderAccount.create({
+      account_id: accountId,
+      ig_username: "comeback_sender",
+      outbound_account_id: oa._id,
+      status: "online",
+      last_seen: new Date(),
+    });
+
+    const campaign = await Campaign.create({
+      account_id: accountId,
+      name: "Comeback Campaign",
+      mode: "auto",
+      status: "active",
+      messages: ["Hi {{username}}"],
+      outbound_account_ids: [oa._id],
+      // Was tracking no senders, but now one is online
+      no_senders_since: new Date(Date.now() - 2 * 60 * 1000),
+      stats: { total: 1, pending: 1, queued: 0, sent: 0, failed: 0, skipped: 0 },
+      schedule: { active_hours_start: 0, active_hours_end: 24, timezone: "UTC", skip_active_hours: true },
+    });
+
+    const ol = await OutboundLead.create({
+      account_id: accountId,
+      followingKey: "comeback_target",
+      username: "comeback_target",
+    });
+    await CampaignLead.create({
+      campaign_id: campaign._id,
+      outbound_lead_id: ol._id,
+      status: "pending",
+    });
+
+    await runOneTick();
+
+    const updated = await Campaign.findById(campaign._id);
+    expect(updated.status).toBe("active");
+    expect(updated.no_senders_since).toBeNull();
+  });
 });

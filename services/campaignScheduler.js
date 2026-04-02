@@ -326,7 +326,29 @@ async function processTick() {
       // Count only online senders for delay calculation — avoids
       // cramming messages when some senders are offline
       const onlineSenders = allSenders.filter((s) => s.status === "online");
-      if (onlineSenders.length === 0) continue;
+      if (onlineSenders.length === 0) {
+        // Track how long there have been no online senders
+        if (!campaign.no_senders_since) {
+          await Campaign.findByIdAndUpdate(campaign._id, { $set: { no_senders_since: new Date() } });
+        } else if (Date.now() - new Date(campaign.no_senders_since).getTime() >= 5 * 60 * 1000) {
+          // 5 minutes with no online senders — auto-pause
+          await Campaign.findByIdAndUpdate(campaign._id, {
+            $set: { status: "paused", no_senders_since: null, burst_sent_in_group: 0, burst_break_until: null },
+          });
+          logger.info(`[scheduler] Auto-paused campaign "${campaign.name}" — no online senders for 5+ minutes`);
+          emitToAccount(campaign.account_id.toString(), "campaign:auto-paused", {
+            campaign_id: campaign._id.toString(),
+            campaign_name: campaign.name,
+            reason: "No online senders for 5 minutes",
+          });
+        }
+        continue;
+      }
+
+      // Senders are online — clear the no-senders timer
+      if (campaign.no_senders_since) {
+        await Campaign.findByIdAndUpdate(campaign._id, { $set: { no_senders_since: null } });
+      }
 
       // Test mode: any online sender with test_mode skips all pacing/limit checks
       const isTestMode = onlineSenders.some((s) => s.test_mode);

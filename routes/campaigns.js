@@ -586,6 +586,7 @@ router.post("/:id/start", async (req, res) => {
     campaign.status = "active";
     campaign.burst_sent_in_group = 0;
     campaign.burst_break_until = null;
+    campaign.no_senders_since = null;
     // Set warmup start date on first activation (don't reset on resume)
     if (campaign.warmup_days > 0 && !campaign.warmup_start_date) {
       campaign.warmup_start_date = new Date();

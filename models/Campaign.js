@@ -54,6 +54,7 @@ const CampaignSchema = new mongoose.Schema(
     last_message_index: { type: Number, default: 0 },
     burst_sent_in_group: { type: Number, default: 0 },
     burst_break_until: { type: Date, default: null },
+    no_senders_since: { type: Date, default: null },
     ai_personalization: {
       enabled: { type: Boolean, default: false },
       prompt: { type: String, default: null },
