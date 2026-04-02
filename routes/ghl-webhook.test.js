@@ -77,7 +77,7 @@ describe("POST /api/ghl/webhook", () => {
     const lead = await Lead.findOne({ contact_id: "ghl_c1" });
     expect(lead).toBeTruthy();
     expect(lead.first_name).toBe("John");
-    expect(lead.account_id).toBe(ghl);
+    expect(lead.account_id).toBe(account._id.toString());
   });
 
   it("fires Telegram notification on new lead", async () => {
@@ -361,5 +361,190 @@ describe("POST /api/ghl/conversation", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.action).toBe("updated");
+  });
+
+  it("reads conversation from customData (real GHL payload structure)", async () => {
+    const res = await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_conv_custom",
+      first_name: "Drillsthenics",
+      last_name: "| Learn Calisthenics",
+      location: { id: ghl },
+      customData: {
+        contact_id: "ghl_conv_custom",
+        conversation: "\nBot: what do you sell?\nUser: coaching",
+        last_user_message: "coaching",
+        last_bot_reply: "what do you sell?",
+        manual_reply: "",
+        tags: "",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe("created");
+
+    const lead = await Lead.findOne({ contact_id: "ghl_conv_custom" });
+    expect(lead.chat_memory).toBe("\nBot: what do you sell?\nUser: coaching");
+    expect(lead.first_name).toBe("Drillsthenics");
+  });
+
+  it("falls back to top-level chat_memory if customData.conversation is missing", async () => {
+    const res = await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_conv_fallback",
+      first_name: "Fallback",
+      location: { id: ghl },
+      chat_memory: "\nBot: hi\nUser: hello",
+      customData: {
+        contact_id: "ghl_conv_fallback",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe("created");
+
+    const lead = await Lead.findOne({ contact_id: "ghl_conv_fallback" });
+    expect(lead.chat_memory).toBe("\nBot: hi\nUser: hello");
+  });
+
+  it("reads contact_id from customData when not at top level", async () => {
+    const res = await request(app).post("/api/ghl/conversation").send({
+      first_name: "NoTopId",
+      location: { id: ghl },
+      customData: {
+        contact_id: "ghl_conv_nested_id",
+        conversation: "\nBot: test\nUser: test",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe("created");
+
+    const lead = await Lead.findOne({ contact_id: "ghl_conv_nested_id" });
+    expect(lead).not.toBeNull();
+  });
+
+  it("resolves GHL location ID to CRM account ObjectId on new lead", async () => {
+    const res = await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_conv_acct",
+      first_name: "AccountTest",
+      location: { id: ghl },
+      customData: {
+        conversation: "\nBot: hi\nUser: hi",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const lead = await Lead.findOne({ contact_id: "ghl_conv_acct" });
+    expect(lead.account_id).toBe(account._id.toString());
+  });
+});
+
+describe("POST /api/ghl/webhook — account_id resolution", () => {
+  it("stores CRM account ObjectId instead of GHL location ID on new lead", async () => {
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "ResolveTest",
+        contact_id: "ghl_resolve_1",
+        location: { id: ghl },
+      });
+
+    expect(res.body.action).toBe("created");
+    const lead = await Lead.findOne({ contact_id: "ghl_resolve_1" });
+    expect(lead.account_id).toBe(account._id.toString());
+  });
+
+  it("falls back to GHL location ID when no matching Account exists", async () => {
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "NoAccount",
+        contact_id: "ghl_resolve_2",
+        location: { id: "unknown_ghl_location" },
+      });
+
+    expect(res.body.action).toBe("created");
+    const lead = await Lead.findOne({ contact_id: "ghl_resolve_2" });
+    expect(lead.account_id).toBe("unknown_ghl_location");
+  });
+
+  it("auto-heals stale GHL account_id on existing lead", async () => {
+    // Lead was created with raw GHL location ID (pre-fix)
+    await Lead.create({
+      contact_id: "ghl_heal_1",
+      account_id: ghl, // raw GHL string
+      first_name: "Stale",
+      date_created: "2026-03-20",
+    });
+
+    await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        contact_id: "ghl_heal_1",
+        location: { id: ghl },
+        tags: "ghosted",
+      });
+
+    const lead = await Lead.findOne({ contact_id: "ghl_heal_1" });
+    expect(lead.account_id).toBe(account._id.toString());
+  });
+
+  it("syncs booked_at to outbound lead when linked", async () => {
+    const ob = await OutboundLead.create({
+      account_id: account._id,
+      username: "sync_ob",
+      fullName: "Sync Test",
+      followingKey: "sync_ob::scrape",
+    });
+
+    await Lead.create({
+      contact_id: "ghl_sync_1",
+      account_id: account._id.toString(),
+      first_name: "Sync",
+      last_name: "Test",
+      date_created: "2026-03-20",
+      outbound_lead_id: ob._id,
+    });
+
+    await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        contact_id: "ghl_sync_1",
+        location: { id: ghl },
+        tags: "lead_booked",
+      });
+
+    const updatedOb = await OutboundLead.findById(ob._id);
+    expect(updatedOb.booked).toBe(true);
+    expect(updatedOb.booked_at).toBeTruthy();
+  });
+
+  it("syncs link_sent_at to outbound lead when linked", async () => {
+    const ob = await OutboundLead.create({
+      account_id: account._id,
+      username: "sync_link_ob",
+      fullName: "Link Test",
+      followingKey: "sync_link_ob::scrape",
+    });
+
+    await Lead.create({
+      contact_id: "ghl_sync_2",
+      account_id: account._id.toString(),
+      first_name: "Link",
+      last_name: "Test",
+      date_created: "2026-03-20",
+      outbound_lead_id: ob._id,
+    });
+
+    await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        contact_id: "ghl_sync_2",
+        location: { id: ghl },
+        tags: "link_sent",
+      });
+
+    const updatedOb = await OutboundLead.findById(ob._id);
+    expect(updatedOb.link_sent).toBe(true);
+    expect(updatedOb.link_sent_at).toBeTruthy();
   });
 });

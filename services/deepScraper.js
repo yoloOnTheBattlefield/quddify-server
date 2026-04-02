@@ -1072,6 +1072,10 @@ async function upsertLead(job, username, data, seeds) {
   // Store source as the first clean seed username (no @, no comma-separation)
   const source = cleanSeeds[0];
 
+  // Check if lead was already messaged/replied/booked — never downgrade qualified
+  const existing = await OutboundLead.findOne({ username, account_id: job.account_id }).lean();
+  const alreadyActioned = existing && (existing.isMessaged || existing.replied || existing.booked);
+
   const update = {
     $set: {
       followingKey: `${username}::deep-scrape`,
@@ -1085,8 +1089,6 @@ async function upsertLead(job, username, data, seeds) {
       email: data.email || null,
       source,
       scrapeDate: new Date(),
-      qualified: data.qualified,
-      unqualified_reason: data.unqualified_reason || null,
       ai_processed: data.ai_processed || false,
       metadata: {
         source,
@@ -1098,6 +1100,12 @@ async function upsertLead(job, username, data, seeds) {
       source_seeds: { $each: cleanSeeds },
     },
   };
+
+  // Never downgrade qualified on leads that have been messaged/replied/booked
+  if (!alreadyActioned) {
+    update.$set.qualified = data.qualified;
+    update.$set.unqualified_reason = data.unqualified_reason || null;
+  }
 
   if (data.promptId) {
     update.$set.promptId = data.promptId;

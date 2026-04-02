@@ -169,6 +169,61 @@ describe("GET /api/outbound-leads/stats", () => {
     expect(res.body.booked).toBe(1);
     expect(res.body.contract_value).toBe(500);
   });
+
+  it("default stats exclude disqualified leads (same as list)", async () => {
+    await createLead({ username: "qual", followingKey: "qual", qualified: true, isMessaged: true });
+    await createLead({ username: "unqual", followingKey: "unqual", qualified: false });
+    await createLead({ username: "nullqual", followingKey: "nullqual", qualified: null });
+
+    const res = await request(app).get("/api/outbound-leads/stats");
+    // Default: qualified != false → should count qual + nullqual = 2
+    expect(res.body.total).toBe(2);
+    expect(res.body.messaged).toBe(1);
+  });
+
+  it("stats with qualified=true only counts qualified leads", async () => {
+    await createLead({ username: "q1", followingKey: "q1", qualified: true, isMessaged: true });
+    await createLead({ username: "q2", followingKey: "q2", qualified: null, isMessaged: true });
+    await createLead({ username: "q3", followingKey: "q3", qualified: false });
+
+    const res = await request(app).get("/api/outbound-leads/stats?qualified=true");
+    expect(res.body.total).toBe(1);
+    expect(res.body.messaged).toBe(1);
+  });
+
+  it("stats with qualified=false only counts disqualified leads", async () => {
+    await createLead({ username: "q1", followingKey: "q1", qualified: true });
+    await createLead({ username: "q2", followingKey: "q2", qualified: false, isMessaged: true });
+    await createLead({ username: "q3", followingKey: "q3", qualified: false });
+
+    const res = await request(app).get("/api/outbound-leads/stats?qualified=false");
+    expect(res.body.total).toBe(2);
+    expect(res.body.messaged).toBe(1);
+  });
+
+  it("stats with qualified=all counts all leads", async () => {
+    await createLead({ username: "q1", followingKey: "q1", qualified: true });
+    await createLead({ username: "q2", followingKey: "q2", qualified: false });
+    await createLead({ username: "q3", followingKey: "q3", qualified: null });
+
+    const res = await request(app).get("/api/outbound-leads/stats?qualified=all");
+    expect(res.body.total).toBe(3);
+  });
+
+  it("stats and list use same filter — counts match", async () => {
+    await createLead({ username: "vis1", followingKey: "vis1", qualified: true });
+    await createLead({ username: "vis2", followingKey: "vis2", qualified: null });
+    await createLead({ username: "hid1", followingKey: "hid1", qualified: false });
+
+    const [statsRes, listRes] = await Promise.all([
+      request(app).get("/api/outbound-leads/stats"),
+      request(app).get("/api/outbound-leads"),
+    ]);
+
+    // Both should exclude qualified=false by default
+    expect(statsRes.body.total).toBe(listRes.body.pagination.total);
+    expect(statsRes.body.total).toBe(2);
+  });
 });
 
 describe("GET /api/outbound-leads/:id", () => {
