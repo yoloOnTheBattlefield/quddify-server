@@ -178,6 +178,8 @@ async function processUpload(fileBuffer, filename, promptId, accountId) {
           isMessaged: toBoolean(row["Messaged?"]),
           dmDate: toDate(row["DM Date"]),
           message: row["Message"] || null,
+          qualified: true,
+          ai_processed: true,
           metadata: {
             source: "nodejs",
             executionId,

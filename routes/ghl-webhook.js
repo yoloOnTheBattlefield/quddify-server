@@ -74,20 +74,21 @@ router.post("/webhook", async (req, res) => {
       return res.status(400).json({ error: "Missing contact_id" });
     }
 
-    const accountId = location?.id || null;
-    if (!accountId) {
+    const ghlLocationId = location?.id || null;
+    if (!ghlLocationId) {
       return res.status(400).json({ error: "Missing location.id" });
     }
 
-    // Resolve the account (needed for Telegram config)
-    const account = await Account.findOne({ ghl: accountId });
+    // Resolve GHL location ID → CRM account ObjectId
+    const account = await Account.findOne({ ghl: ghlLocationId });
+    const accountId = account ? account._id.toString() : ghlLocationId;
 
     // ---- Find existing lead by contact_id ----
     const existing = await Lead.findOne({ contact_id });
 
     if (!existing) {
       // ---- New lead: try to cross-reference with outbound leads ----
-      const outboundMatch = await findMatchingOutboundLead(accountId, { first_name, last_name, email });
+      const outboundMatch = await findMatchingOutboundLead(ghlLocationId, { first_name, last_name, email });
 
       const lead = await Lead.create({
         first_name: first_name || null,
@@ -132,9 +133,15 @@ router.post("/webhook", async (req, res) => {
       });
     }
 
+    // Fix account_id if it was stored as a GHL location ID
+    if (existing.account_id !== accountId) {
+      await Lead.findByIdAndUpdate(existing._id, { account_id: accountId });
+      existing.account_id = accountId;
+    }
+
     // ---- Existing lead without outbound link: try to cross-reference now ----
     if (!existing.outbound_lead_id) {
-      const outboundMatch = await findMatchingOutboundLead(accountId, {
+      const outboundMatch = await findMatchingOutboundLead(ghlLocationId, {
         first_name: existing.first_name,
         last_name: existing.last_name,
         email: existing.email || email,
@@ -232,14 +239,23 @@ router.post("/webhook", async (req, res) => {
 // POST /api/ghl/conversation — receives chat_memory from GHL workflow webhook
 router.post("/conversation", async (req, res) => {
   try {
-    const { contact_id, conversation, last_user_message, last_bot_reply, manual_reply, tags } = req.body;
+    const custom = req.body.customData || {};
+    const contact_id = req.body.contact_id || custom.contact_id;
+    const conversation = custom.conversation || req.body.chat_memory || req.body.conversation;
+    const tags = custom.tags || req.body.tags;
     const { first_name, last_name, email, location } = req.body;
+
+    logger.info({ body: req.body }, "GHL conversation webhook: incoming payload");
 
     if (!contact_id) {
       return res.status(400).json({ error: "Missing contact_id" });
     }
 
-    const accountId = location?.id || null;
+    const ghlLocationId = location?.id || null;
+
+    // Resolve GHL location ID → CRM account ObjectId
+    const account = ghlLocationId ? await Account.findOne({ ghl: ghlLocationId }) : null;
+    const accountId = account ? account._id.toString() : ghlLocationId;
 
     // Build the update payload
     const update = {};
@@ -253,7 +269,9 @@ router.post("/conversation", async (req, res) => {
         return res.status(400).json({ error: "Missing location.id for new lead" });
       }
 
-      const outboundMatch = await findMatchingOutboundLead(accountId, { first_name, last_name, email });
+      const outboundMatch = ghlLocationId
+        ? await findMatchingOutboundLead(ghlLocationId, { first_name, last_name, email })
+        : null;
 
       lead = await Lead.create({
         first_name: first_name || null,

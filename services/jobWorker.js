@@ -243,6 +243,8 @@ async function processJob(jobId) {
                   isMessaged: mapped.isMessaged,
                   dmDate: mapped.dmDate,
                   message: mapped.message || null,
+                  qualified: true,
+                  ai_processed: true,
                   metadata: {
                     source: "nodejs",
                     executionId,

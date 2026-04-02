@@ -258,6 +258,7 @@ router.get("/stats", async (req, res) => {
     const af = { account_id: req.account._id };
     if (qualified === "true") af.qualified = true;
     else if (qualified === "false") af.qualified = false;
+    else if (qualified !== "all") af.qualified = { $ne: false };
 
     const [total, messaged, replied, booked, contractSum] = await Promise.all([
       OutboundLead.countDocuments(af),
