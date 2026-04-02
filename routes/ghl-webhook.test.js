@@ -286,3 +286,80 @@ describe("POST /api/ghl/webhook", () => {
     expect(lead.link_sent_at).toBeTruthy();
   });
 });
+
+describe("POST /api/ghl/conversation", () => {
+  it("returns 400 when contact_id is missing", async () => {
+    const res = await request(app).post("/api/ghl/conversation").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Missing contact_id");
+  });
+
+  it("creates a new lead with chat_memory", async () => {
+    const res = await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_conv_1",
+      first_name: "John",
+      last_name: "Doe",
+      conversation: "\nUser: Hello\nBot: Hi there!",
+      location: { id: ghl },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.action).toBe("created");
+
+    const lead = await Lead.findOne({ contact_id: "ghl_conv_1" });
+    expect(lead).not.toBeNull();
+    expect(lead.chat_memory).toBe("\nUser: Hello\nBot: Hi there!");
+    expect(lead.first_name).toBe("John");
+    expect(lead.source).toBe("ghl");
+  });
+
+  it("updates chat_memory on existing lead", async () => {
+    await Lead.create({
+      contact_id: "ghl_conv_2",
+      account_id: ghl,
+      first_name: "Jane",
+      date_created: new Date().toISOString(),
+      chat_memory: "\nUser: Hi\nBot: Hello!",
+    });
+
+    const res = await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_conv_2",
+      conversation: "\nUser: Hi\nBot: Hello!\nUser: I want to book\nBot: Here is the link",
+      location: { id: ghl },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe("updated");
+
+    const lead = await Lead.findOne({ contact_id: "ghl_conv_2" });
+    expect(lead.chat_memory).toContain("I want to book");
+  });
+
+  it("requires location.id for new leads", async () => {
+    const res = await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_conv_3",
+      conversation: "\nUser: test\nBot: test",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Missing location.id for new lead");
+  });
+
+  it("handles missing conversation field gracefully", async () => {
+    await Lead.create({
+      contact_id: "ghl_conv_4",
+      account_id: ghl,
+      first_name: "Empty",
+      date_created: new Date().toISOString(),
+    });
+
+    const res = await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_conv_4",
+      location: { id: ghl },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe("updated");
+  });
+});

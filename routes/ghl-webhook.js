@@ -229,4 +229,59 @@ router.post("/webhook", async (req, res) => {
   }
 });
 
+// POST /api/ghl/conversation — receives chat_memory from GHL workflow webhook
+router.post("/conversation", async (req, res) => {
+  try {
+    const { contact_id, conversation, last_user_message, last_bot_reply, manual_reply, tags } = req.body;
+    const { first_name, last_name, email, location } = req.body;
+
+    if (!contact_id) {
+      return res.status(400).json({ error: "Missing contact_id" });
+    }
+
+    const accountId = location?.id || null;
+
+    // Build the update payload
+    const update = {};
+    if (conversation) update.chat_memory = conversation;
+
+    // Find existing lead by contact_id, or create if new
+    let lead = await Lead.findOne({ contact_id });
+
+    if (!lead) {
+      if (!accountId) {
+        return res.status(400).json({ error: "Missing location.id for new lead" });
+      }
+
+      const outboundMatch = await findMatchingOutboundLead(accountId, { first_name, last_name, email });
+
+      lead = await Lead.create({
+        first_name: first_name || null,
+        last_name: last_name || null,
+        contact_id,
+        date_created: new Date().toISOString(),
+        account_id: accountId,
+        source: "ghl",
+        ...(email && { email }),
+        ...(outboundMatch && { outbound_lead_id: outboundMatch._id }),
+        ...update,
+      });
+
+      logger.info({ leadId: lead._id, contact_id }, "GHL conversation webhook: new lead created");
+      return res.json({ success: true, action: "created", lead_id: lead._id });
+    }
+
+    // Update existing lead with chat_memory
+    if (Object.keys(update).length > 0) {
+      await Lead.findByIdAndUpdate(lead._id, update);
+    }
+
+    logger.info({ leadId: lead._id, contact_id }, "GHL conversation webhook: chat_memory updated");
+    return res.json({ success: true, action: "updated", lead_id: lead._id });
+  } catch (error) {
+    logger.error({ err: error }, "GHL conversation webhook error");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 module.exports = router;

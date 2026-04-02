@@ -100,6 +100,47 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+// get parsed GHL conversation for a lead
+router.get("/:id/ghl-conversation", async (req, res) => {
+  try {
+    const filter = { _id: req.params.id };
+    if (req.user?.role !== 0) {
+      filter.account_id = req.account.ghl || req.account._id.toString();
+    }
+    const lead = await Lead.findOne(filter).select("chat_memory").lean();
+    if (!lead) return res.status(404).json({ error: "Not found" });
+    if (!lead.chat_memory) return res.json({ messages: [], total: 0 });
+
+    // Parse chat_memory: format is "nUser: ...\nnBot: ..." or "\nUser: ...\nBot: ..."
+    const messages = [];
+    // Split on newline boundaries before User: or Bot: labels
+    const parts = lead.chat_memory.split(/\n+/).filter(Boolean);
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (trimmed.startsWith("User:")) {
+        messages.push({
+          _id: `ghl-${messages.length}`,
+          role: "user",
+          direction: "inbound",
+          text: trimmed.slice(5).trim(),
+        });
+      } else if (trimmed.startsWith("Bot:")) {
+        messages.push({
+          _id: `ghl-${messages.length}`,
+          role: "bot",
+          direction: "outbound",
+          text: trimmed.slice(4).trim(),
+        });
+      }
+    }
+
+    return res.json({ messages, total: messages.length });
+  } catch (error) {
+    logger.error("Get GHL conversation error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // create lead
 router.post("/", validate(leadCreateSchema), async (req, res) => {
   try {

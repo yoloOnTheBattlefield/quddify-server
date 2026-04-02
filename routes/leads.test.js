@@ -261,3 +261,46 @@ describe("DELETE /api/leads/:id", () => {
     expect(found).not.toBeNull();
   });
 });
+
+describe("GET /api/leads/:id/ghl-conversation", () => {
+  it("returns empty messages when no chat_memory", async () => {
+    const lead = await createLead();
+    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(0);
+    expect(res.body.total).toBe(0);
+  });
+
+  it("parses chat_memory into User/Bot messages", async () => {
+    const lead = await createLead({
+      chat_memory: "\nUser: Hello I need help\nBot: Hi! How can I assist you?\nUser: I want to book a call\nBot: Great, here is the link",
+    });
+
+    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(4);
+    expect(res.body.total).toBe(4);
+
+    expect(res.body.messages[0]).toMatchObject({ role: "user", direction: "inbound", text: "Hello I need help" });
+    expect(res.body.messages[1]).toMatchObject({ role: "bot", direction: "outbound", text: "Hi! How can I assist you?" });
+    expect(res.body.messages[2]).toMatchObject({ role: "user", direction: "inbound", text: "I want to book a call" });
+    expect(res.body.messages[3]).toMatchObject({ role: "bot", direction: "outbound", text: "Great, here is the link" });
+  });
+
+  it("returns 404 for nonexistent lead", async () => {
+    const res = await request(app).get(`/api/leads/${new mongoose.Types.ObjectId()}/ghl-conversation`);
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 for lead from another account", async () => {
+    const lead = await Lead.create({
+      account_id: "other_account",
+      first_name: "Foreign",
+      date_created: new Date().toISOString(),
+      chat_memory: "\nUser: hello\nBot: hi",
+    });
+
+    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
+    expect(res.status).toBe(404);
+  });
+});

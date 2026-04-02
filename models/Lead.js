@@ -26,6 +26,8 @@ const LeadSchema = new mongoose.Schema(
     closed_at: { type: Date, default: null }, // payment made
     // ai tags
     summary: { type: String, default: null },
+    // ghl conversation
+    chat_memory: { type: String, default: null },
     //calendly
     email: { type: String, default: null },
     questions_and_answers: { type: Array, default: [] },
