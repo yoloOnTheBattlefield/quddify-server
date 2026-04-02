@@ -4,6 +4,7 @@ const express = require("express");
 const multer = require("multer");
 const OutboundLead = require("../models/OutboundLead");
 const CampaignLead = require("../models/CampaignLead");
+const Lead = require("../models/Lead");
 const FollowUp = require("../models/FollowUp");
 const Campaign = require("../models/Campaign");
 const Prompt = require("../models/Prompt");
@@ -474,6 +475,36 @@ router.post("/mark-replied", async (req, res) => {
 router.get("/:id", async (req, res) => {
   const lead = await OutboundLead.findById(req.params.id).lean();
   if (!lead) return res.status(404).json({ error: "Not found" });
+
+  // Include linked inbound lead's GHL conversation if available
+  const inboundLead = await Lead.findOne({ outbound_lead_id: lead._id })
+    .select("_id chat_memory first_conversation_at last_conversation_at conversation_count ig_username contact_id")
+    .lean();
+  if (inboundLead) {
+    // Parse chat_memory into structured messages
+    const ghlMessages = [];
+    if (inboundLead.chat_memory) {
+      const parts = inboundLead.chat_memory.split(/\n+/).filter(Boolean);
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (trimmed.startsWith("User:")) {
+          ghlMessages.push({ _id: `ghl-${ghlMessages.length}`, direction: "inbound", message_text: trimmed.slice(5).trim() });
+        } else if (trimmed.startsWith("Bot:")) {
+          ghlMessages.push({ _id: `ghl-${ghlMessages.length}`, direction: "outbound", message_text: trimmed.slice(4).trim() });
+        }
+      }
+    }
+    lead.inbound_lead = {
+      _id: inboundLead._id,
+      ig_username: inboundLead.ig_username,
+      contact_id: inboundLead.contact_id,
+      first_conversation_at: inboundLead.first_conversation_at,
+      last_conversation_at: inboundLead.last_conversation_at,
+      conversation_count: inboundLead.conversation_count,
+      ghl_messages: ghlMessages,
+    };
+  }
+
   res.json(lead);
 });
 
