@@ -7,6 +7,7 @@ const leadCreateSchema = z.object({
     account_id: z.string().optional().nullable(),
     ig_username: z.string().optional().nullable(),
     email: z.string().email().optional().nullable(),
+    source: z.string().optional().nullable(),
   }).strip(),
   query: z.object({}).strip(),
   params: z.object({}).strip(),
