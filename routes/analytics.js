@@ -141,8 +141,8 @@ router.get("/", async (req, res) => {
     const filter = {};
     if (isAdmin && account_id) {
       filter.account_id = account_id;
-    } else if (!isAdmin && req.account.ghl) {
-      filter.account_id = req.account.ghl;
+    } else if (!isAdmin) {
+      filter.account_id = req.account._id.toString();
     }
     if (start_date || end_date) {
       filter.date_created = {};
@@ -1391,8 +1391,8 @@ function buildInboundFilter(req) {
   const filter = {};
   if (isAdmin && req.query.account_id) {
     filter.account_id = req.query.account_id;
-  } else if (req.account.ghl) {
-    filter.account_id = req.account.ghl;
+  } else if (!isAdmin) {
+    filter.account_id = req.account._id.toString();
   }
   if (start_date || end_date) {
     filter.date_created = {};

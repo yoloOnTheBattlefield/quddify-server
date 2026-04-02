@@ -22,7 +22,7 @@ router.get("/", async (req, res) => {
     } else if (account_id && req.user?.role === 0) {
       filter.account_id = account_id;
     } else {
-      filter.account_id = req.account.ghl || req.account._id.toString();
+      filter.account_id = req.account._id.toString();
     }
     if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
     if (status) {
@@ -89,7 +89,7 @@ router.get("/:id", async (req, res) => {
     const filter = { _id: req.params.id };
     // Admins (role 0) can view leads from any account
     if (req.user?.role !== 0) {
-      filter.account_id = req.account.ghl || req.account._id.toString();
+      filter.account_id = req.account._id.toString();
     }
     const lead = await Lead.findOne(filter).lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
@@ -105,7 +105,7 @@ router.get("/:id/ghl-conversation", async (req, res) => {
   try {
     const filter = { _id: req.params.id };
     if (req.user?.role !== 0) {
-      filter.account_id = req.account.ghl || req.account._id.toString();
+      filter.account_id = req.account._id.toString();
     }
     const lead = await Lead.findOne(filter).select("chat_memory").lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
@@ -166,7 +166,7 @@ router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
   try {
     const filter = { _id: req.params.id };
     if (req.user?.role !== 0) {
-      filter.account_id = req.account.ghl || req.account._id.toString();
+      filter.account_id = req.account._id.toString();
     }
     const lead = await Lead.findOneAndUpdate(
       filter,
@@ -202,7 +202,7 @@ router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
 // POST /leads/import — bulk import leads from Calendly CSV (parsed client-side)
 router.post("/import", async (req, res) => {
   try {
-    const accountId = req.account.ghl;
+    const accountId = req.account._id.toString();
     const { rows } = req.body;
 
     if (!Array.isArray(rows) || rows.length === 0) {
@@ -339,7 +339,7 @@ router.delete("/:id", async (req, res) => {
   try {
     const deleteFilter = { _id: req.params.id };
     if (req.user?.role !== 0) {
-      deleteFilter.account_id = req.account.ghl || req.account._id.toString();
+      deleteFilter.account_id = req.account._id.toString();
     }
     const lead = await Lead.findOneAndDelete(deleteFilter);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
