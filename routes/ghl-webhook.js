@@ -41,6 +41,15 @@ async function findMatchingOutboundLead(accountId, { first_name, last_name, emai
 
   const fullName = [first_name, last_name].filter(Boolean).join(" ").trim();
 
+  // Try exact username match first (most reliable — GHL often puts IG username as first_name)
+  if (first_name) {
+    const byUsername = await OutboundLead.findOne({
+      account_id: account._id,
+      username: { $regex: new RegExp(`^${escapeRegex(first_name.trim())}$`, "i") },
+    }).lean();
+    if (byUsername) return byUsername;
+  }
+
   // Try name-based partial match (same logic as outbound-leads search)
   if (fullName) {
     const byName = await OutboundLead.findOne({
