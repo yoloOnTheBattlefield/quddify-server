@@ -91,10 +91,18 @@ router.get("/:id", async (req, res) => {
     if (req.user?.role !== 0) {
       filter.account_id = req.account._id.toString();
     }
-    const lead = await Lead.findOne(filter)
-      .populate("outbound_lead_id", "username fullName bio followersCount profileLink isMessaged dmDate replied replied_at booked booked_at ig_thread_id source")
-      .lean();
+    const lead = await Lead.findOne(filter).lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
+
+    // Populate outbound lead details into a separate field (keep outbound_lead_id as the raw ID)
+    if (lead.outbound_lead_id) {
+      const OutboundLead = require("../models/OutboundLead");
+      const ob = await OutboundLead.findById(lead.outbound_lead_id)
+        .select("username fullName bio followersCount profileLink isMessaged dmDate replied replied_at booked booked_at ig_thread_id source")
+        .lean();
+      if (ob) lead.outbound_lead = ob;
+    }
+
     res.json(lead);
   } catch (error) {
     logger.error("Get lead error:", error);
