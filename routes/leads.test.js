@@ -308,7 +308,7 @@ describe("GET /api/leads/:id/ghl-conversation", () => {
 });
 
 describe("GET /api/leads/:id — outbound lead population", () => {
-  it("populates outbound lead fields when linked", async () => {
+  it("populates outbound lead into separate outbound_lead field", async () => {
     const ob = await OutboundLead.create({
       account_id: accountId,
       username: "outbound_user",
@@ -332,23 +332,30 @@ describe("GET /api/leads/:id — outbound lead population", () => {
 
     const res = await request(app).get(`/api/leads/${lead._id}`);
     expect(res.status).toBe(200);
-    expect(res.body.outbound_lead_id).toBeTruthy();
-    expect(res.body.outbound_lead_id.username).toBe("outbound_user");
-    expect(res.body.outbound_lead_id.fullName).toBe("Outbound User");
-    expect(res.body.outbound_lead_id.followersCount).toBe(5000);
-    expect(res.body.outbound_lead_id.isMessaged).toBe(true);
-    expect(res.body.outbound_lead_id.dmDate).toBeTruthy();
-    expect(res.body.outbound_lead_id.replied).toBe(true);
-    expect(res.body.outbound_lead_id.replied_at).toBeTruthy();
-    expect(res.body.outbound_lead_id.source).toBe("jeremyleeminer");
+
+    // outbound_lead_id stays as a raw ID string (not an object)
+    expect(typeof res.body.outbound_lead_id).toBe("string");
+    expect(res.body.outbound_lead_id).toBe(ob._id.toString());
+
+    // outbound_lead has the populated data
+    expect(res.body.outbound_lead).toBeTruthy();
+    expect(res.body.outbound_lead.username).toBe("outbound_user");
+    expect(res.body.outbound_lead.fullName).toBe("Outbound User");
+    expect(res.body.outbound_lead.followersCount).toBe(5000);
+    expect(res.body.outbound_lead.isMessaged).toBe(true);
+    expect(res.body.outbound_lead.dmDate).toBeTruthy();
+    expect(res.body.outbound_lead.replied).toBe(true);
+    expect(res.body.outbound_lead.replied_at).toBeTruthy();
+    expect(res.body.outbound_lead.source).toBe("jeremyleeminer");
   });
 
-  it("returns null outbound_lead_id when not linked", async () => {
+  it("returns null outbound_lead_id and no outbound_lead when not linked", async () => {
     const lead = await createLead({ first_name: "NoLink" });
 
     const res = await request(app).get(`/api/leads/${lead._id}`);
     expect(res.status).toBe(200);
     expect(res.body.outbound_lead_id).toBeNull();
+    expect(res.body.outbound_lead).toBeUndefined();
   });
 
   it("does not leak sensitive outbound fields", async () => {
@@ -357,7 +364,7 @@ describe("GET /api/leads/:id — outbound lead population", () => {
       username: "secret_user",
       fullName: "Secret",
       followingKey: "secret_user::scrape",
-      message: "Hey, this is the DM I sent you", // should not be in response
+      message: "Hey, this is the DM I sent you",
       qualified: true,
       unqualified_reason: null,
     });
@@ -365,11 +372,20 @@ describe("GET /api/leads/:id — outbound lead population", () => {
     const lead = await createLead({ outbound_lead_id: ob._id });
     const res = await request(app).get(`/api/leads/${lead._id}`);
 
-    // Only selected fields should be present
-    expect(res.body.outbound_lead_id.username).toBe("secret_user");
-    expect(res.body.outbound_lead_id.message).toBeUndefined();
-    expect(res.body.outbound_lead_id.qualified).toBeUndefined();
-    expect(res.body.outbound_lead_id.unqualified_reason).toBeUndefined();
+    expect(res.body.outbound_lead.username).toBe("secret_user");
+    expect(res.body.outbound_lead.message).toBeUndefined();
+    expect(res.body.outbound_lead.qualified).toBeUndefined();
+    expect(res.body.outbound_lead.unqualified_reason).toBeUndefined();
+  });
+
+  it("handles deleted outbound lead gracefully", async () => {
+    const deletedId = new mongoose.Types.ObjectId();
+    const lead = await createLead({ outbound_lead_id: deletedId });
+
+    const res = await request(app).get(`/api/leads/${lead._id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.outbound_lead_id).toBe(deletedId.toString());
+    expect(res.body.outbound_lead).toBeUndefined();
   });
 });
 

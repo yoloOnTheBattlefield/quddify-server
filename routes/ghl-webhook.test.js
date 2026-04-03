@@ -285,6 +285,103 @@ describe("POST /api/ghl/webhook", () => {
     expect(lead.outbound_lead_id.toString()).toBe(ob._id.toString());
     expect(lead.link_sent_at).toBeTruthy();
   });
+
+  it("links new lead by first_name matching outbound username (GHL sends IG handle as first_name)", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      username: "floraszivos",
+      fullName: "FLORA | Manifestation & Mindset",
+      followingKey: "floraszivos::scrape",
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "floraszivos",
+        last_name: "| Manifestation & Mindset",
+        contact_id: "ghl_username_match",
+        location: { id: ghl },
+      });
+
+    expect(res.body.action).toBe("created");
+    expect(res.body.cross_channel).toBe(true);
+
+    const lead = await Lead.findOne({ contact_id: "ghl_username_match" });
+    expect(lead.outbound_lead_id).toBeTruthy();
+  });
+
+  it("username match is case-insensitive", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      username: "SomeCamelCase",
+      fullName: "Some User",
+      followingKey: "SomeCamelCase::scrape",
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "somecamelcase",
+        contact_id: "ghl_case_match",
+        location: { id: ghl },
+      });
+
+    expect(res.body.cross_channel).toBe(true);
+  });
+
+  it("username match is exact (does not partial match)", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      username: "john_doe_fitness",
+      fullName: "John Doe",
+      followingKey: "john_doe_fitness::scrape",
+    });
+
+    // first_name "john" should NOT match username "john_doe_fitness"
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "john",
+        last_name: "Doe",
+        contact_id: "ghl_no_partial",
+        location: { id: ghl },
+      });
+
+    // Should still link via fullName partial match though
+    const lead = await Lead.findOne({ contact_id: "ghl_no_partial" });
+    expect(lead.outbound_lead_id).toBeTruthy(); // matches on fullName "John Doe"
+  });
+
+  it("prefers username match over name match", async () => {
+    // Two outbound leads — one matches by username, one by name
+    const obByUsername = await OutboundLead.create({
+      account_id: account._id,
+      username: "drillsthenics",
+      fullName: "Drills Fitness",
+      followingKey: "drillsthenics::scrape",
+    });
+
+    await OutboundLead.create({
+      account_id: account._id,
+      username: "other_user",
+      fullName: "Drillsthenics | Learn Calisthenics",
+      followingKey: "other_user::scrape",
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        first_name: "Drillsthenics",
+        last_name: "| Learn Calisthenics",
+        contact_id: "ghl_prefer_username",
+        location: { id: ghl },
+      });
+
+    expect(res.body.cross_channel).toBe(true);
+    const lead = await Lead.findOne({ contact_id: "ghl_prefer_username" });
+    // Should match the one with username "drillsthenics", not the one with matching fullName
+    expect(lead.outbound_lead_id.toString()).toBe(obByUsername._id.toString());
+  });
 });
 
 describe("POST /api/ghl/conversation", () => {
