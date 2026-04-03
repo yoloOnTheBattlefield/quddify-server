@@ -484,7 +484,7 @@ router.get("/:id", async (req, res) => {
     // Parse chat_memory into structured messages
     const ghlMessages = [];
     if (inboundLead.chat_memory) {
-      const parts = inboundLead.chat_memory.split(/\n+/).filter(Boolean);
+      const parts = inboundLead.chat_memory.split(/(?:\\n|\n)+/).filter(Boolean);
       for (const part of parts) {
         const trimmed = part.trim();
         if (trimmed.startsWith("User:")) {

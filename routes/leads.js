@@ -116,7 +116,7 @@ router.get("/:id/ghl-conversation", async (req, res) => {
     // Parse chat_memory: format is "nUser: ...\nnBot: ..." or "\nUser: ...\nBot: ..."
     const messages = [];
     // Split on newline boundaries before User: or Bot: labels
-    const parts = lead.chat_memory.split(/\n+/).filter(Boolean);
+    const parts = lead.chat_memory.split(/(?:\\n|\n)+/).filter(Boolean);
     for (const part of parts) {
       const trimmed = part.trim();
       if (trimmed.startsWith("User:")) {
