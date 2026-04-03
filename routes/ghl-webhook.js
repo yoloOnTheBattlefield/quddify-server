@@ -110,19 +110,26 @@ router.post("/webhook", async (req, res) => {
         ...(outboundMatch && { outbound_lead_id: outboundMatch._id }),
       });
 
-      if (outboundMatch && account) {
-        logger.info(
-          { leadId: lead._id, outboundId: outboundMatch._id, username: outboundMatch.username },
-          "GHL webhook: inbound lead linked to outbound",
-        );
+      if (outboundMatch) {
+        // Mark outbound lead as replied (they DM'd back through GHL)
+        if (!outboundMatch.replied) {
+          await OutboundLead.findByIdAndUpdate(outboundMatch._id, { replied: true, replied_at: new Date() });
+        }
 
-        // Push to extension via WebSocket
-        emitToAccount(account._id.toString(), "inbound:conversion", {
-          name: [first_name, last_name].filter(Boolean).join(" "),
-          outbound_username: outboundMatch.username || null,
-          sender_username: null, // resolved async by Telegram notifier
-          lead_id: lead._id.toString(),
-        });
+        if (account) {
+          logger.info(
+            { leadId: lead._id, outboundId: outboundMatch._id, username: outboundMatch.username },
+            "GHL webhook: inbound lead linked to outbound",
+          );
+
+          // Push to extension via WebSocket
+          emitToAccount(account._id.toString(), "inbound:conversion", {
+            name: [first_name, last_name].filter(Boolean).join(" "),
+            outbound_username: outboundMatch.username || null,
+            sender_username: null, // resolved async by Telegram notifier
+            lead_id: lead._id.toString(),
+          });
+        }
       }
 
       logger.info({ leadId: lead._id, contact_id }, "GHL webhook: new lead created");
@@ -158,6 +165,12 @@ router.post("/webhook", async (req, res) => {
       if (outboundMatch) {
         await Lead.findByIdAndUpdate(existing._id, { outbound_lead_id: outboundMatch._id });
         existing.outbound_lead_id = outboundMatch._id;
+
+        // Mark outbound lead as replied
+        if (!outboundMatch.replied) {
+          await OutboundLead.findByIdAndUpdate(outboundMatch._id, { replied: true, replied_at: new Date() });
+        }
+
         logger.info(
           { leadId: existing._id, outboundId: outboundMatch._id },
           "GHL webhook: existing lead linked to outbound",
