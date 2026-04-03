@@ -18,12 +18,17 @@ const DEFAULT_CHECKLIST = [
 ];
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function dayRange(dateStr) {
-  const start = new Date(`${dateStr}T00:00:00.000Z`);
-  const end = new Date(`${dateStr}T23:59:59.999Z`);
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const start = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const end = new Date(year, month - 1, day, 23, 59, 59, 999);
   return { start, end };
 }
 
