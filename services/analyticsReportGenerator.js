@@ -609,10 +609,28 @@ Respond with a JSON object matching this exact structure:
     "negative_patterns": [{ "pattern": "a recurring pattern in conversations that did NOT convert", "example": "brief example from the transcripts", "why_it_fails": "why this pattern loses the lead" }],
     "recommendations": ["specific actionable recommendation for improving conversations"]
   },
+  "message_recommendations": {
+    "summary": "1-2 sentence overview of what needs to change in the DM copy",
+    "do_more": ["specific message writing instruction to follow (tone, structure, phrasing, opener style, etc.)"],
+    "avoid": ["specific message writing pattern to stop using"],
+    "example_openers": ["1-2 example opener messages that incorporate the best patterns found in the data"]
+  },
+  "operational_recommendations": {
+    "summary": "1-2 sentence overview of campaign operational changes needed",
+    "items": [
+      { "category": "timing" | "sender" | "targeting" | "scheduling" | "other", "action": "specific operational change", "expected_impact": "what improvement to expect" }
+    ]
+  },
   "action_items": [
     { "priority": "high" | "medium" | "low", "action": "specific thing to do", "expected_impact": "what improvement to expect" }
   ]
-}`;
+}
+
+IMPORTANT DISTINCTION:
+- "message_recommendations" = ONLY things that affect how the DM message itself is written (tone, structure, word choice, opener style, personalization approach). These get fed into the AI prompt that generates messages.
+- "operational_recommendations" = things about HOW to run the campaign (send timing, which sender accounts to use, which niches to target, scheduling, follow-up rules). These do NOT go into the message-writing prompt.
+- "action_items" = the top 3-5 highest-impact items from BOTH categories combined, for a quick overview.
+Do NOT mix operational instructions into message_recommendations. The message-writing AI cannot control timing, sender selection, or targeting.`;
 }
 
 async function generateReport(accountId, { startDate, endDate, campaignId }) {

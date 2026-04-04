@@ -67,6 +67,14 @@ const CampaignSchema = new mongoose.Schema(
       total: { type: Number, default: 0 },
       error: { type: String, default: null },
     },
+    prompt_history: [
+      {
+        prompt: { type: String, required: true },
+        used_at: { type: Date, default: Date.now },
+        leads_count: { type: Number, default: 0 },
+        provider: { type: String, default: null },
+      },
+    ],
     stats: {
       total: { type: Number, default: 0 },
       pending: { type: Number, default: 0 },

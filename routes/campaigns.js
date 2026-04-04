@@ -1607,7 +1607,7 @@ router.post("/:id/generate-messages", async (req, res) => {
       return res.status(400).json({ error: "No pending leads to generate messages for" });
     }
 
-    // Save prompt and set generating status
+    // Save prompt, set generating status, and push to history
     await Campaign.findByIdAndUpdate(campaign._id, {
       $set: {
         "ai_personalization.enabled": true,
@@ -1616,6 +1616,14 @@ router.post("/:id/generate-messages", async (req, res) => {
         "ai_personalization.progress": 0,
         "ai_personalization.total": leads.length,
         "ai_personalization.error": null,
+      },
+      $push: {
+        prompt_history: {
+          prompt: prompt.trim(),
+          used_at: new Date(),
+          leads_count: leads.length,
+          provider: provider || "openai",
+        },
       },
     });
 
