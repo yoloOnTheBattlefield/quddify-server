@@ -48,6 +48,30 @@ router.post("/connect", async (req, res) => {
   }
 });
 
+// POST /api/telegram/test-report — send the daily report now
+router.post("/test-report", async (req, res) => {
+  try {
+    const account = await Account.findById(req.account._id).lean();
+    if (!account?.telegram_bot_token || !account?.telegram_chat_id) {
+      return res.status(400).json({ error: "Telegram not connected" });
+    }
+
+    const { sendReportForAccount } = require("../services/midnightReportScheduler");
+    const Campaign = require("../models/Campaign");
+    const CampaignLead = require("../models/CampaignLead");
+    const OutboundLead = require("../models/OutboundLead");
+    const Lead = require("../models/Lead");
+    const Booking = require("../models/Booking");
+
+    await sendReportForAccount(account, { Campaign, CampaignLead, OutboundLead, Lead, Booking });
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error({ err: error }, "Telegram test report error");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // DELETE /api/telegram/disconnect — remove Telegram config
 router.delete("/disconnect", async (req, res) => {
   try {
