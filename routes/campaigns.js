@@ -1326,6 +1326,112 @@ router.post("/:id/duplicate", async (req, res) => {
   }
 });
 
+// POST /api/campaigns/:id/relaunch — relaunch unsent leads into a new versioned campaign
+router.post("/:id/relaunch", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const source = await Campaign.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    }).lean();
+
+    if (!source) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const { prompt } = req.body;
+
+    // --- Compute next version name ---
+    // Strip existing version suffix (e.g. "My Campaign V2" → "My Campaign")
+    const baseName = source.name.replace(/\s+V\d+$/i, "");
+
+    // Find all campaigns with this base name to determine next version
+    const existing = await Campaign.find({
+      account_id: req.account._id,
+      name: { $regex: new RegExp(`^${baseName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s+V\\d+)?$`, "i") },
+    })
+      .select("name")
+      .lean();
+
+    let maxVersion = 1; // the original is implicitly V1
+    for (const c of existing) {
+      const match = c.name.match(/\s+V(\d+)$/i);
+      if (match) {
+        maxVersion = Math.max(maxVersion, parseInt(match[1], 10));
+      }
+    }
+    const newName = `${baseName} V${maxVersion + 1}`;
+
+    // --- Create new campaign ---
+    const newCampaign = await Campaign.create({
+      account_id: req.account._id,
+      name: newName,
+      mode: source.mode,
+      status: "draft",
+      messages: source.messages,
+      voice_notes: source.voice_notes || [],
+      outbound_account_ids: source.outbound_account_ids,
+      schedule: source.schedule,
+      daily_limit_per_sender: source.daily_limit_per_sender,
+      warmup_days: source.warmup_days,
+      ai_personalization: {
+        enabled: !!prompt,
+        prompt: prompt || source.ai_personalization?.prompt || null,
+        status: "idle",
+        progress: 0,
+        total: 0,
+        error: null,
+      },
+      stats: { total: 0, pending: 0, queued: 0, sent: 0, failed: 0, skipped: 0 },
+    });
+
+    // --- Copy pending leads ---
+    const pendingLeads = await CampaignLead.find({
+      campaign_id: source._id,
+      status: "pending",
+    }).lean();
+
+    let leadsCopied = 0;
+
+    if (pendingLeads.length > 0) {
+      const docs = pendingLeads.map((l) => ({
+        campaign_id: newCampaign._id,
+        outbound_lead_id: l.outbound_lead_id,
+        status: "pending",
+      }));
+
+      try {
+        const result = await CampaignLead.insertMany(docs, { ordered: false });
+        leadsCopied = result.length;
+      } catch (err) {
+        if (err.code === 11000 || err.insertedDocs) {
+          leadsCopied = err.insertedDocs?.length || 0;
+        } else {
+          throw err;
+        }
+      }
+
+      await Campaign.findByIdAndUpdate(newCampaign._id, {
+        $set: { "stats.total": leadsCopied, "stats.pending": leadsCopied },
+      });
+    }
+
+    res.status(201).json({
+      campaign: {
+        ...newCampaign.toObject(),
+        stats: { total: leadsCopied, pending: leadsCopied, queued: 0, sent: 0, delivered: 0, replied: 0, failed: 0, skipped: 0 },
+      },
+      leads_copied: leadsCopied,
+    });
+  } catch (err) {
+    logger.error("Relaunch campaign error:", err);
+    res.status(500).json({ error: "Failed to relaunch campaign" });
+  }
+});
+
 // PATCH /api/campaigns/:id/ai-prompt — save AI personalization prompt
 router.patch("/:id/ai-prompt", async (req, res) => {
   try {
