@@ -12,6 +12,7 @@ let scheduledTask = null;
  */
 async function sendReports() {
   const Account = require("../models/Account");
+  const Campaign = require("../models/Campaign");
   const CampaignLead = require("../models/CampaignLead");
   const OutboundLead = require("../models/OutboundLead");
   const Lead = require("../models/Lead");
@@ -27,6 +28,7 @@ async function sendReports() {
   for (const account of accounts) {
     try {
       await sendReportForAccount(account, {
+        Campaign,
         CampaignLead,
         OutboundLead,
         Lead,
@@ -40,8 +42,10 @@ async function sendReports() {
 
 async function sendReportForAccount(
   account,
-  { CampaignLead, OutboundLead, Lead, Booking },
+  { Campaign: CampaignOverride, CampaignLead, OutboundLead, Lead, Booking },
 ) {
+  const Campaign = CampaignOverride || require("../models/Campaign");
+
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayEnd = new Date();
@@ -55,9 +59,13 @@ async function sendReportForAccount(
   const todayIsoStart = todayStart.toISOString();
   const todayIsoEnd = todayEnd.toISOString();
 
+  // CampaignLead has no account_id — look up via Campaign
+  const accountCampaigns = await Campaign.find({ account_id: account._id }).select("_id").lean();
+  const campaignIds = accountCampaigns.map((c) => c._id);
+
   // Outbound: DMs sent today
   const dmsSent = await CampaignLead.countDocuments({
-    ...outboundFilter,
+    campaign_id: { $in: campaignIds },
     status: { $in: ["sent", "delivered", "replied"] },
     sent_at: { $gte: todayStart, $lte: todayEnd },
   });

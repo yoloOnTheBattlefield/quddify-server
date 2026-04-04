@@ -13,8 +13,19 @@ jest.mock("../utils/crypto", () => ({
   decrypt: jest.fn(() => "fake-bot-token"),
 }));
 
+function makeCampaignFind(campaignIds = ["camp1"]) {
+  return {
+    find: jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue(campaignIds.map((id) => ({ _id: id }))),
+      }),
+    }),
+  };
+}
+
 function makeModels(overrides = {}) {
   const defaults = {
+    Campaign: makeCampaignFind(),
     CampaignLead: { countDocuments: jest.fn().mockResolvedValue(0) },
     OutboundLead: { countDocuments: jest.fn().mockResolvedValue(0) },
     Lead: { countDocuments: jest.fn().mockResolvedValue(0) },
