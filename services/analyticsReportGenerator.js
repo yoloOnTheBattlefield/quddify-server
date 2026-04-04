@@ -4,6 +4,9 @@ const CampaignLead = require("../models/CampaignLead");
 const Campaign = require("../models/Campaign");
 const SenderAccount = require("../models/SenderAccount");
 const AnalyticsReport = require("../models/AnalyticsReport");
+const IgConversation = require("../models/IgConversation");
+const IgMessage = require("../models/IgMessage");
+const Lead = require("../models/Lead");
 const { getClaudeClient } = require("../utils/aiClients");
 const logger = require("../utils/logger").child({ module: "analyticsReportGenerator" });
 
@@ -37,7 +40,7 @@ async function gatherAnalyticsData(accountId, { startDate, endDate, campaignId }
   const campaignLeadIds = await getCampaignLeadIds(campaignId);
   const obFilter = buildOutboundFilter(accountId, { startDate, endDate, campaignLeadIds });
 
-  const [funnel, messages, senders, campaigns, followerTiers, promptLabels, timeOfDay, aiModels, industryData] =
+  const [funnel, messages, senders, campaigns, followerTiers, promptLabels, timeOfDay, aiModels, industryData, conversations] =
     await Promise.all([
       gatherFunnel(obFilter),
       gatherMessages(obFilter),
@@ -48,9 +51,10 @@ async function gatherAnalyticsData(accountId, { startDate, endDate, campaignId }
       gatherTimeOfDay(accountId, { startDate, endDate, campaignId }),
       gatherAIModels(accountId, obFilter, { startDate, endDate, campaignId }),
       gatherIndustryData(obFilter),
+      gatherConversations(accountId, obFilter),
     ]);
 
-  return { funnel, messages, senders, campaigns, followerTiers, promptLabels, timeOfDay, aiModels, industryData };
+  return { funnel, messages, senders, campaigns, followerTiers, promptLabels, timeOfDay, aiModels, industryData, conversations };
 }
 
 async function gatherFunnel(obFilter) {
@@ -428,6 +432,96 @@ async function gatherIndustryData(obFilter) {
   return results;
 }
 
+async function gatherConversations(accountId, obFilter) {
+  // Get ALL messaged outbound leads in the date range (obFilter already has isMessaged: true)
+  const leads = await OutboundLead.find(obFilter)
+    .select("_id ig_username booked replied")
+    .sort({ dmDate: -1 })
+    .lean();
+
+  if (leads.length === 0) return [];
+
+  const leadIds = leads.map((l) => l._id);
+  const leadMap = new Map(leads.map((l) => [l._id.toString(), l]));
+
+  // Fetch IG conversations linked to these outbound leads
+  const igConversations = await IgConversation.find({
+    outbound_lead_id: { $in: leadIds },
+  })
+    .select("_id outbound_lead_id participant_usernames")
+    .lean();
+
+  const convIds = igConversations.map((c) => c._id);
+  const convToLead = new Map(igConversations.map((c) => [c._id.toString(), c.outbound_lead_id.toString()]));
+
+  // Fetch messages for these conversations, keep first 10 per conversation to capture
+  // the key exchanges (opener, objection, response) without token bloat
+  const igMessages = convIds.length > 0
+    ? await IgMessage.aggregate([
+        { $match: { conversation_id: { $in: convIds } } },
+        { $sort: { timestamp: 1 } },
+        { $group: { _id: "$conversation_id", messages: { $push: { direction: "$direction", text: "$message_text" } } } },
+      ])
+    : [];
+
+  const conversations = [];
+  const seenLeadUsernames = new Set();
+
+  // Build conversation transcripts from IG messages
+  for (const group of igMessages) {
+    const leadId = convToLead.get(group._id.toString());
+    const lead = leadId ? leadMap.get(leadId) : null;
+    if (!lead) continue;
+
+    const msgs = group.messages
+      .filter((m) => m.text)
+      .slice(0, 10)
+      .map((m) => `${m.direction === "outbound" ? "Us" : "Lead"}: ${m.text.substring(0, 300)}`);
+
+    if (msgs.length >= 2) {
+      seenLeadUsernames.add(lead.ig_username);
+      conversations.push({
+        replied: lead.replied || false,
+        booked: lead.booked || false,
+        transcript: msgs,
+      });
+    }
+  }
+
+  // Also fetch GHL conversations (stored as chat_memory on linked inbound leads)
+  const inboundLeads = await Lead.find({
+    outbound_lead_id: { $in: leadIds },
+    chat_memory: { $nin: [null, ""] },
+  })
+    .select("outbound_lead_id chat_memory")
+    .lean();
+
+  for (const inbound of inboundLeads) {
+    const lead = leadMap.get(inbound.outbound_lead_id.toString());
+    if (!lead) continue;
+    // Skip if we already have an IG conversation for this lead
+    if (seenLeadUsernames.has(lead.ig_username)) continue;
+
+    const msgs = [];
+    const parts = inbound.chat_memory.split(/(?:\\n|\n)+/).filter(Boolean);
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (trimmed.startsWith("User:")) msgs.push(`Lead: ${trimmed.slice(5).trim().substring(0, 300)}`);
+      else if (trimmed.startsWith("Bot:")) msgs.push(`Us: ${trimmed.slice(4).trim().substring(0, 300)}`);
+    }
+
+    if (msgs.length >= 2) {
+      conversations.push({
+        replied: lead.replied || false,
+        booked: lead.booked || false,
+        transcript: msgs.slice(0, 10),
+      });
+    }
+  }
+
+  return conversations;
+}
+
 // ── AI Report Generation ─────────────────────────────────
 
 const SYSTEM_PROMPT = `You are an expert Instagram DM outreach analyst. You analyze outbound messaging performance data and generate actionable reports.
@@ -472,6 +566,9 @@ ${JSON.stringify(data.timeOfDay, null, 2)}
 ### AI Model Performance
 ${JSON.stringify(data.aiModels, null, 2)}
 
+### Conversation Transcripts (${data.conversations.length} conversations from all messaged leads)
+${data.conversations.length > 0 ? JSON.stringify(data.conversations) : "No conversation data available."}
+
 ## REQUIRED OUTPUT FORMAT
 
 Respond with a JSON object matching this exact structure:
@@ -505,6 +602,13 @@ Respond with a JSON object matching this exact structure:
     "worst_times": "description of worst performing hours",
     "recommendations": ["specific actionable recommendation"]
   },
+  "conversation_analysis": {
+    "summary": "1-2 sentence overview of conversation patterns observed",
+    "common_objections": [{ "objection": "the objection pattern (e.g. 'not interested right now', 'already have a provider')", "frequency": "how often this appears (e.g. 'very common', 'occasional')", "best_response": "the most effective way to handle this objection based on the conversations that converted" }],
+    "positive_patterns": [{ "pattern": "a recurring positive pattern in conversations that led to bookings", "example": "brief example from the transcripts", "why_it_works": "why this pattern is effective" }],
+    "negative_patterns": [{ "pattern": "a recurring pattern in conversations that did NOT convert", "example": "brief example from the transcripts", "why_it_fails": "why this pattern loses the lead" }],
+    "recommendations": ["specific actionable recommendation for improving conversations"]
+  },
   "action_items": [
     { "priority": "high" | "medium" | "low", "action": "specific thing to do", "expected_impact": "what improvement to expect" }
   ]
@@ -525,6 +629,7 @@ async function generateReport(accountId, { startDate, endDate, campaignId }) {
         industry_analysis: { summary: "No data", best_niches: [], worst_niches: [], recommendations: [] },
         campaign_analysis: { summary: "No data", highlights: [], recommendations: [] },
         timing_analysis: { best_times: "No data", worst_times: "No data", recommendations: [] },
+        conversation_analysis: { summary: "No data", common_objections: [], positive_patterns: [], negative_patterns: [], recommendations: [] },
         action_items: [{ priority: "high", action: "Launch your first outbound campaign", expected_impact: "Begin generating leads and data for optimization" }],
       },
       token_usage: { input_tokens: 0, output_tokens: 0 },
@@ -536,7 +641,7 @@ async function generateReport(accountId, { startDate, endDate, campaignId }) {
 
   const response = await claude.messages.create({
     model: "claude-opus-4-20250514",
-    max_tokens: 4096,
+    max_tokens: 6000,
     temperature: 0.3,
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: buildUserPrompt(data, dateRange) }],
