@@ -1,4 +1,5 @@
 const logger = require("../utils/logger").child({ module: "errorHandler" });
+const { reportErrorToClickUp } = require("../utils/clickupErrorReporter");
 
 /**
  * Central error-handling middleware.
@@ -21,6 +22,18 @@ function errorHandler(err, req, res, _next) {
     { err, reqId: req.id, method: req.method, url: req.originalUrl },
     err.message || "Unhandled error",
   );
+
+  // Report 5xx errors to ClickUp (fire-and-forget)
+  if (status >= 500) {
+    reportErrorToClickUp({
+      method: req.method,
+      url: req.originalUrl,
+      status,
+      message: err.message || "Unknown error",
+      stack: err.stack,
+      reqId: req.id,
+    });
+  }
 
   res.status(status).json({ error: message });
 }

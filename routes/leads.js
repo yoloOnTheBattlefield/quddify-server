@@ -94,8 +94,9 @@ router.get("/:id", async (req, res) => {
     const lead = await Lead.findOne(filter).lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
 
-    // Populate outbound lead details into a separate field (keep outbound_lead_id as the raw ID)
+    // Ensure outbound_lead_id is a plain string (not an ObjectId instance)
     if (lead.outbound_lead_id) {
+      lead.outbound_lead_id = lead.outbound_lead_id.toString();
       const OutboundLead = require("../models/OutboundLead");
       const ob = await OutboundLead.findById(lead.outbound_lead_id)
         .select("username fullName bio followersCount profileLink isMessaged dmDate replied replied_at booked booked_at ig_thread_id source")
