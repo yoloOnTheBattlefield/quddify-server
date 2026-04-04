@@ -1686,7 +1686,9 @@ router.post("/outbound/ai-report", async (req, res) => {
 router.get("/outbound/ai-reports", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
-    const reports = await AnalyticsReport.find({ account_id: req.account._id })
+    const filter = { account_id: req.account._id };
+    if (req.query.campaign_id) filter.campaign_id = req.query.campaign_id;
+    const reports = await AnalyticsReport.find(filter)
       .select("type status date_range campaign_id report.executive_summary report.overall_health token_usage error generated_at")
       .sort({ generated_at: -1 })
       .limit(limit)
