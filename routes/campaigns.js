@@ -1197,7 +1197,17 @@ router.get("/:id/leads", async (req, res) => {
     const { status, search, sender_id, page, limit } = req.query;
     const filter = { campaign_id: campaign._id };
 
-    if (status) filter.status = status;
+    if (status === "replied") {
+      // Stats count replied from OutboundLead.replied boolean, so filter must match
+      const repliedOutboundIds = await OutboundLead.find(
+        { replied: true },
+        { _id: 1 },
+      ).lean();
+      filter.outbound_lead_id = { $in: repliedOutboundIds.map((l) => l._id) };
+      filter.status = { $in: ["sent", "delivered", "replied"] };
+    } else if (status) {
+      filter.status = status;
+    }
     if (sender_id) {
       if (sender_id === "none") {
         filter.sender_id = null;
@@ -1208,10 +1218,12 @@ router.get("/:id/leads", async (req, res) => {
 
     // Search by outbound lead username or fullName
     if (search) {
-      const matchingLeadIds = await OutboundLead.find(
-        { $or: [{ username: { $regex: escapeRegex(search), $options: "i" } }, { fullName: { $regex: escapeRegex(search), $options: "i" } }] },
-        { _id: 1 },
-      ).lean();
+      const searchFilter = { $or: [{ username: { $regex: escapeRegex(search), $options: "i" } }, { fullName: { $regex: escapeRegex(search), $options: "i" } }] };
+      // If replied filter already set outbound_lead_id, intersect with search results
+      if (filter.outbound_lead_id) {
+        searchFilter._id = filter.outbound_lead_id;
+      }
+      const matchingLeadIds = await OutboundLead.find(searchFilter, { _id: 1 }).lean();
       filter.outbound_lead_id = { $in: matchingLeadIds.map((l) => l._id) };
     }
 
