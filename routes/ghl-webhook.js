@@ -166,9 +166,22 @@ router.post("/webhook", async (req, res) => {
         await Lead.findByIdAndUpdate(existing._id, { outbound_lead_id: outboundMatch._id });
         existing.outbound_lead_id = outboundMatch._id;
 
-        // Mark outbound lead as replied
+        // Sync outbound lead: replied + any existing funnel status
+        const outboundSync = {};
         if (!outboundMatch.replied) {
-          await OutboundLead.findByIdAndUpdate(outboundMatch._id, { replied: true, replied_at: new Date() });
+          outboundSync.replied = true;
+          outboundSync.replied_at = new Date();
+        }
+        if (existing.link_sent_at) {
+          outboundSync.link_sent = true;
+          outboundSync.link_sent_at = existing.link_sent_at;
+        }
+        if (existing.booked_at) {
+          outboundSync.booked = true;
+          outboundSync.booked_at = existing.booked_at;
+        }
+        if (Object.keys(outboundSync).length > 0) {
+          await OutboundLead.findByIdAndUpdate(outboundMatch._id, outboundSync);
         }
 
         logger.info(
