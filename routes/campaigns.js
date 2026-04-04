@@ -11,6 +11,7 @@ const OutboundLead = require("../models/OutboundLead");
 const SenderAccount = require("../models/SenderAccount");
 const OutboundAccount = require("../models/OutboundAccount");
 const Account = require("../models/Account");
+const AIPrompt = require("../models/AIPrompt");
 const { decrypt } = require("../utils/crypto");
 const { emitToAccount } = require("../services/socketManager");
 const { isWithinActiveHours, calculateDelay, getEffectiveDailyLimit } = require("../services/campaignScheduler");
@@ -1354,7 +1355,7 @@ router.post("/:id/relaunch", async (req, res) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const { prompt } = req.body;
+    const { prompt, prompt_name } = req.body;
 
     // --- Compute next version name ---
     // Strip existing version suffix (e.g. "My Campaign V2" → "My Campaign")
@@ -1399,6 +1400,17 @@ router.post("/:id/relaunch", async (req, res) => {
       },
       stats: { total: 0, pending: 0, queued: 0, sent: 0, failed: 0, skipped: 0 },
     });
+
+    // --- Save prompt as reusable saved prompt ---
+    const finalPrompt = prompt || source.ai_personalization?.prompt;
+    if (finalPrompt) {
+      const savedPromptName = prompt_name || `${newName} prompt`;
+      await AIPrompt.create({
+        account_id: req.account._id,
+        name: savedPromptName,
+        promptText: finalPrompt,
+      });
+    }
 
     // --- Copy pending leads ---
     const pendingLeads = await CampaignLead.find({
