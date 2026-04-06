@@ -3,6 +3,7 @@ const router = express.Router();
 const bcrypt = require("bcryptjs");
 const Client = require("../models/Client");
 const User = require("../models/User");
+const Account = require("../models/Account");
 const AccountUser = require("../models/AccountUser");
 const validate = require("../middleware/validate");
 const clientSchemas = require("../schemas/clients");
@@ -63,25 +64,35 @@ router.post("/", validate(clientSchemas.create), async (req, res) => {
       const existing = await User.findOne({ email: email.toLowerCase() });
       if (existing) return res.status(409).json({ error: "A user with this email already exists" });
 
+      // Provision a DEDICATED Account for the client user so their login is
+      // isolated from the creator's tenant. Previously the client user was
+      // added as a member of the creator's account, which caused them to see
+      // all of the creator's data (bookings, leads, analytics, etc.) because
+      // the data routes only filter by account_id.
+      const clientAccount = await Account.create({ name: clientData.name });
+
       const hashed = await bcrypt.hash(password, 10);
       const user = await User.create({
         email: email.toLowerCase(),
         password: hashed,
         first_name: clientData.name.split(/\s+/)[0] || clientData.name,
         last_name: clientData.name.split(/\s+/).slice(1).join(" ") || "",
-        account_id: req.account._id,
+        account_id: clientAccount._id,
       });
       userId = user._id;
 
-      // Give the client user member access to this account
+      // Bind the client user to their OWN account, not the creator's.
       await AccountUser.create({
         user_id: user._id,
-        account_id: req.account._id,
-        role: 2, // member
+        account_id: clientAccount._id,
+        role: 1, // owner of their own isolated account
         is_default: true,
       });
     }
 
+    // NOTE: the Client document stays in the creator's account so the creator
+    // can continue to manage it. The client user's login lives in a separate
+    // account and cannot see the creator's data.
     const client = await Client.create({
       ...clientData,
       slug,

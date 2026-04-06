@@ -1,5 +1,16 @@
 # Features
 
+## Client User Isolation (Multi-Tenancy Fix)
+
+When `POST /api/clients` provisions a login for a new client (email + password), the backend now creates a dedicated `Account` for that user instead of adding them as a member of the creator's account. Previously, the client user was attached to `req.account._id` as a role-2 member, but only `GET /api/clients` enforced role-2 scoping — every other data route (bookings, outbound leads, analytics, reports, campaigns, etc.) filtered solely by `account_id`, so a newly provisioned client user could log in and see all of the creator's data.
+
+The `Client` document itself remains in the creator's account so the creator continues to manage it; only the client user's login is isolated.
+
+### Files
+
+- `routes/clients.js` — `POST /api/clients` creates a fresh `Account`, a `User` bound to that account, and an `AccountUser` (role 1, `is_default: true`) for the new isolated tenant.
+- `scripts/isolate-client-users.js` — One-shot migration that finds existing client users still attached to their creator's account and moves them into their own isolated account. Supports `--apply` and `--email <addr>` flags; dry run by default.
+
 ## Telegram Integration
 
 Send Telegram notifications when new inbound leads are created. Highlights when the inbound lead is linked to an outbound lead, showing the lead's username and the IG sender account that DMed them.
