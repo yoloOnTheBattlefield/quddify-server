@@ -1,13 +1,27 @@
+const mongoose = require("mongoose");
 const escapeRegex = require("../utils/escapeRegex");
 const logger = require("../utils/logger").child({ module: "leads" });
 const express = require("express");
 const Lead = require("../models/Lead");
+const Account = require("../models/Account");
 const OutboundLead = require("../models/OutboundLead");
 const LeadNote = require("../models/LeadNote");
 const LeadTask = require("../models/LeadTask");
 const validate = require("../middleware/validate");
 const { leadCreateSchema, leadUpdateSchema } = require("../schemas/leads");
 const { notifyNewLead } = require("../services/telegramNotifier");
+
+// Translate an admin-supplied account_id query param (which may be a GHL
+// location string from legacy frontend code, or an Account ObjectId) to the
+// ObjectId-as-string that Lead.account_id was migrated to on 2026-04-02.
+async function resolveAdminAccountId(rawValue) {
+  if (!rawValue) return null;
+  if (mongoose.isValidObjectId(rawValue) && String(new mongoose.Types.ObjectId(rawValue)) === rawValue) {
+    return rawValue;
+  }
+  const acc = await Account.findOne({ ghl: rawValue }).lean();
+  return acc ? acc._id.toString() : null;
+}
 
 const router = express.Router();
 
@@ -20,7 +34,8 @@ router.get("/", async (req, res) => {
     if (account_id === "all" && req.user?.role === 0) {
       // No filter — admin viewing all accounts
     } else if (account_id && req.user?.role === 0) {
-      filter.account_id = account_id;
+      const resolved = await resolveAdminAccountId(account_id);
+      filter.account_id = resolved || account_id;
     } else {
       filter.account_id = req.account._id.toString();
     }
@@ -155,7 +170,14 @@ router.get("/:id/ghl-conversation", async (req, res) => {
 // create lead
 router.post("/", validate(leadCreateSchema), async (req, res) => {
   try {
-    const lead = await Lead.create(req.body);
+    // Always force account_id from the authenticated session. Trusting
+    // req.body.account_id allowed cross-account writes and also caused new
+    // leads to silently disappear when the frontend sent the wrong value
+    // (e.g. user.ghl, which is undefined for accounts that don't use GHL).
+    const lead = await Lead.create({
+      ...req.body,
+      account_id: req.account._id.toString(),
+    });
 
     // Telegram notification (fire-and-forget)
     const outbound = lead.outbound_lead_id

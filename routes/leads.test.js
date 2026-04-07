@@ -115,13 +115,31 @@ describe("GET /api/leads", () => {
 });
 
 describe("POST /api/leads", () => {
-  it("creates a lead", async () => {
+  it("creates a lead and scopes it to the session account", async () => {
     const res = await request(app)
       .post("/api/leads")
-      .send({ first_name: "Created", account_id: ghl });
+      .send({ first_name: "Created" });
 
     expect(res.status).toBe(201);
     expect(res.body.first_name).toBe("Created");
+    expect(res.body.account_id).toBe(accountId.toString());
+  });
+
+  it("ignores account_id from the request body and uses the session account", async () => {
+    // Regression: AllContacts.tsx used to send `account_id: user.ghl`,
+    // which (a) was a tenant-isolation hole and (b) saved the new lead
+    // with the wrong account_id, making it invisible in the list.
+    const res = await request(app)
+      .post("/api/leads")
+      .send({ first_name: "Hijack", account_id: "ghl_attacker_value" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.account_id).toBe(accountId.toString());
+
+    // The freshly-created lead must appear in the session-scoped list.
+    const list = await request(app).get("/api/leads");
+    const names = list.body.leads.map((l) => l.first_name);
+    expect(names).toContain("Hijack");
   });
 });
 

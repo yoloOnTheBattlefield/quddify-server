@@ -74,6 +74,23 @@ function getDateRange(startDate, endDate) {
   return dates;
 }
 
+// Helper: When an admin passes account_id in the query, the frontend may
+// historically send the GHL location string (e.g. from Index.tsx using
+// user.ghl), but Lead.account_id was migrated to store the Account ObjectId
+// as a string on 2026-04-02. This translates a GHL string to the matching
+// account's ObjectId-as-string so admin-scoped queries continue to match
+// after the migration. Returns null if no matching account is found.
+async function resolveAdminAccountId(rawValue) {
+  if (!rawValue) return null;
+  // If it already looks like a valid ObjectId, use it directly.
+  if (mongoose.isValidObjectId(rawValue) && String(new mongoose.Types.ObjectId(rawValue)) === rawValue) {
+    return rawValue;
+  }
+  // Otherwise treat it as a GHL location ID and look up the account.
+  const acc = await Account.findOne({ ghl: rawValue }).lean();
+  return acc ? acc._id.toString() : null;
+}
+
 // Helper: Get Monday of the week for a given date string
 function getMonday(dateStr) {
   const d = new Date(dateStr + "T00:00:00Z");
@@ -140,7 +157,10 @@ router.get("/", async (req, res) => {
     const isAdmin = req.user?.role === 0;
     const filter = {};
     if (isAdmin && account_id) {
-      filter.account_id = account_id;
+      const resolved = await resolveAdminAccountId(account_id);
+      // If we couldn't resolve, fall back to the raw value (matches nothing
+      // for legacy data, which is the previous behavior — at least obvious).
+      filter.account_id = resolved || account_id;
     } else if (!isAdmin) {
       filter.account_id = req.account._id.toString();
     }
@@ -1385,12 +1405,13 @@ router.get("/outbound/trends", async (req, res) => {
 
 // ── Inbound Analytics ─────────────────────────────────────────────────
 
-function buildInboundFilter(req) {
+async function buildInboundFilter(req) {
   const { start_date, end_date } = req.query;
   const isAdmin = req.user?.role === 0;
   const filter = {};
   if (isAdmin && req.query.account_id) {
-    filter.account_id = req.query.account_id;
+    const resolved = await resolveAdminAccountId(req.query.account_id);
+    filter.account_id = resolved || req.query.account_id;
   } else if (!isAdmin) {
     filter.account_id = req.account._id.toString();
   }
@@ -1408,7 +1429,7 @@ function buildInboundFilter(req) {
 // GET /analytics/inbound — overview KPIs + source breakdown
 router.get("/inbound", async (req, res) => {
   try {
-    const filter = buildInboundFilter(req);
+    const filter = await buildInboundFilter(req);
     const leads = await Lead.find(filter).lean();
 
     const total = leads.length;
@@ -1448,7 +1469,7 @@ router.get("/inbound", async (req, res) => {
 // GET /analytics/inbound/posts — post performance table
 router.get("/inbound/posts", async (req, res) => {
   try {
-    const filter = buildInboundFilter(req);
+    const filter = await buildInboundFilter(req);
     const leads = await Lead.find(filter).lean();
 
     const postMap = {};
@@ -1479,7 +1500,7 @@ router.get("/inbound/posts", async (req, res) => {
 // GET /analytics/inbound/daily — daily volume
 router.get("/inbound/daily", async (req, res) => {
   try {
-    const filter = buildInboundFilter(req);
+    const filter = await buildInboundFilter(req);
     const leads = await Lead.find(filter).lean();
 
     const dailyMap = {};
