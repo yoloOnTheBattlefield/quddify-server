@@ -125,6 +125,43 @@ describe("POST /api/leads", () => {
     expect(res.body.account_id).toBe(accountId.toString());
   });
 
+  it("defaults date_created to now and persists fields the modal sends", async () => {
+    // Regression: leadCreateSchema used to .strip() date_created (and other
+    // modal fields), so leads landed in the DB with date_created: null and
+    // were invisible because the contacts list filters by date range.
+    const before = new Date();
+    const res = await request(app)
+      .post("/api/leads")
+      .send({
+        first_name: "Modal",
+        last_name: "Created",
+        contact_id: "abc",
+        score: 7,
+        contract_value: 500,
+        summary: "from add-lead modal",
+        link_sent_at: new Date().toISOString(),
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.last_name).toBe("Created");
+    expect(res.body.contact_id).toBe("abc");
+    expect(res.body.score).toBe(7);
+    expect(res.body.contract_value).toBe(500);
+    expect(res.body.summary).toBe("from add-lead modal");
+    expect(res.body.link_sent_at).toBeTruthy();
+    // date_created defaulted server-side
+    expect(res.body.date_created).toBeTruthy();
+    expect(new Date(res.body.date_created).getTime()).toBeGreaterThanOrEqual(before.getTime() - 1000);
+
+    // And it must show up in a date-filtered list (the actual user-visible bug).
+    const today = new Date().toISOString().slice(0, 10);
+    const list = await request(app).get(
+      `/api/leads?start_date=${today}&end_date=${today}&limit=50`,
+    );
+    const names = list.body.leads.map((l) => l.first_name);
+    expect(names).toContain("Modal");
+  });
+
   it("ignores account_id from the request body and uses the session account", async () => {
     // Regression: AllContacts.tsx used to send `account_id: user.ghl`,
     // which (a) was a tenant-isolation hole and (b) saved the new lead

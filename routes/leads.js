@@ -174,9 +174,14 @@ router.post("/", validate(leadCreateSchema), async (req, res) => {
     // req.body.account_id allowed cross-account writes and also caused new
     // leads to silently disappear when the frontend sent the wrong value
     // (e.g. user.ghl, which is undefined for accounts that don't use GHL).
+    //
+    // Default date_created to now — the contacts list filters by date range
+    // and a null date_created makes the lead invisible. Better to record
+    // creation time on the server than to depend on every client sending it.
     const lead = await Lead.create({
       ...req.body,
       account_id: req.account._id.toString(),
+      date_created: req.body.date_created || new Date().toISOString(),
     });
 
     // Telegram notification (fire-and-forget)
