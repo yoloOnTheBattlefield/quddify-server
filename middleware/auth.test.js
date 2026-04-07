@@ -155,10 +155,11 @@ describe("auth middleware", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns 403 when user is no longer a member", async () => {
+  it("returns 401 (not 403) when user's membership has been revoked, so the FE auto-logs-out", async () => {
     const account = await Account.create({ name: "No Member Account" });
     const userId = new mongoose.Types.ObjectId();
-    // No AccountUser record created
+    // No AccountUser record created — simulates a stale JWT after the user
+    // was migrated to a different account (e.g. via isolate-client-users.js).
 
     const token = jwt.sign(
       { userId, accountId: account._id, role: 1 },
@@ -169,8 +170,11 @@ describe("auth middleware", () => {
     const res = await request(app)
       .get("/test")
       .set("Authorization", `Bearer ${token}`);
-    expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/no longer a member/i);
+    // Must be 401 — fetchWithAuth in dm-setting only clears localStorage and
+    // redirects on 401. Returning 403 here would leave the user stuck on a
+    // dead session forever.
+    expect(res.status).toBe(401);
+    expect(res.body.error).toMatch(/membership no longer valid|log in again/i);
   });
 });
 

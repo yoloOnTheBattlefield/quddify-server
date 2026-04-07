@@ -83,13 +83,17 @@ async function auth(req, res, next) {
       return res.status(403).json({ error: "Account has been deleted" });
     }
 
-    // Verify user still has membership in this account
+    // Verify user still has membership in this account.
+    // This is an authentication issue (the JWT references an account/membership
+    // that no longer exists), not authorization, so we return 401 — the
+    // frontend's fetchWithAuth treats 401 as session-expired and forces a
+    // re-login, which is exactly what should happen here.
     const membership = await AccountUser.findOne({
       user_id: decoded.userId,
       account_id: decoded.accountId,
     }).lean();
     if (!membership) {
-      return res.status(403).json({ error: "No longer a member of this account" });
+      return res.status(401).json({ error: "Membership no longer valid, please log in again" });
     }
 
     req.account = account;
