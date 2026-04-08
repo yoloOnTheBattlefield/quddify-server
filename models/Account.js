@@ -50,6 +50,10 @@ const AccountSchema = new mongoose.Schema(
     push_notifications_enabled: { type: Boolean, default: true },
     telegram_bot_token: { type: String, default: null },
     telegram_chat_id: { type: String, default: null },
+    lead_visibility: {
+      dms: { type: Boolean, default: true },
+      outbound: { type: Boolean, default: true },
+    },
   },
   { collection: "accounts", versionKey: false },
 );

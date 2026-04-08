@@ -28,6 +28,10 @@ function buildLoginResponse(user, account, accountUser) {
     role: accountUser.role,
     has_outbound: account.has_outbound && accountUser.has_outbound,
     has_research: account.has_research && accountUser.has_research,
+    lead_visibility: {
+      dms: account.lead_visibility?.dms ?? true,
+      outbound: account.lead_visibility?.outbound ?? true,
+    },
     ghl: account.ghl,
     calendly: account.calendly,
     ghl_lead_booked_webhook: account.ghl_lead_booked_webhook,
@@ -78,6 +82,10 @@ router.get("/me", async (req, res) => {
         : null,
       telegram_connected: !!(account.telegram_bot_token && account.telegram_chat_id),
       telegram_chat_id: account.telegram_chat_id || null,
+      lead_visibility: {
+        dms: account.lead_visibility?.dms ?? true,
+        outbound: account.lead_visibility?.outbound ?? true,
+      },
     });
   } catch (error) {
     logger.error("Get account me error:", error);
@@ -667,7 +675,7 @@ router.delete("/ig-sessions/:username", async (req, res) => {
 
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, has_outbound, has_research, ghl, calendly, openai_token, claude_token, gemini_token, apify_token, ig_session, ig_username, ig_proxy } = req.body;
+    const { first_name, last_name, email, has_outbound, has_research, ghl, calendly, openai_token, claude_token, gemini_token, apify_token, ig_session, ig_username, ig_proxy, lead_visibility } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
@@ -682,6 +690,15 @@ router.patch("/:id", async (req, res) => {
     if (gemini_token !== undefined) accountUpdates.gemini_token = gemini_token ? encrypt(gemini_token) : gemini_token;
     if (apify_token !== undefined) accountUpdates.apify_token = apify_token ? encrypt(apify_token) : apify_token;
     if (ig_proxy !== undefined) accountUpdates.ig_proxy = ig_proxy || null;
+    if (lead_visibility !== undefined && lead_visibility && typeof lead_visibility === "object") {
+      // Only account admins/owners can change lead visibility
+      if (req.membership && (req.membership.role === 0 || req.membership.role === 1)) {
+        accountUpdates.lead_visibility = {
+          dms: lead_visibility.dms !== false,
+          outbound: lead_visibility.outbound !== false,
+        };
+      }
+    }
     if (ig_session !== undefined) {
       if (Array.isArray(ig_session)) {
         const find = (name) => {
@@ -757,6 +774,10 @@ router.patch("/:id", async (req, res) => {
       role: updatedMembership?.role ?? updatedUser.role,
       has_outbound: updatedMembership?.has_outbound ?? updatedUser.has_outbound,
       has_research: updatedMembership?.has_research ?? true,
+      lead_visibility: {
+        dms: updatedAccount.lead_visibility?.dms ?? true,
+        outbound: updatedAccount.lead_visibility?.outbound ?? true,
+      },
       ghl: updatedAccount.ghl,
       calendly: updatedAccount.calendly,
       ghl_lead_booked_webhook: updatedAccount.ghl_lead_booked_webhook,
