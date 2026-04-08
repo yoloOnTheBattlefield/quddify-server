@@ -13,12 +13,13 @@ The `Client` document itself remains in the creator's account so the creator con
 
 ## Telegram Integration
 
-Send Telegram notifications when new inbound leads are created. Highlights when the inbound lead is linked to an outbound lead, showing the lead's username and the IG sender account that DMed them.
+Send Telegram notifications when new inbound leads are created, and when the DM Assistant marks an outbound lead with a follow-up. Highlights when an inbound lead is linked to an outbound lead, showing the lead's username and the IG sender account that DMed them.
 
 ### Files
 
 - `models/Account.js` — `telegram_bot_token` (encrypted) and `telegram_chat_id` fields
-- `services/telegramNotifier.js` — Sends Telegram messages via Bot API, resolves sender account from CampaignLead
+- `services/telegramNotifier.js` — Sends Telegram messages via Bot API. Exposes `notifyNewLead`, `notifyCampaignCompleted`, and `notifyAiFollowUp` (fires when AI creates a brand-new FollowUp doc OR transitions a lead into the `follow_up_later` status)
+- `services/dmAssistantService.js` — In `upsertLeadAndFollowUp`, reads the prior FollowUp state, then after upserting calls `notifyAiFollowUp` for new FollowUps and for transitions into `follow_up_later`
 - `routes/telegram.js` — Connect/disconnect endpoints with test message validation
 - `routes/calendly.js` — Fires Telegram notification on Calendly webhook lead creation
 - `routes/leads.js` — Fires Telegram notification on direct lead creation

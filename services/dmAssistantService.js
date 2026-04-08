@@ -2,6 +2,9 @@ const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const OutboundLead = require("../models/OutboundLead");
 const FollowUp = require("../models/FollowUp");
+const Account = require("../models/Account");
+const OutboundAccount = require("../models/OutboundAccount");
+const { notifyAiFollowUp } = require("./telegramNotifier");
 const { getOpenAIClient } = require("../utils/aiClients");
 const logger = require("../utils/logger").child({ module: "dmAssistant" });
 
@@ -382,7 +385,14 @@ async function upsertLeadAndFollowUp({ accountId, outboundAccountId, threadId, p
       ? statusRecommendation
       : "need_reply";
 
-    // Upsert FollowUp — create if doesn't exist, update status if it does
+    // Upsert FollowUp — create if doesn't exist, update status if it does.
+    // Read prior state first so we can detect new-creation vs status transitions
+    // and fire a Telegram notification accordingly.
+    const existingFollowUp = await FollowUp.findOne({
+      outbound_lead_id: lead._id,
+      account_id: accountId,
+    }).lean();
+
     await FollowUp.findOneAndUpdate(
       { outbound_lead_id: lead._id, account_id: accountId },
       {
@@ -398,6 +408,37 @@ async function upsertLeadAndFollowUp({ accountId, outboundAccountId, threadId, p
       },
       { upsert: true, new: true },
     );
+
+    // Notify on:
+    //   1) brand-new FollowUp creation
+    //   2) transition from any other status into "follow_up_later"
+    const isNew = !existingFollowUp;
+    const transitionedToFollowUpLater =
+      !isNew &&
+      followUpStatus === "follow_up_later" &&
+      existingFollowUp.status !== "follow_up_later";
+
+    if (isNew || transitionedToFollowUpLater) {
+      try {
+        const account = await Account.findById(accountId).lean();
+        if (account?.telegram_bot_token && account?.telegram_chat_id) {
+          let outboundAccount = null;
+          if (outboundAccountId) {
+            outboundAccount = await OutboundAccount.findById(outboundAccountId)
+              .select({ username: 1 })
+              .lean();
+          }
+          await notifyAiFollowUp(account, {
+            lead,
+            status: followUpStatus,
+            reason: transitionedToFollowUpLater ? "follow_up_later" : "new",
+            outboundAccount,
+          });
+        }
+      } catch (notifyErr) {
+        logger.error("[dm-assistant] telegram notify error:", notifyErr.message);
+      }
+    }
 
     // Store constraint on the lead if identified
     if (constraintIdentified) {
