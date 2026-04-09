@@ -73,6 +73,37 @@ router.post("/upload", uploadMiddleware.single("audio"), async (req, res) => {
   }
 });
 
+// POST /api/voice-notes/transcribe
+// Accepts audio file, returns transcription via OpenAI Whisper
+router.post("/transcribe", uploadMiddleware.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No audio file uploaded" });
+    }
+
+    const { getOpenAIClient } = require("../utils/aiClients");
+    const openai = await getOpenAIClient({ accountId: req.account._id.toString() });
+
+    // Whisper needs a File-like object with a name
+    const file = new File([req.file.buffer], req.file.originalname || `audio.${getExtension(req.file.mimetype)}`, {
+      type: req.file.mimetype,
+    });
+
+    const transcription = await openai.audio.transcriptions.create({
+      file,
+      model: "whisper-1",
+      language: "en",
+    });
+
+    logger.info(`Transcribed audio: ${req.file.size} bytes → ${transcription.text.length} chars`);
+
+    res.json({ text: transcription.text });
+  } catch (err) {
+    logger.error("Transcription failed:", err);
+    res.status(500).json({ error: "Transcription failed" });
+  }
+});
+
 // DELETE /api/voice-notes
 // Body: { storage_key }
 router.delete("/", async (req, res) => {
