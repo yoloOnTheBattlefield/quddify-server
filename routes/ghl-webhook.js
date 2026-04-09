@@ -349,25 +349,32 @@ router.post("/conversation", async (req, res) => {
 });
 
 /**
- * POST /api/ghl/match-outbound/:contact_id
+ * POST /api/ghl/match-outbound
  *
  * Inbound lookup webhook from GHL. Given an inbound contact's name (full name
  * or IG username), partial-matches an outbound lead DM'd in the last 24h. On
  * a unique match, writes the matched IG username + bio to the GHL contact's
  * custom fields via the LeadConnector API.
  *
- * Body: { name, location: { id }, first_name?, last_name? }
- * URL param: contact_id (the GHL contact to update)
+ * Body: { contact_id, full_name?, first_name?, last_name?, location: { id } }
  *
  * Account must have ghl_pit_token, ghl_ig_username_field_id, and
  * ghl_ig_bio_field_id configured.
  */
-router.post("/match-outbound/:contact_id", async (req, res) => {
+router.post("/match-outbound", async (req, res) => {
   try {
-    const { contact_id } = req.params;
-    const { name, first_name, last_name, location } = req.body || {};
+    const { contact_id, full_name, name, first_name, last_name, location } = req.body || {};
 
-    const query = (name || [first_name, last_name].filter(Boolean).join(" ") || "").trim();
+    if (!contact_id) {
+      return res.status(400).json({ error: "Missing contact_id" });
+    }
+
+    const query = (
+      full_name ||
+      name ||
+      [first_name, last_name].filter(Boolean).join(" ") ||
+      ""
+    ).trim();
     if (!query) {
       return res.status(400).json({ error: "Missing name" });
     }

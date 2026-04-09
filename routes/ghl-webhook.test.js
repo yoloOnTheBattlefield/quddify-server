@@ -730,7 +730,7 @@ describe("POST /api/ghl/webhook — account_id resolution", () => {
   });
 });
 
-describe("POST /api/ghl/match-outbound/:contact_id", () => {
+describe("POST /api/ghl/match-outbound", () => {
   const recent = () => new Date(Date.now() - 60 * 60 * 1000); // 1h ago
   const old = () => new Date(Date.now() - 48 * 60 * 60 * 1000); // 48h ago
   const USERNAME_FIELD = "field_ig_username_id";
@@ -758,18 +758,26 @@ describe("POST /api/ghl/match-outbound/:contact_id", () => {
     });
   });
 
+  it("returns 400 when contact_id is missing", async () => {
+    const res = await request(app)
+      .post("/api/ghl/match-outbound")
+      .send({ full_name: "Romolo", location: { id: ghl } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/contact_id/i);
+  });
+
   it("returns 400 when name is missing", async () => {
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_xyz")
-      .send({ location: { id: ghl } });
+      .post("/api/ghl/match-outbound")
+      .send({ contact_id: "contact_xyz", location: { id: ghl } });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/name/i);
   });
 
   it("returns 400 when location.id is missing", async () => {
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_xyz")
-      .send({ name: "Romolo" });
+      .post("/api/ghl/match-outbound")
+      .send({ contact_id: "contact_xyz", full_name: "Romolo" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/location/i);
   });
@@ -785,8 +793,12 @@ describe("POST /api/ghl/match-outbound/:contact_id", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_abc")
-      .send({ name: "Romolo Marini", location: { id: ghl } });
+      .post("/api/ghl/match-outbound")
+      .send({
+        contact_id: "contact_abc",
+        full_name: "Romolo Marini",
+        location: { id: ghl },
+      });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -810,22 +822,26 @@ describe("POST /api/ghl/match-outbound/:contact_id", () => {
     ]);
   });
 
-  it("matches by username only", async () => {
+  it("matches by username when full_name is the IG handle", async () => {
     await OutboundLead.create({
       account_id: account._id,
       followingKey: "k2",
-      username: "jane_doe",
-      fullName: "Jane Doe",
+      username: "fxalexg",
+      fullName: "fxalexg",
       bio: "hello",
       dmDate: recent(),
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_jane")
-      .send({ name: "jane_doe", location: { id: ghl } });
+      .post("/api/ghl/match-outbound")
+      .send({
+        contact_id: "oJOkASKYydVY5qVWeuF3",
+        full_name: "fxalexg",
+        location: { id: ghl },
+      });
 
     expect(res.body.matched).toBe(true);
-    expect(res.body.username).toBe("jane_doe");
+    expect(res.body.username).toBe("fxalexg");
   });
 
   it("on multi-match, returns matched:false and does NOT call LeadConnector", async () => {
@@ -847,8 +863,8 @@ describe("POST /api/ghl/match-outbound/:contact_id", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_alex")
-      .send({ name: "Alex", location: { id: ghl } });
+      .post("/api/ghl/match-outbound")
+      .send({ contact_id: "contact_alex", full_name: "Alex", location: { id: ghl } });
 
     expect(res.body.matched).toBe(false);
     expect(res.body.count).toBe(2);
@@ -869,8 +885,8 @@ describe("POST /api/ghl/match-outbound/:contact_id", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_stale")
-      .send({ name: "Stale User", location: { id: ghl } });
+      .post("/api/ghl/match-outbound")
+      .send({ contact_id: "contact_stale", full_name: "Stale User", location: { id: ghl } });
 
     expect(res.body.matched).toBe(false);
     expect(res.body.count).toBe(0);
@@ -889,8 +905,8 @@ describe("POST /api/ghl/match-outbound/:contact_id", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_x")
-      .send({ name: "No Token", location: { id: ghl } });
+      .post("/api/ghl/match-outbound")
+      .send({ contact_id: "contact_x", full_name: "No Token", location: { id: ghl } });
 
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/configured/i);
@@ -911,8 +927,8 @@ describe("POST /api/ghl/match-outbound/:contact_id", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_y")
-      .send({ name: "Auth Fail", location: { id: ghl } });
+      .post("/api/ghl/match-outbound")
+      .send({ contact_id: "contact_y", full_name: "Auth Fail", location: { id: ghl } });
 
     expect(res.status).toBe(502);
     expect(res.body.status).toBe(401);
@@ -929,8 +945,13 @@ describe("POST /api/ghl/match-outbound/:contact_id", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound/contact_split")
-      .send({ first_name: "Split", last_name: "Name", location: { id: ghl } });
+      .post("/api/ghl/match-outbound")
+      .send({
+        contact_id: "contact_split",
+        first_name: "Split",
+        last_name: "Name",
+        location: { id: ghl },
+      });
 
     expect(res.body.matched).toBe(true);
     expect(res.body.username).toBe("split_name");
