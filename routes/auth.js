@@ -5,7 +5,8 @@ const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const Account = require("../models/Account");
 const AccountUser = require("../models/AccountUser");
-const { generateToken, JWT_SECRET } = require("../middleware/auth");
+const Client = require("../models/Client");
+const { auth, generateToken, JWT_SECRET } = require("../middleware/auth");
 const logger = require("../utils/logger").child({ module: "auth" });
 
 // POST /api/auth/login
@@ -31,6 +32,11 @@ router.post("/login", async (req, res) => {
 
     const token = generateToken(user, account, accountUser);
 
+    // A user is considered a "client user" (managed by someone else) if any
+    // Client doc has `user_id === user._id`. These users are technically
+    // role=1 owners of their own isolated account, so we cannot rely on role.
+    const isClientUser = !!(await Client.exists({ user_id: user._id }));
+
     res.json({
       token,
       account_id: account._id,
@@ -39,10 +45,36 @@ router.post("/login", async (req, res) => {
       last_name: user.last_name,
       email: user.email,
       role: accountUser.role,
+      is_client_user: isClientUser,
     });
   } catch (err) {
     logger.error("Login failed:", err);
     res.status(500).json({ error: "Login failed" });
+  }
+});
+
+// GET /api/auth/me — refresh the caller's user info from an existing token.
+// Used by the frontend to re-derive `is_client_user` without forcing a
+// re-login when that signal was added after the user last logged in.
+router.get("/me", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId).lean();
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const isClientUser = !!(await Client.exists({ user_id: user._id }));
+
+    res.json({
+      user_id: user._id,
+      account_id: req.user.accountId,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      email: user.email,
+      role: req.user.role,
+      is_client_user: isClientUser,
+    });
+  } catch (err) {
+    logger.error("auth/me failed:", err);
+    res.status(500).json({ error: "Failed to load user" });
   }
 });
 
