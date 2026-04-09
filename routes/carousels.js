@@ -509,7 +509,7 @@ router.post("/:id/slides/:position/rerender", async (req, res) => {
   }
 });
 
-// POST /api/carousels/:id/chat-edit — conversational slide editing via AI
+// POST /api/carousels/:id/chat-edit — conversational slide editing via AI (copy + image swaps)
 router.post("/:id/chat-edit", async (req, res) => {
   try {
     const { message } = req.body;
@@ -525,6 +525,7 @@ router.post("/:id/chat-edit", async (req, res) => {
 
     const Anthropic = require("@anthropic-ai/sdk").default;
     const Account = require("../models/Account");
+    const ClientImage = require("../models/ClientImage");
 
     const account = await Account.findById(req.account._id);
     const token = account?.claude_token
@@ -534,58 +535,175 @@ router.post("/:id/chat-edit", async (req, res) => {
 
     const claude = new Anthropic({ apiKey: token });
 
-    // Build slide context for the AI
+    // ── Build slide context (current copy + which image is on each slide) ──
+    const currentImageIds = new Set(
+      carousel.slides.filter((s) => s.image_id).map((s) => s.image_id.toString()),
+    );
+    const currentImages = await ClientImage.find({
+      _id: { $in: [...currentImageIds] },
+    }).select("summary tags").lean();
+    const currentImageById = new Map(currentImages.map((i) => [i._id.toString(), i]));
+
     const slideContext = carousel.slides
-      .map((s) => `Slide ${s.position} (${s.role}): "${s.copy}"`)
-      .join("\n");
+      .map((s) => {
+        const img = s.image_id ? currentImageById.get(s.image_id.toString()) : null;
+        const imgDesc = img
+          ? `image: ${img._id} — "${img.summary || "(no summary)"}"`
+          : s.composition === "text_only"
+            ? "image: none (text-only slide)"
+            : "image: none";
+        return `Slide ${s.position} [${s.role}, ${s.composition}]\n  copy: "${s.copy}"\n  ${imgDesc}`;
+      })
+      .join("\n\n");
+
+    // ── Build image library context (top candidates the AI can swap to) ──
+    const libraryImages = await ClientImage.find({
+      client_id: carousel.client_id,
+      account_id: req.account._id,
+      status: "ready",
+    })
+      .select("summary tags quality_score is_portrait suitable_as_cover")
+      .sort({ quality_score: -1 })
+      .limit(60)
+      .lean();
+
+    const libraryContext = libraryImages.length === 0
+      ? "(no images in library)"
+      : libraryImages
+        .map((img) => {
+          const tagBits = [];
+          if (img.tags?.emotion?.length) tagBits.push(`emotion: ${img.tags.emotion.join("/")}`);
+          if (img.tags?.vibe?.length) tagBits.push(`vibe: ${img.tags.vibe.join("/")}`);
+          if (img.tags?.setting?.length) tagBits.push(`setting: ${img.tags.setting.join("/")}`);
+          const flags = [
+            img.is_portrait ? "portrait" : "landscape",
+            img.suitable_as_cover ? "cover-ok" : null,
+          ].filter(Boolean).join(", ");
+          return `- ${img._id} [${flags}] "${img.summary || "(no summary)"}"${tagBits.length ? ` | ${tagBits.join(" · ")}` : ""}`;
+        })
+        .join("\n");
+
+    // ── Tools the AI can call ──
+    const tools = [
+      {
+        name: "update_slide_copy",
+        description: "Replace the text copy on a specific slide. Use this when the user wants to change wording, tone, length, or messaging.",
+        input_schema: {
+          type: "object",
+          properties: {
+            position: { type: "integer", description: "Slide position (1-indexed)" },
+            new_copy: { type: "string", description: "The new copy text for the slide" },
+          },
+          required: ["position", "new_copy"],
+        },
+      },
+      {
+        name: "swap_slide_image",
+        description: "Replace the image on a specific slide with a different image from the client's library. Use this when the user asks to change the photo, swap the image, use a different picture, etc. Pick the image from the library that best matches the slide's role and the user's instruction.",
+        input_schema: {
+          type: "object",
+          properties: {
+            position: { type: "integer", description: "Slide position (1-indexed)" },
+            image_id: { type: "string", description: "MongoDB ObjectId of the image from the library to use" },
+            reason: { type: "string", description: "Brief explanation of why this image fits" },
+          },
+          required: ["position", "image_id"],
+        },
+      },
+    ];
+
+    const systemPrompt = `You are an editor for an Instagram carousel. The user will ask you to modify slides — either the text copy, or which photo is shown, or both. Use the provided tools to apply changes.
+
+Guidelines:
+- Use "update_slide_copy" for any text/wording change. Keep tone consistent with existing copy. Be punchy — carousel text is short.
+- Use "swap_slide_image" when the user wants a different photo. Pick from the LIBRARY only — never invent image IDs. Match the slide's role and the user's intent (mood, setting, vibe).
+- You may call multiple tools in one response (e.g. swap two images, edit one copy).
+- If the user gives a general instruction ("make it punchier"), apply it to all relevant slides.
+- If the request is unclear or impossible (e.g. asking for an image that doesn't exist in the library), respond with text only — no tool calls — explaining what you'd need.
+- After your tool calls, you may include a brief text message confirming what you changed.`;
+
+    const userMessage = `CURRENT CAROUSEL (${carousel.slides.length} slides):
+${slideContext}
+
+AVAILABLE IMAGE LIBRARY (${libraryImages.length} images, sorted by quality):
+${libraryContext}
+
+USER INSTRUCTION: ${message}`;
 
     const response = await claude.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 2048,
-      temperature: 0.5,
-      system: `You are a carousel copy editor. The user will ask you to modify specific slides or the overall carousel copy. Apply their instruction precisely. Return ONLY valid JSON, no markdown fencing.
-
-Return format:
-{
-  "updated_slides": [{ "position": <number>, "copy": "<new copy>" }],
-  "assistant_message": "<brief confirmation of what you changed>"
-}
-
-Rules:
-- Only include slides you actually changed in updated_slides
-- Keep the same tone and voice as the original copy
-- Be concise — carousel text should be punchy, not verbose
-- If the user references a slide number, modify that slide
-- If the instruction is general (e.g. "make it shorter"), apply to all slides`,
-      messages: [{
-        role: "user",
-        content: `Current carousel (${carousel.slides.length} slides):\n${slideContext}\n\nInstruction: ${message}`,
-      }],
+      temperature: 0.4,
+      tools,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
     });
 
-    let content = response.content?.[0]?.text;
-    if (!content) return res.status(500).json({ error: "Empty AI response" });
-    content = content.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+    // ── Process tool_use blocks + collect text reply ──
+    const copyUpdates = [];
+    const imageSwaps = [];
+    const textParts = [];
 
-    const result = JSON.parse(content);
-    const updatedSlides = result.updated_slides || [];
-
-    // Apply updates to carousel
-    for (const update of updatedSlides) {
-      const slideIndex = carousel.slides.findIndex((s) => s.position === update.position);
-      if (slideIndex !== -1) {
-        carousel.slides[slideIndex].copy = update.copy;
+    for (const block of response.content || []) {
+      if (block.type === "text" && block.text) {
+        textParts.push(block.text);
+      } else if (block.type === "tool_use") {
+        if (block.name === "update_slide_copy") {
+          const { position, new_copy } = block.input || {};
+          if (typeof position === "number" && typeof new_copy === "string") {
+            copyUpdates.push({ position, copy: new_copy });
+          }
+        } else if (block.name === "swap_slide_image") {
+          const { position, image_id, reason } = block.input || {};
+          if (typeof position === "number" && typeof image_id === "string") {
+            imageSwaps.push({ position, image_id, reason: reason || "" });
+          }
+        }
       }
     }
-    await carousel.save();
 
-    // Re-render updated slides
-    if (updatedSlides.length > 0) {
+    // ── Apply copy updates ──
+    for (const update of copyUpdates) {
+      const idx = carousel.slides.findIndex((s) => s.position === update.position);
+      if (idx !== -1) carousel.slides[idx].copy = update.copy;
+    }
+
+    // ── Apply image swaps (validate IDs exist in this client's library) ──
+    const validSwapIds = imageSwaps.length > 0
+      ? await ClientImage.find({
+        _id: { $in: imageSwaps.map((s) => s.image_id) },
+        client_id: carousel.client_id,
+        account_id: req.account._id,
+        status: "ready",
+      }).select("_id storage_key thumbnail_key").lean()
+      : [];
+    const validSwapById = new Map(validSwapIds.map((i) => [i._id.toString(), i]));
+
+    const appliedSwaps = [];
+    for (const swap of imageSwaps) {
+      const img = validSwapById.get(swap.image_id);
+      if (!img) continue;
+      const idx = carousel.slides.findIndex((s) => s.position === swap.position);
+      if (idx === -1) continue;
+      carousel.slides[idx].image_id = img._id;
+      carousel.slides[idx].image_key = img.storage_key;
+      carousel.slides[idx].is_ai_generated_image = false;
+      if (swap.reason) carousel.slides[idx].image_selection_reason = swap.reason;
+      appliedSwaps.push(swap);
+    }
+
+    const changedPositions = new Set([
+      ...copyUpdates.map((u) => u.position),
+      ...appliedSwaps.map((s) => s.position),
+    ]);
+
+    if (changedPositions.size > 0) {
+      await carousel.save();
+
+      // ── Re-render every changed slide ──
       try {
         const { renderSlides } = require("../services/carousel/slideRenderer");
-        const slidesToRender = updatedSlides
-          .map((u) => carousel.slides.find((s) => s.position === u.position))
-          .filter(Boolean);
+        const slidesToRender = carousel.slides.filter((s) => changedPositions.has(s.position));
 
         const imageSelections = slidesToRender.map((s) => ({
           position: s.position,
@@ -604,7 +722,6 @@ Rules:
           lutId: carousel.lut_id?.toString() || null,
         });
 
-        // Update rendered keys
         for (const r of rendered) {
           const idx = carousel.slides.findIndex((s) => s.position === r.position);
           if (idx !== -1) carousel.slides[idx].rendered_key = r.rendered_key;
@@ -612,15 +729,32 @@ Rules:
         await carousel.save();
       } catch (renderErr) {
         logger.error("Failed to re-render slides after chat edit:", renderErr);
-        // Non-fatal — copy is already updated, rendering can be retried
+        // Non-fatal — DB state is already updated
       }
     }
 
+    // ── Build assistant message ──
+    let assistantMessage = textParts.join("\n").trim();
+    if (!assistantMessage) {
+      const parts = [];
+      if (copyUpdates.length > 0) {
+        parts.push(`Updated copy on slide${copyUpdates.length > 1 ? "s" : ""} ${copyUpdates.map((u) => u.position).sort().join(", ")}.`);
+      }
+      if (appliedSwaps.length > 0) {
+        parts.push(`Swapped image${appliedSwaps.length > 1 ? "s" : ""} on slide${appliedSwaps.length > 1 ? "s" : ""} ${appliedSwaps.map((s) => s.position).sort().join(", ")}.`);
+      }
+      assistantMessage = parts.length > 0
+        ? parts.join(" ")
+        : "I couldn't make a change for that — try being more specific about which slide or what to change.";
+    }
+
     const updated = await Carousel.findById(carousel._id);
+    const withUrls = await attachSlideUrls(updated);
     res.json({
-      carousel: updated,
-      updated_slides: updatedSlides,
-      assistant_message: result.assistant_message || "Slides updated.",
+      carousel: withUrls,
+      updated_slides: copyUpdates,
+      swapped_images: appliedSwaps,
+      assistant_message: assistantMessage,
     });
   } catch (err) {
     logger.error("Failed to chat-edit carousel:", err);
