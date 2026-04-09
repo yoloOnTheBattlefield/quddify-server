@@ -45,8 +45,13 @@ async function startApifyRun(actorId, input, token) {
   });
   if (!res.ok) {
     const text = await res.text();
-    // Detect 401 invalid token or 403 hard limit / actor-disabled errors
-    if (res.status === 401 || res.status === 403) {
+    // Detect 401 invalid token, 402 monthly spending limit, or 403 hard limit / actor-disabled errors
+    if (res.status === 401 || res.status === 402 || res.status === 403) {
+      throw new ApifyLimitError(`Apify ${res.status}: ${text}`);
+    }
+    // Also treat "monthly-usage-hard-limit-exceeded" error type as limit reached
+    // (Apify sometimes returns this with other status codes)
+    if (/monthly-usage-hard-limit|usage-limit-exceeded|insufficient-credits/i.test(text)) {
       throw new ApifyLimitError(`Apify ${res.status}: ${text}`);
     }
     throw new Error(`Apify start failed (${res.status}): ${text}`);
@@ -138,10 +143,12 @@ async function startApifyRunWithRotation(actorId, input, accountId, legacyToken,
     } catch (err) {
       if (err instanceof ApifyLimitError) {
         const isAuthError = err.message.includes("Apify 401");
-        logger.info(`[deep-scraper] Token ${picked.tokenDocId || "legacy"} ${isAuthError ? "auth failed" : "hit limit"}: ${err.message}`);
+        const isPaymentError = err.message.includes("Apify 402");
+        const reason = isAuthError ? "auth failed" : isPaymentError ? "hit monthly spending limit" : "hit limit";
+        logger.info(`[deep-scraper] Token ${picked.tokenDocId || "legacy"} ${reason}: ${err.message}`);
         if (picked.tokenDocId) {
           await markTokenLimitReached(picked.tokenDocId, err.message);
-          emitLog(accountIdStr, jobId, `Apify token "${picked.tokenDocId}" ${isAuthError ? "is invalid" : "hit limit"} — rotating to next token`, "warn");
+          emitLog(accountIdStr, jobId, `Apify token "${picked.tokenDocId}" ${reason} — rotating to next token`, "warn");
           continue; // try next token
         }
         // Legacy token failed — no rotation possible
