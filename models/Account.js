@@ -5,6 +5,9 @@ const AccountSchema = new mongoose.Schema(
   {
     name: { type: String, default: null },
     ghl: { type: String, default: null },
+    ghl_pit_token: { type: String, default: null },
+    ghl_ig_username_field_id: { type: String, default: null },
+    ghl_ig_bio_field_id: { type: String, default: null },
     calendly: { type: String, default: null },
     calendly_token: { type: String, default: null },
     calendly_user_uri: { type: String, default: null },
@@ -71,6 +74,7 @@ const ENCRYPTED_FIELDS = [
   "ig_oauth.page_access_token",
   "stripe_webhook_secret",
   "telegram_bot_token",
+  "ghl_pit_token",
 ];
 
 /**

@@ -730,16 +730,51 @@ describe("POST /api/ghl/webhook — account_id resolution", () => {
   });
 });
 
-describe("POST /api/ghl/match-outbound", () => {
+describe("POST /api/ghl/match-outbound/:contact_id", () => {
   const recent = () => new Date(Date.now() - 60 * 60 * 1000); // 1h ago
   const old = () => new Date(Date.now() - 48 * 60 * 60 * 1000); // 48h ago
+  const USERNAME_FIELD = "field_ig_username_id";
+  const BIO_FIELD = "field_ig_bio_id";
+  const PIT_TOKEN = "pit-test-token-123";
 
-  it("returns 400 when name is missing", async () => {
-    const res = await request(app).post("/api/ghl/match-outbound").send({});
-    expect(res.status).toBe(400);
+  beforeEach(async () => {
+    await Account.findByIdAndUpdate(account._id, {
+      ghl_pit_token: Account.encryptField(PIT_TOKEN),
+      ghl_ig_username_field_id: USERNAME_FIELD,
+      ghl_ig_bio_field_id: BIO_FIELD,
+    });
+
+    // Re-mock fetch for LeadConnector calls
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve("") }),
+    );
   });
 
-  it("returns unique match by partial fullName (DM'd within 24h)", async () => {
+  afterEach(async () => {
+    await Account.findByIdAndUpdate(account._id, {
+      ghl_pit_token: null,
+      ghl_ig_username_field_id: null,
+      ghl_ig_bio_field_id: null,
+    });
+  });
+
+  it("returns 400 when name is missing", async () => {
+    const res = await request(app)
+      .post("/api/ghl/match-outbound/contact_xyz")
+      .send({ location: { id: ghl } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/name/i);
+  });
+
+  it("returns 400 when location.id is missing", async () => {
+    const res = await request(app)
+      .post("/api/ghl/match-outbound/contact_xyz")
+      .send({ name: "Romolo" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/location/i);
+  });
+
+  it("on unique match, PUTs username + bio to LeadConnector and returns matched:true", async () => {
     await OutboundLead.create({
       account_id: account._id,
       followingKey: "k1",
@@ -750,8 +785,8 @@ describe("POST /api/ghl/match-outbound", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound")
-      .send({ name: "Romolo Marini" });
+      .post("/api/ghl/match-outbound/contact_abc")
+      .send({ name: "Romolo Marini", location: { id: ghl } });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -759,9 +794,23 @@ describe("POST /api/ghl/match-outbound", () => {
       username: "romolo_dxb",
       bio: "Real estate in Dubai",
     });
+
+    // Assert the LeadConnector PUT
+    const lcCall = mockFetch.mock.calls.find((c) =>
+      String(c[0]).includes("services.leadconnectorhq.com/contacts/contact_abc"),
+    );
+    expect(lcCall).toBeTruthy();
+    expect(lcCall[1].method).toBe("PUT");
+    expect(lcCall[1].headers.Authorization).toBe(`Bearer ${PIT_TOKEN}`);
+    expect(lcCall[1].headers.Version).toBe("2021-07-28");
+    const body = JSON.parse(lcCall[1].body);
+    expect(body.customFields).toEqual([
+      { id: USERNAME_FIELD, value: "romolo_dxb" },
+      { id: BIO_FIELD, value: "Real estate in Dubai" },
+    ]);
   });
 
-  it("matches by username when only username is sent", async () => {
+  it("matches by username only", async () => {
     await OutboundLead.create({
       account_id: account._id,
       followingKey: "k2",
@@ -772,20 +821,20 @@ describe("POST /api/ghl/match-outbound", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound")
-      .send({ name: "jane_doe" });
+      .post("/api/ghl/match-outbound/contact_jane")
+      .send({ name: "jane_doe", location: { id: ghl } });
 
     expect(res.body.matched).toBe(true);
     expect(res.body.username).toBe("jane_doe");
   });
 
-  it("returns matched:false when more than one outbound lead matches (passes)", async () => {
+  it("on multi-match, returns matched:false and does NOT call LeadConnector", async () => {
     await OutboundLead.create({
       account_id: account._id,
       followingKey: "k3a",
       username: "alex_one",
       fullName: "Alex Smith",
-      bio: "bio a",
+      bio: "a",
       dmDate: recent(),
     });
     await OutboundLead.create({
@@ -793,16 +842,20 @@ describe("POST /api/ghl/match-outbound", () => {
       followingKey: "k3b",
       username: "alex_two",
       fullName: "Alex Johnson",
-      bio: "bio b",
+      bio: "b",
       dmDate: recent(),
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound")
-      .send({ name: "Alex" });
+      .post("/api/ghl/match-outbound/contact_alex")
+      .send({ name: "Alex", location: { id: ghl } });
 
     expect(res.body.matched).toBe(false);
     expect(res.body.count).toBe(2);
+    const lcCall = mockFetch.mock.calls.find((c) =>
+      String(c[0]).includes("leadconnectorhq.com"),
+    );
+    expect(lcCall).toBeFalsy();
   });
 
   it("excludes outbound leads DM'd more than 24h ago", async () => {
@@ -816,42 +869,53 @@ describe("POST /api/ghl/match-outbound", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound")
-      .send({ name: "Stale User" });
+      .post("/api/ghl/match-outbound/contact_stale")
+      .send({ name: "Stale User", location: { id: ghl } });
 
     expect(res.body.matched).toBe(false);
     expect(res.body.count).toBe(0);
   });
 
-  it("scopes to account when location.id is provided", async () => {
-    const otherAccount = await Account.create({ ghl: "ghl_other_loc" });
+  it("returns 500 when account is missing pit token or field IDs", async () => {
+    await Account.findByIdAndUpdate(account._id, { ghl_pit_token: null });
 
     await OutboundLead.create({
-      account_id: otherAccount._id,
-      followingKey: "k5",
-      username: "wrong_acct",
-      fullName: "Carol King",
-      bio: "wrong",
-      dmDate: recent(),
-    });
-    await OutboundLead.create({
       account_id: account._id,
-      followingKey: "k5b",
-      username: "right_acct",
-      fullName: "Carol King",
-      bio: "right",
+      followingKey: "k7",
+      username: "no_token",
+      fullName: "No Token",
+      bio: "x",
       dmDate: recent(),
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound")
-      .send({ name: "Carol King", location: { id: ghl } });
+      .post("/api/ghl/match-outbound/contact_x")
+      .send({ name: "No Token", location: { id: ghl } });
 
-    expect(res.body.matched).toBe(true);
-    expect(res.body.username).toBe("right_acct");
-    expect(res.body.bio).toBe("right");
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/configured/i);
+  });
 
-    await Account.deleteOne({ _id: otherAccount._id });
+  it("returns 502 when LeadConnector responds with error", async () => {
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 401, text: () => Promise.resolve("Unauthorized") }),
+    );
+
+    await OutboundLead.create({
+      account_id: account._id,
+      followingKey: "k8",
+      username: "auth_fail",
+      fullName: "Auth Fail",
+      bio: "x",
+      dmDate: recent(),
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/match-outbound/contact_y")
+      .send({ name: "Auth Fail", location: { id: ghl } });
+
+    expect(res.status).toBe(502);
+    expect(res.body.status).toBe(401);
   });
 
   it("accepts first_name + last_name instead of name", async () => {
@@ -865,8 +929,8 @@ describe("POST /api/ghl/match-outbound", () => {
     });
 
     const res = await request(app)
-      .post("/api/ghl/match-outbound")
-      .send({ first_name: "Split", last_name: "Name" });
+      .post("/api/ghl/match-outbound/contact_split")
+      .send({ first_name: "Split", last_name: "Name", location: { id: ghl } });
 
     expect(res.body.matched).toBe(true);
     expect(res.body.username).toBe("split_name");

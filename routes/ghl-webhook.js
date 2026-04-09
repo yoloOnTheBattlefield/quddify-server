@@ -349,18 +349,22 @@ router.post("/conversation", async (req, res) => {
 });
 
 /**
- * POST /api/ghl/match-outbound
+ * POST /api/ghl/match-outbound/:contact_id
  *
- * Inbound lookup webhook from GHL. Given a name (full name or IG username),
- * try to partial-match an outbound lead that was DM'd today. If exactly one
- * outbound lead matches → return its IG username + bio. If zero or more than
- * one match → no unique match (pass).
+ * Inbound lookup webhook from GHL. Given an inbound contact's name (full name
+ * or IG username), partial-matches an outbound lead DM'd in the last 24h. On
+ * a unique match, writes the matched IG username + bio to the GHL contact's
+ * custom fields via the LeadConnector API.
  *
- * Accepts either { name } or { first_name, last_name }, plus optional
- * location.id for account scoping.
+ * Body: { name, location: { id }, first_name?, last_name? }
+ * URL param: contact_id (the GHL contact to update)
+ *
+ * Account must have ghl_pit_token, ghl_ig_username_field_id, and
+ * ghl_ig_bio_field_id configured.
  */
-router.post("/match-outbound", async (req, res) => {
+router.post("/match-outbound/:contact_id", async (req, res) => {
   try {
+    const { contact_id } = req.params;
     const { name, first_name, last_name, location } = req.body || {};
 
     const query = (name || [first_name, last_name].filter(Boolean).join(" ") || "").trim();
@@ -368,42 +372,82 @@ router.post("/match-outbound", async (req, res) => {
       return res.status(400).json({ error: "Missing name" });
     }
 
+    const ghlLocationId = location?.id || null;
+    if (!ghlLocationId) {
+      return res.status(400).json({ error: "Missing location.id" });
+    }
+
+    const account = await Account.findOne({ ghl: ghlLocationId });
+    if (!account) {
+      return res.status(404).json({ error: "Account not found for location" });
+    }
+
     // 24h rolling window — outbound lead must have been DM'd in the last 24h
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    const filter = {
+    const matches = await OutboundLead.find({
+      account_id: account._id,
       dmDate: { $gte: since },
       $or: [
         { fullName: { $regex: escapeRegex(query), $options: "i" } },
         { username: { $regex: escapeRegex(query), $options: "i" } },
       ],
-    };
-
-    // Optional account scoping
-    const ghlLocationId = location?.id || null;
-    if (ghlLocationId) {
-      const account = await Account.findOne({ ghl: ghlLocationId }).lean();
-      if (account) filter.account_id = account._id;
-    }
-
-    // Fetch up to 2 — we only care whether the match is unique
-    const matches = await OutboundLead.find(filter)
+    })
       .select("username bio fullName")
       .limit(2)
       .lean();
 
     if (matches.length !== 1) {
       logger.info(
-        { query, count: matches.length },
+        { query, contact_id, count: matches.length },
         "GHL match-outbound: no unique match",
       );
       return res.json({ matched: false, count: matches.length });
     }
 
     const [match] = matches;
+
+    // Push matched data into GHL contact custom fields
+    const token = account.ghl_pit_token ? Account.decryptField(account.ghl_pit_token) : null;
+    const usernameFieldId = account.ghl_ig_username_field_id;
+    const bioFieldId = account.ghl_ig_bio_field_id;
+
+    if (!token || !usernameFieldId || !bioFieldId) {
+      logger.warn(
+        { contact_id, accountId: account._id },
+        "GHL match-outbound: account missing pit token or custom field IDs",
+      );
+      return res.status(500).json({ error: "Account not configured for GHL contact updates" });
+    }
+
+    const ghlRes = await fetch(`https://services.leadconnectorhq.com/contacts/${contact_id}`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Version: "2021-07-28",
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        customFields: [
+          { id: usernameFieldId, value: match.username || "" },
+          { id: bioFieldId, value: match.bio || "" },
+        ],
+      }),
+    });
+
+    if (!ghlRes.ok) {
+      const errBody = await ghlRes.text().catch(() => "");
+      logger.error(
+        { contact_id, status: ghlRes.status, body: errBody },
+        "GHL match-outbound: LeadConnector update failed",
+      );
+      return res.status(502).json({ error: "LeadConnector update failed", status: ghlRes.status });
+    }
+
     logger.info(
-      { query, username: match.username },
-      "GHL match-outbound: unique match found",
+      { query, contact_id, username: match.username },
+      "GHL match-outbound: unique match pushed to contact",
     );
 
     return res.json({
