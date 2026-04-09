@@ -729,3 +729,146 @@ describe("POST /api/ghl/webhook — account_id resolution", () => {
     expect(updatedOb.link_sent_at).toBeTruthy();
   });
 });
+
+describe("POST /api/ghl/match-outbound", () => {
+  const recent = () => new Date(Date.now() - 60 * 60 * 1000); // 1h ago
+  const old = () => new Date(Date.now() - 48 * 60 * 60 * 1000); // 48h ago
+
+  it("returns 400 when name is missing", async () => {
+    const res = await request(app).post("/api/ghl/match-outbound").send({});
+    expect(res.status).toBe(400);
+  });
+
+  it("returns unique match by partial fullName (DM'd within 24h)", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      followingKey: "k1",
+      username: "romolo_dxb",
+      fullName: "Romolo Marini | Dubai | Immobilienexperte",
+      bio: "Real estate in Dubai",
+      dmDate: recent(),
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/match-outbound")
+      .send({ name: "Romolo Marini" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      matched: true,
+      username: "romolo_dxb",
+      bio: "Real estate in Dubai",
+    });
+  });
+
+  it("matches by username when only username is sent", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      followingKey: "k2",
+      username: "jane_doe",
+      fullName: "Jane Doe",
+      bio: "hello",
+      dmDate: recent(),
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/match-outbound")
+      .send({ name: "jane_doe" });
+
+    expect(res.body.matched).toBe(true);
+    expect(res.body.username).toBe("jane_doe");
+  });
+
+  it("returns matched:false when more than one outbound lead matches (passes)", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      followingKey: "k3a",
+      username: "alex_one",
+      fullName: "Alex Smith",
+      bio: "bio a",
+      dmDate: recent(),
+    });
+    await OutboundLead.create({
+      account_id: account._id,
+      followingKey: "k3b",
+      username: "alex_two",
+      fullName: "Alex Johnson",
+      bio: "bio b",
+      dmDate: recent(),
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/match-outbound")
+      .send({ name: "Alex" });
+
+    expect(res.body.matched).toBe(false);
+    expect(res.body.count).toBe(2);
+  });
+
+  it("excludes outbound leads DM'd more than 24h ago", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      followingKey: "k4",
+      username: "stale_user",
+      fullName: "Stale User",
+      bio: "old",
+      dmDate: old(),
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/match-outbound")
+      .send({ name: "Stale User" });
+
+    expect(res.body.matched).toBe(false);
+    expect(res.body.count).toBe(0);
+  });
+
+  it("scopes to account when location.id is provided", async () => {
+    const otherAccount = await Account.create({ ghl: "ghl_other_loc" });
+
+    await OutboundLead.create({
+      account_id: otherAccount._id,
+      followingKey: "k5",
+      username: "wrong_acct",
+      fullName: "Carol King",
+      bio: "wrong",
+      dmDate: recent(),
+    });
+    await OutboundLead.create({
+      account_id: account._id,
+      followingKey: "k5b",
+      username: "right_acct",
+      fullName: "Carol King",
+      bio: "right",
+      dmDate: recent(),
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/match-outbound")
+      .send({ name: "Carol King", location: { id: ghl } });
+
+    expect(res.body.matched).toBe(true);
+    expect(res.body.username).toBe("right_acct");
+    expect(res.body.bio).toBe("right");
+
+    await Account.deleteOne({ _id: otherAccount._id });
+  });
+
+  it("accepts first_name + last_name instead of name", async () => {
+    await OutboundLead.create({
+      account_id: account._id,
+      followingKey: "k6",
+      username: "split_name",
+      fullName: "Split Name",
+      bio: "bio",
+      dmDate: recent(),
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/match-outbound")
+      .send({ first_name: "Split", last_name: "Name" });
+
+    expect(res.body.matched).toBe(true);
+    expect(res.body.username).toBe("split_name");
+  });
+});

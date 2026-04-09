@@ -348,4 +348,73 @@ router.post("/conversation", async (req, res) => {
   }
 });
 
+/**
+ * POST /api/ghl/match-outbound
+ *
+ * Inbound lookup webhook from GHL. Given a name (full name or IG username),
+ * try to partial-match an outbound lead that was DM'd today. If exactly one
+ * outbound lead matches → return its IG username + bio. If zero or more than
+ * one match → no unique match (pass).
+ *
+ * Accepts either { name } or { first_name, last_name }, plus optional
+ * location.id for account scoping.
+ */
+router.post("/match-outbound", async (req, res) => {
+  try {
+    const { name, first_name, last_name, location } = req.body || {};
+
+    const query = (name || [first_name, last_name].filter(Boolean).join(" ") || "").trim();
+    if (!query) {
+      return res.status(400).json({ error: "Missing name" });
+    }
+
+    // 24h rolling window — outbound lead must have been DM'd in the last 24h
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const filter = {
+      dmDate: { $gte: since },
+      $or: [
+        { fullName: { $regex: escapeRegex(query), $options: "i" } },
+        { username: { $regex: escapeRegex(query), $options: "i" } },
+      ],
+    };
+
+    // Optional account scoping
+    const ghlLocationId = location?.id || null;
+    if (ghlLocationId) {
+      const account = await Account.findOne({ ghl: ghlLocationId }).lean();
+      if (account) filter.account_id = account._id;
+    }
+
+    // Fetch up to 2 — we only care whether the match is unique
+    const matches = await OutboundLead.find(filter)
+      .select("username bio fullName")
+      .limit(2)
+      .lean();
+
+    if (matches.length !== 1) {
+      logger.info(
+        { query, count: matches.length },
+        "GHL match-outbound: no unique match",
+      );
+      return res.json({ matched: false, count: matches.length });
+    }
+
+    const [match] = matches;
+    logger.info(
+      { query, username: match.username },
+      "GHL match-outbound: unique match found",
+    );
+
+    return res.json({
+      matched: true,
+      username: match.username || null,
+      bio: match.bio || null,
+    });
+  } catch (error) {
+    logger.error({ err: error }, "GHL match-outbound error");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 module.exports = router;
