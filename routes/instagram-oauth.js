@@ -4,6 +4,7 @@ const router = express.Router();
 const Account = require("../models/Account");
 const OutboundAccount = require("../models/OutboundAccount");
 const { encrypt, decrypt } = require("../utils/crypto");
+const { loadOwnedClient } = require("../utils/clientUserScope");
 
 const IG_APP_ID = process.env.IG_APP_ID;
 const IG_APP_SECRET = process.env.IG_APP_SECRET;
@@ -179,8 +180,7 @@ router.get("/client/:clientId/auth-url", async (req, res) => {
     return res.status(500).json({ error: "Instagram OAuth not configured" });
   }
 
-  const Client = require("../models/Client");
-  const client = await Client.findOne({ _id: req.params.clientId, account_id: req.account._id });
+  const client = await loadOwnedClient(req, req.params.clientId);
   if (!client) return res.status(404).json({ error: "Client not found" });
 
   const scopes = "instagram_basic,instagram_manage_messages,instagram_content_publish,pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata";
@@ -203,7 +203,7 @@ router.post("/client/:clientId/callback", async (req, res) => {
   if (!code) return res.status(400).json({ error: "Missing authorization code" });
 
   const Client = require("../models/Client");
-  const client = await Client.findOne({ _id: req.params.clientId, account_id: req.account._id });
+  const client = await loadOwnedClient(req, req.params.clientId);
   if (!client) return res.status(404).json({ error: "Client not found" });
 
   try {
@@ -234,20 +234,18 @@ router.post("/client/:clientId/callback", async (req, res) => {
 router.delete("/client/:clientId/disconnect", async (req, res) => {
   const Client = require("../models/Client");
   try {
-    const result = await Client.findOneAndUpdate(
-      { _id: req.params.clientId, account_id: req.account._id },
-      {
-        $set: {
-          "ig_oauth.access_token": null,
-          "ig_oauth.page_access_token": null,
-          "ig_oauth.page_id": null,
-          "ig_oauth.ig_user_id": null,
-          "ig_oauth.ig_username": null,
-          "ig_oauth.connected_at": null,
-        },
+    const owned = await loadOwnedClient(req, req.params.clientId);
+    if (!owned) return res.status(404).json({ error: "Client not found" });
+    await Client.findByIdAndUpdate(owned._id, {
+      $set: {
+        "ig_oauth.access_token": null,
+        "ig_oauth.page_access_token": null,
+        "ig_oauth.page_id": null,
+        "ig_oauth.ig_user_id": null,
+        "ig_oauth.ig_username": null,
+        "ig_oauth.connected_at": null,
       },
-    );
-    if (!result) return res.status(404).json({ error: "Client not found" });
+    });
 
     logger.info(`[ig-oauth] Disconnected Instagram from client ${req.params.clientId}`);
     res.json({ success: true });

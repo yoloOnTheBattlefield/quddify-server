@@ -6,6 +6,7 @@ const validate = require("../middleware/validate");
 const carouselSchemas = require("../schemas/carousels");
 const { getPresignedUrl } = require("../services/storageService");
 const logger = require("../utils/logger").child({ module: "carousels" });
+const { buildClientScopedFilter, findOwnedDoc, loadOwnedClient } = require("../utils/clientUserScope");
 
 async function attachSlideUrls(carousel) {
   if (!carousel?.slides?.length) return carousel;
@@ -24,7 +25,11 @@ async function attachSlideUrls(carousel) {
 // GET /api/carousels?client_id=xxx
 router.get("/", async (req, res) => {
   try {
-    const filter = { account_id: req.account._id };
+    // role=2 users have data under the creator's account_id, not their own.
+    // Scope by client_id (their owned Clients) instead of account_id.
+    const baseFilter = await buildClientScopedFilter(req);
+    if (baseFilter === null) return res.json([]);
+    const filter = { ...baseFilter };
     if (req.query.client_id) filter.client_id = req.query.client_id;
     if (req.query.status) filter.status = req.query.status;
     const carousels = await Carousel.find(filter).sort({ created_at: -1 }).limit(50);
@@ -39,7 +44,7 @@ router.get("/", async (req, res) => {
 // GET /api/carousels/:id
 router.get("/:id", async (req, res) => {
   try {
-    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
     res.json(await attachSlideUrls(carousel));
   } catch (err) {
@@ -53,16 +58,13 @@ router.post("/generate-brief", validate(carouselSchemas.generateBrief), async (r
   try {
     const { client_id, transcript_ids, goal } = req.body;
 
-    const Client = require("../models/Client");
     const Transcript = require("../models/Transcript");
     const Anthropic = require("@anthropic-ai/sdk").default;
     const Account = require("../models/Account");
 
-    const [client, transcripts] = await Promise.all([
-      Client.findById(client_id),
-      Transcript.find({ _id: { $in: transcript_ids } }),
-    ]);
+    const client = await loadOwnedClient(req, client_id);
     if (!client) return res.status(404).json({ error: "Client not found" });
+    const transcripts = await Transcript.find({ _id: { $in: transcript_ids }, client_id: client._id });
 
     // Build transcript excerpts (truncate to keep prompt reasonable)
     const transcriptText = transcripts
@@ -77,7 +79,9 @@ router.post("/generate-brief", validate(carouselSchemas.generateBrief), async (r
       conversion_focused: "Drive DMs and conversions — agitate problem, present solution, clear next step",
     };
 
-    const account = await Account.findById(req.account._id);
+    // Always read the Claude key from the Client's owning account, not
+    // req.account (which for role=2 is the user's empty isolated account).
+    const account = await Account.findById(client.account_id);
     const token = account?.claude_token
       ? Account.decryptField(account.claude_token)
       : process.env.CLAUDE;
@@ -136,13 +140,12 @@ router.post("/generate-from-topic", validate(carouselSchemas.generateFromTopic),
   try {
     const { client_id, topic, goal, slide_count, additional_instructions, show_brand_name } = req.body;
 
-    const Client = require("../models/Client");
-    const client = await Client.findById(client_id);
+    const client = await loadOwnedClient(req, client_id);
     if (!client) return res.status(404).json({ error: "Client not found" });
 
     const carousel = await Carousel.create({
       client_id,
-      account_id: req.account._id,
+      account_id: client.account_id,
       topic,
       transcript_ids: [],
       goal: goal || "saveable_educational",
@@ -151,7 +154,7 @@ router.post("/generate-from-topic", validate(carouselSchemas.generateFromTopic),
 
     const job = await CarouselJob.create({
       carousel_id: carousel._id,
-      account_id: req.account._id,
+      account_id: client.account_id,
       status: "queued",
     });
 
@@ -182,6 +185,9 @@ router.post("/generate", validate(carouselSchemas.generate), async (req, res) =>
   try {
     const { client_id, transcript_ids, swipe_file_id, template_id, goal, copy_model, lut_id, style_id, style_prompt_override, layout_preset } = req.body;
 
+    const client = await loadOwnedClient(req, client_id);
+    if (!client) return res.status(404).json({ error: "Client not found" });
+
     // Resolve style prompt from saved preset or override
     let stylePrompt = style_prompt_override || "";
     if (style_id && !stylePrompt) {
@@ -192,7 +198,7 @@ router.post("/generate", validate(carouselSchemas.generate), async (req, res) =>
 
     const carousel = await Carousel.create({
       client_id,
-      account_id: req.account._id,
+      account_id: client.account_id,
       transcript_ids,
       swipe_file_id: swipe_file_id || null,
       template_id: template_id || null,
@@ -204,7 +210,7 @@ router.post("/generate", validate(carouselSchemas.generate), async (req, res) =>
 
     const job = await CarouselJob.create({
       carousel_id: carousel._id,
-      account_id: req.account._id,
+      account_id: client.account_id,
       status: "queued",
     });
 
@@ -242,8 +248,9 @@ router.get("/:id/download", async (req, res) => {
       const account = await Account.findById(decoded.accountId).lean();
       if (!account) return res.status(401).json({ error: "Invalid token" });
       req.account = account;
+      req.user = decoded; // populate so ownership helpers work for role=2 too
     }
-    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
 
     const renderedSlides = (carousel.slides || []).filter((s) => s.rendered_key);
@@ -273,7 +280,7 @@ router.get("/:id/download", async (req, res) => {
 // GET /api/carousels/:id/slides/:position/download — proxy slide image from R2
 router.get("/:id/slides/:position/download", async (req, res) => {
   try {
-    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
 
     const slide = carousel.slides.find((s) => s.position === Number(req.params.position));
@@ -293,7 +300,10 @@ router.get("/:id/slides/:position/download", async (req, res) => {
 // GET /api/carousels/:id/job — get job status for a carousel
 router.get("/:id/job", async (req, res) => {
   try {
-    const job = await CarouselJob.findOne({ carousel_id: req.params.id, account_id: req.account._id }).sort({ created_at: -1 });
+    // Verify the user owns the carousel before exposing the job.
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
+    if (!carousel) return res.status(404).json({ error: "Job not found" });
+    const job = await CarouselJob.findOne({ carousel_id: req.params.id }).sort({ created_at: -1 });
     if (!job) return res.status(404).json({ error: "Job not found" });
     res.json(job);
   } catch (err) {
@@ -305,12 +315,9 @@ router.get("/:id/job", async (req, res) => {
 // PATCH /api/carousels/:id — update carousel (edit copy, swap image, etc.)
 router.patch("/:id", async (req, res) => {
   try {
-    const carousel = await Carousel.findOneAndUpdate(
-      { _id: req.params.id, account_id: req.account._id },
-      { $set: req.body },
-      { new: true },
-    );
-    if (!carousel) return res.status(404).json({ error: "Carousel not found" });
+    const existing = await findOwnedDoc(Carousel, req, req.params.id);
+    if (!existing) return res.status(404).json({ error: "Carousel not found" });
+    const carousel = await Carousel.findByIdAndUpdate(existing._id, { $set: req.body }, { new: true });
     res.json(carousel);
   } catch (err) {
     logger.error("Failed to update carousel:", err);
@@ -324,7 +331,7 @@ router.post("/:id/apply-lut", async (req, res) => {
     const { lut_id } = req.body;
     if (!lut_id) return res.status(400).json({ error: "lut_id is required" });
 
-    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
 
     if (!carousel.slides || carousel.slides.length === 0) {
@@ -375,7 +382,7 @@ router.post("/:id/apply-lut", async (req, res) => {
 // POST /api/carousels/:id/regenerate — re-run the full pipeline for a failed/ready carousel
 router.post("/:id/regenerate", async (req, res) => {
   try {
-    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
 
     // Reset carousel status
@@ -383,7 +390,7 @@ router.post("/:id/regenerate", async (req, res) => {
 
     const job = await CarouselJob.create({
       carousel_id: carousel._id,
-      account_id: req.account._id,
+      account_id: carousel.account_id,
       status: "queued",
     });
 
@@ -408,13 +415,13 @@ router.post("/:id/regenerate", async (req, res) => {
 // POST /api/carousels/:id/publish-ig — publish carousel to Instagram
 router.post("/:id/publish-ig", async (req, res) => {
   try {
-    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
 
     const { publishToInstagram } = require("../services/carousel/igPublisher");
     const result = await publishToInstagram({
       carouselId: carousel._id.toString(),
-      accountId: req.account._id.toString(),
+      accountId: carousel.account_id.toString(),
     });
 
     // Create notification
@@ -423,7 +430,7 @@ router.post("/:id/publish-ig", async (req, res) => {
       const Client = require("../models/Client");
       const client = await Client.findById(carousel.client_id).lean();
       await Notification.create({
-        account_id: req.account._id,
+        account_id: carousel.account_id,
         type: "general",
         title: "Posted to Instagram",
         message: `Carousel for ${client?.name || "Unknown"} published to Instagram`,
@@ -448,7 +455,7 @@ router.post("/:id/slides/:position/rerender", async (req, res) => {
     const position = parseInt(req.params.position, 10);
     if (isNaN(position)) return res.status(400).json({ error: "Invalid position" });
 
-    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
 
     const slideIndex = carousel.slides.findIndex((s) => s.position === position);
@@ -518,7 +525,7 @@ router.post("/:id/chat-edit", async (req, res) => {
       return res.status(400).json({ error: "message is required" });
     }
 
-    const carousel = await Carousel.findOne({ _id: req.params.id, account_id: req.account._id });
+    const carousel = await findOwnedDoc(Carousel, req, req.params.id);
     if (!carousel) return res.status(404).json({ error: "Carousel not found" });
     if (!carousel.slides || carousel.slides.length === 0) {
       return res.status(400).json({ error: "Carousel has no slides" });
@@ -528,7 +535,9 @@ router.post("/:id/chat-edit", async (req, res) => {
     const Account = require("../models/Account");
     const ClientImage = require("../models/ClientImage");
 
-    const account = await Account.findById(req.account._id);
+    // Read the Claude key from the carousel's owning account, not req.account
+    // (which for role=2 is the user's empty isolated account).
+    const account = await Account.findById(carousel.account_id);
     const token = account?.claude_token
       ? Account.decryptField(account.claude_token)
       : process.env.CLAUDE;
@@ -558,9 +567,9 @@ router.post("/:id/chat-edit", async (req, res) => {
       .join("\n\n");
 
     // ── Build image library context (top candidates the AI can swap to) ──
+    // client_id alone is sufficient — every ClientImage belongs to exactly one Client.
     const libraryImages = await ClientImage.find({
       client_id: carousel.client_id,
-      account_id: req.account._id,
       status: "ready",
     })
       .select("summary tags quality_score is_portrait suitable_as_cover")
@@ -674,7 +683,6 @@ USER INSTRUCTION: ${message}`;
       ? await ClientImage.find({
         _id: { $in: imageSwaps.map((s) => s.image_id) },
         client_id: carousel.client_id,
-        account_id: req.account._id,
         status: "ready",
       }).select("_id storage_key thumbnail_key").lean()
       : [];
@@ -766,9 +774,10 @@ USER INSTRUCTION: ${message}`;
 // DELETE /api/carousels/:id
 router.delete("/:id", async (req, res) => {
   try {
-    const result = await Carousel.findOneAndDelete({ _id: req.params.id, account_id: req.account._id });
-    if (!result) return res.status(404).json({ error: "Carousel not found" });
-    await CarouselJob.deleteMany({ carousel_id: req.params.id });
+    const existing = await findOwnedDoc(Carousel, req, req.params.id);
+    if (!existing) return res.status(404).json({ error: "Carousel not found" });
+    await Carousel.deleteOne({ _id: existing._id });
+    await CarouselJob.deleteMany({ carousel_id: existing._id });
     res.json({ success: true });
   } catch (err) {
     logger.error("Failed to delete carousel:", err);

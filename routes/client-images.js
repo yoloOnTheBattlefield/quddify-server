@@ -4,6 +4,7 @@ const ClientImage = require("../models/ClientImage");
 const { TAG_VOCABULARY } = require("../services/carousel/tagVocabulary");
 const { getPresignedUrl } = require("../services/storageService");
 const logger = require("../utils/logger").child({ module: "client-images" });
+const { buildClientScopedFilter, getOwnedClientIds, findOwnedDoc } = require("../utils/clientUserScope");
 
 // GET /api/client-images/tags — return available tag vocabulary
 router.get("/tags", async (_req, res) => {
@@ -14,7 +15,11 @@ router.get("/tags", async (_req, res) => {
 router.get("/", async (req, res) => {
   try {
     const { client_id, emotion, context, vibe, activity, body_language, clothing, setting, lighting, facial_expression, status, suitable_as_cover, min_quality, page = 1, limit = 50 } = req.query;
-    const filter = { account_id: req.account._id };
+    // role=2 users have data under the creator's account_id, not their own.
+    // Scope by client_id (their owned Clients) instead of account_id.
+    const baseFilter = await buildClientScopedFilter(req);
+    if (baseFilter === null) return res.json({ images: [], total: 0, page: Number(page), limit: Number(limit) });
+    const filter = { ...baseFilter };
     if (client_id) filter.client_id = client_id;
     if (status) filter.status = status;
     else filter.status = { $in: ["ready", "processing", "failed"] };
@@ -55,7 +60,7 @@ router.get("/", async (req, res) => {
 // GET /api/client-images/:id
 router.get("/:id", async (req, res) => {
   try {
-    const image = await ClientImage.findOne({ _id: req.params.id, account_id: req.account._id });
+    const image = await findOwnedDoc(ClientImage, req, req.params.id);
     if (!image) return res.status(404).json({ error: "Image not found" });
     res.json(image);
   } catch (err) {
@@ -67,12 +72,9 @@ router.get("/:id", async (req, res) => {
 // PATCH /api/client-images/:id — update tags, status, etc.
 router.patch("/:id", async (req, res) => {
   try {
-    const image = await ClientImage.findOneAndUpdate(
-      { _id: req.params.id, account_id: req.account._id },
-      { $set: req.body },
-      { new: true },
-    );
-    if (!image) return res.status(404).json({ error: "Image not found" });
+    const existing = await findOwnedDoc(ClientImage, req, req.params.id);
+    if (!existing) return res.status(404).json({ error: "Image not found" });
+    const image = await ClientImage.findByIdAndUpdate(existing._id, { $set: req.body }, { new: true });
     res.json(image);
   } catch (err) {
     logger.error("Failed to update image:", err);
@@ -83,8 +85,9 @@ router.patch("/:id", async (req, res) => {
 // DELETE /api/client-images/:id
 router.delete("/:id", async (req, res) => {
   try {
-    const image = await ClientImage.findOneAndDelete({ _id: req.params.id, account_id: req.account._id });
-    if (!image) return res.status(404).json({ error: "Image not found" });
+    const existing = await findOwnedDoc(ClientImage, req, req.params.id);
+    if (!existing) return res.status(404).json({ error: "Image not found" });
+    const image = await ClientImage.findByIdAndDelete(existing._id);
     // Clean up S3 files in background
     const { remove } = require("../services/storageService");
     Promise.all([
@@ -107,7 +110,12 @@ router.post("/bulk-delete", async (req, res) => {
       return res.status(400).json({ error: "image_ids array is required" });
     }
 
-    const images = await ClientImage.find({ _id: { $in: image_ids }, account_id: req.account._id });
+    const ownedClientIds = await getOwnedClientIds(req);
+    if (ownedClientIds.length === 0) return res.json({ deleted: 0 });
+    const images = await ClientImage.find({
+      _id: { $in: image_ids },
+      client_id: { $in: ownedClientIds },
+    });
     if (images.length === 0) return res.json({ deleted: 0 });
 
     await ClientImage.deleteMany({ _id: { $in: images.map((i) => i._id) } });
@@ -132,7 +140,7 @@ router.post("/bulk-delete", async (req, res) => {
 // Returns a redirect to a presigned S3 URL
 router.get("/:id/file", async (req, res) => {
   try {
-    const image = await ClientImage.findOne({ _id: req.params.id, account_id: req.account._id });
+    const image = await findOwnedDoc(ClientImage, req, req.params.id);
     if (!image) return res.status(404).json({ error: "Image not found" });
 
     const key = req.query.type === "original" ? image.storage_key : (image.thumbnail_key || image.storage_key);

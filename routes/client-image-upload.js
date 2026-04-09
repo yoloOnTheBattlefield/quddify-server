@@ -5,8 +5,8 @@ const sharp = require("sharp");
 const mongoose = require("mongoose");
 const { upload: s3Upload } = require("../services/storageService");
 const ClientImage = require("../models/ClientImage");
-const Client = require("../models/Client");
 const logger = require("../utils/logger").child({ module: "client-image-upload" });
+const { loadOwnedClient, getOwnedClientIds } = require("../utils/clientUserScope");
 
 // Use memory storage - files stay in buffer
 const storage = multer.memoryStorage();
@@ -29,8 +29,11 @@ router.post("/upload", uploadMiddleware.array("images", 10), async (req, res) =>
     const { client_id } = req.body;
     if (!client_id) return res.status(400).json({ error: "client_id is required" });
 
-    const client = await Client.findOne({ _id: client_id, account_id: req.account._id });
+    const client = await loadOwnedClient(req, client_id);
     if (!client) return res.status(404).json({ error: "Client not found" });
+    // Use the client's owning account_id for storage paths and the DB record,
+    // not req.account._id (which for role=2 is the user's empty isolated account).
+    const accountId = client.account_id;
 
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No files uploaded" });
@@ -50,8 +53,8 @@ router.post("/upload", uploadMiddleware.array("images", 10), async (req, res) =>
 
       const imageId = new mongoose.Types.ObjectId();
       const ext = file.mimetype === "image/png" ? "png" : "jpg";
-      const originalKey = `${req.account._id}/${client_id}/images/originals/${imageId}.${ext}`;
-      const thumbnailKey = `${req.account._id}/${client_id}/images/thumbnails/${imageId}.webp`;
+      const originalKey = `${accountId}/${client_id}/images/originals/${imageId}.${ext}`;
+      const thumbnailKey = `${accountId}/${client_id}/images/thumbnails/${imageId}.webp`;
 
       // Upload original and thumbnail to S3 in parallel
       await Promise.all([
@@ -63,7 +66,7 @@ router.post("/upload", uploadMiddleware.array("images", 10), async (req, res) =>
       const image = await ClientImage.create({
         _id: imageId,
         client_id,
-        account_id: req.account._id,
+        account_id: accountId,
         storage_key: originalKey,
         thumbnail_key: thumbnailKey,
         original_filename: file.originalname,
@@ -120,9 +123,11 @@ router.post("/retag", async (req, res) => {
     const { client_id } = req.body;
     if (!client_id) return res.status(400).json({ error: "client_id is required" });
 
+    const client = await loadOwnedClient(req, client_id);
+    if (!client) return res.status(404).json({ error: "Client not found" });
+
     const images = await ClientImage.find({
       client_id,
-      account_id: req.account._id,
       status: { $in: ["ready", "failed"] },
     });
 
@@ -160,9 +165,13 @@ router.post("/retry-tag", async (req, res) => {
       return res.status(400).json({ error: "image_ids array is required" });
     }
 
+    const ownedClientIds = await getOwnedClientIds(req);
+    if (ownedClientIds.length === 0) {
+      return res.json({ queued: 0, message: "No failed images to retry" });
+    }
     const images = await ClientImage.find({
       _id: { $in: image_ids },
-      account_id: req.account._id,
+      client_id: { $in: ownedClientIds },
       status: "failed",
     });
 

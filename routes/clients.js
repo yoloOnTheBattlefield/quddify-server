@@ -8,6 +8,7 @@ const AccountUser = require("../models/AccountUser");
 const validate = require("../middleware/validate");
 const clientSchemas = require("../schemas/clients");
 const logger = require("../utils/logger").child({ module: "clients" });
+const { buildClientCollectionFilter, loadOwnedClient } = require("../utils/clientUserScope");
 
 function sanitizeIgOAuth(client) {
   const obj = client.toObject ? client.toObject() : { ...client };
@@ -24,8 +25,10 @@ function sanitizeIgOAuth(client) {
 // GET /api/clients — list all clients for account (role 2 only sees own client)
 router.get("/", async (req, res) => {
   try {
-    const filter = { account_id: req.account._id };
-    if (req.user?.role === 2) filter.user_id = req.user.userId;
+    // Client users live in their own isolated Account, but their Client doc
+    // lives in the creator's account. The helper detects this and scopes by
+    // user_id instead of account_id.
+    const filter = await buildClientCollectionFilter(req);
     const clients = await Client.find(filter).sort({ created_at: -1 });
     res.json(clients.map(sanitizeIgOAuth));
   } catch (err) {
@@ -37,7 +40,8 @@ router.get("/", async (req, res) => {
 // GET /api/clients/:id
 router.get("/:id", async (req, res) => {
   try {
-    const client = await Client.findOne({ _id: req.params.id, account_id: req.account._id });
+    const filter = { _id: req.params.id, ...(await buildClientCollectionFilter(req)) };
+    const client = await Client.findOne(filter);
     if (!client) return res.status(404).json({ error: "Client not found" });
     res.json(sanitizeIgOAuth(client));
   } catch (err) {
@@ -145,12 +149,9 @@ router.patch("/:id", validate(clientSchemas.update), async (req, res) => {
       }
     }
 
-    const client = await Client.findOneAndUpdate(
-      { _id: req.params.id, account_id: req.account._id },
-      { $set: update },
-      { new: true },
-    );
-    if (!client) return res.status(404).json({ error: "Client not found" });
+    const target = await loadOwnedClient(req, req.params.id);
+    if (!target) return res.status(404).json({ error: "Client not found" });
+    const client = await Client.findByIdAndUpdate(target._id, { $set: update }, { new: true });
     res.json(client);
   } catch (err) {
     logger.error("Failed to update client:", err);
@@ -164,7 +165,7 @@ const pfpUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
 
 router.post("/:id/upload-profile-picture", pfpUpload.single("image"), async (req, res) => {
   try {
-    const client = await Client.findOne({ _id: req.params.id, account_id: req.account._id });
+    const client = await loadOwnedClient(req, req.params.id);
     if (!client) return res.status(404).json({ error: "Client not found" });
 
     const { upload: s3Upload } = require("../services/storageService");
@@ -202,10 +203,10 @@ router.post("/:id/upload-profile-picture", pfpUpload.single("image"), async (req
 // POST /api/clients/:id/generate-niche-playbook — generate niche-specific playbook via GPT
 router.post("/:id/generate-niche-playbook", async (req, res) => {
   try {
-    const client = await Client.findOne({ _id: req.params.id, account_id: req.account._id });
+    const client = await loadOwnedClient(req, req.params.id);
     if (!client) return res.status(404).json({ error: "Client not found" });
     const { generateNichePlaybook } = require("../services/carousel/nichePlaybookGenerator");
-    const playbook = await generateNichePlaybook(client._id.toString(), req.account._id.toString());
+    const playbook = await generateNichePlaybook(client._id.toString(), client.account_id.toString());
     res.json({ success: true, niche_playbook: playbook });
   } catch (err) {
     logger.error("Failed to generate niche playbook:", err);
@@ -216,7 +217,7 @@ router.post("/:id/generate-niche-playbook", async (req, res) => {
 // POST /api/clients/:id/generate-voice-profile — analyze a YT transcript and generate a voice profile
 router.post("/:id/generate-voice-profile", async (req, res) => {
   try {
-    const client = await Client.findOne({ _id: req.params.id, account_id: req.account._id });
+    const client = await loadOwnedClient(req, req.params.id);
     if (!client) return res.status(404).json({ error: "Client not found" });
 
     const { transcript } = req.body;
@@ -226,7 +227,9 @@ router.post("/:id/generate-voice-profile", async (req, res) => {
 
     const Anthropic = require("@anthropic-ai/sdk").default;
     const Account = require("../models/Account");
-    const account = await Account.findById(req.account._id);
+    // Always read the Claude key from the Client's owning account, not
+    // req.account (which for role=2 is the user's empty isolated account).
+    const account = await Account.findById(client.account_id);
     const token = account?.claude_token
       ? Account.decryptField(account.claude_token)
       : process.env.CLAUDE;
@@ -276,8 +279,8 @@ ${transcript.slice(0, 30000)}`,
 router.post("/:id/clone-settings-from/:sourceId", async (req, res) => {
   try {
     const [target, source] = await Promise.all([
-      Client.findOne({ _id: req.params.id, account_id: req.account._id }),
-      Client.findOne({ _id: req.params.sourceId, account_id: req.account._id }),
+      loadOwnedClient(req, req.params.id),
+      loadOwnedClient(req, req.params.sourceId),
     ]);
     if (!target) return res.status(404).json({ error: "Target client not found" });
     if (!source) return res.status(404).json({ error: "Source client not found" });
@@ -301,8 +304,9 @@ router.post("/:id/clone-settings-from/:sourceId", async (req, res) => {
 // DELETE /api/clients/:id
 router.delete("/:id", async (req, res) => {
   try {
-    const result = await Client.findOneAndDelete({ _id: req.params.id, account_id: req.account._id });
-    if (!result) return res.status(404).json({ error: "Client not found" });
+    const target = await loadOwnedClient(req, req.params.id);
+    if (!target) return res.status(404).json({ error: "Client not found" });
+    await Client.deleteOne({ _id: target._id });
     res.json({ success: true });
   } catch (err) {
     logger.error("Failed to delete client:", err);
