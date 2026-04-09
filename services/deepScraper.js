@@ -34,8 +34,12 @@ class ApifyLimitError extends Error {
   }
 }
 
-async function startApifyRun(actorId, input, token) {
-  const res = await fetch(`${APIFY_BASE}/acts/${actorId}/runs?memory=${APIFY_MEMORY_MB}`, {
+async function startApifyRun(actorId, input, token, maxItems) {
+  // Pay-per-result actors (e.g. apify/instagram-reel-scraper) require a maxItems
+  // query parameter > 0, otherwise they reject with "max-items-must-be-greater-than-zero".
+  // Pass it whenever the caller knows the expected result count.
+  const qs = `memory=${APIFY_MEMORY_MB}${maxItems && maxItems > 0 ? `&maxItems=${maxItems}` : ""}`;
+  const res = await fetch(`${APIFY_BASE}/acts/${actorId}/runs?${qs}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -118,7 +122,7 @@ async function fetchApifyUsage(token) {
 
 // Try to start an Apify run with token rotation. If 403, mark token and try next.
 // Returns { run, tokenValue, tokenDocId } or throws if all tokens exhausted.
-async function startApifyRunWithRotation(actorId, input, accountId, legacyToken, jobId, accountIdStr) {
+async function startApifyRunWithRotation(actorId, input, accountId, legacyToken, jobId, accountIdStr, maxItems) {
   const MAX_ROTATIONS = 10; // safety cap
   for (let attempt = 0; attempt < MAX_ROTATIONS; attempt++) {
     const picked = await pickApifyToken(accountId, legacyToken);
@@ -138,7 +142,7 @@ async function startApifyRunWithRotation(actorId, input, accountId, legacyToken,
     emitLog(accountIdStr, jobId, tokenMsg);
 
     try {
-      const run = await startApifyRun(actorId, input, picked.tokenValue);
+      const run = await startApifyRun(actorId, input, picked.tokenValue, maxItems);
       return { run, tokenValue: picked.tokenValue, tokenDocId: picked.tokenDocId };
     } catch (err) {
       if (err instanceof ApifyLimitError) {
@@ -371,6 +375,7 @@ async function processJob(jobId) {
           legacyToken,
           jobId,
           accountId,
+          job.reel_limit,
         );
         currentToken = reelToken;
 
@@ -505,6 +510,7 @@ async function processJob(jobId) {
           legacyToken,
           jobId,
           accountId,
+          job.comment_limit,
         );
         currentToken = commentToken;
 
@@ -581,6 +587,7 @@ async function processJob(jobId) {
             legacyToken,
             jobId,
             accountId,
+            1000,
           );
           currentToken = likerToken;
 
@@ -676,6 +683,7 @@ async function processJob(jobId) {
               legacyToken,
               jobId,
               accountId,
+              batch.length,
             );
             currentToken = profileToken;
 
@@ -830,6 +838,7 @@ async function processJob(jobId) {
             legacyToken,
             jobId,
             accountId,
+            50000,
           );
           currentToken = followerToken;
 
@@ -899,6 +908,7 @@ async function processJob(jobId) {
                     legacyToken,
                     jobId,
                     accountId,
+                    batch.length,
                   );
                   currentToken = profileToken;
 
