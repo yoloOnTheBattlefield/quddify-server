@@ -312,7 +312,7 @@ async function renderSlideToBuffer(browser, html) {
 
 // ── Main ──────────────────────────────────────
 
-async function renderSlides({ carouselId, clientId, accountId, slides, imageSelections, templateId, lutId }) {
+async function renderSlides({ carouselId, clientId, accountId, slides, imageSelections, templateId, lutId, showBrandName = true }) {
   const [client, lutDoc] = await Promise.all([
     Client.findById(clientId),
     lutId ? ClientLut.findById(lutId) : null,
@@ -331,7 +331,7 @@ async function renderSlides({ carouselId, clientId, accountId, slides, imageSele
   const palette = derivePalette(brandKit.primary_color);
   palette._headingFont = brandKit.font_heading || "Playfair Display";
   palette._bodyFont = brandKit.font_body || "DM Sans";
-  const brandName = client?.name || "";
+  const brandName = showBrandName ? (client?.name || "") : "";
 
   let browser;
   try {

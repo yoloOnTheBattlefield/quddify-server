@@ -37,6 +37,7 @@ const generateFromTopic = z.object({
     goal: z.enum(["saveable_educational", "polarizing_authority", "emotional_story", "conversion_focused"]).optional(),
     slide_count: z.number().min(5).max(20).optional(),
     additional_instructions: z.string().optional(),
+    show_brand_name: z.boolean().optional(),
   }),
 });
 

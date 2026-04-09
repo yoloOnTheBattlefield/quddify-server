@@ -134,7 +134,7 @@ Return JSON:
 // POST /api/carousels/generate-from-topic — simple topic-based generation (no transcripts)
 router.post("/generate-from-topic", validate(carouselSchemas.generateFromTopic), async (req, res) => {
   try {
-    const { client_id, topic, goal, slide_count, additional_instructions } = req.body;
+    const { client_id, topic, goal, slide_count, additional_instructions, show_brand_name } = req.body;
 
     const Client = require("../models/Client");
     const client = await Client.findById(client_id);
@@ -165,6 +165,7 @@ router.post("/generate-from-topic", validate(carouselSchemas.generateFromTopic),
       goal: goal || "saveable_educational",
       slideCount: slide_count || null,
       additionalInstructions: additional_instructions || "",
+      showBrandName: show_brand_name !== false,
     }).catch((err) => {
       logger.error("Background topic pipeline failed:", err);
     });
