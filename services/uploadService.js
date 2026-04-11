@@ -13,7 +13,7 @@ function getOpenAI() {
 }
 
 const FILENAME_REGEX =
-  /^(?:follower|following)-of-([A-Za-z0-9._-]+)-(\d{8})\.xlsx$/;
+  /^(?:follower|following)-of-([A-Za-z0-9._-]+)-(\d{8})\.(xlsx|csv)$/;
 
 const DEFAULT_QUALIFICATION_PROMPT = `You are an assistant tasked with classifying Instagram bios as either Qualified or Unqualified based on whether the person is likely a coach, consultant, or sells services that relate to personal/business transformation.
 
@@ -53,7 +53,7 @@ function parseFilename(filename) {
   const match = filename.match(FILENAME_REGEX);
   if (!match) {
     throw new Error(
-      `Invalid filename format: ${filename}. Expected: follower-of-{account}-{YYYYMMDD}.xlsx or following-of-{account}-{YYYYMMDD}.xlsx`,
+      `Invalid filename format: ${filename}. Expected: follower-of-{account}-{YYYYMMDD}.xlsx/.csv or following-of-{account}-{YYYYMMDD}.xlsx/.csv`,
     );
   }
 
