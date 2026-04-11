@@ -57,8 +57,8 @@ async function processJob(jobId) {
   const apiKey = (account && account.openai_token) || process.env.OPENAI;
   const openaiClient = new OpenAI({ apiKey });
 
-  // Resolve prompt once for the entire job
-  let promptText = DEFAULT_QUALIFICATION_PROMPT;
+  // Resolve prompt once for the entire job (null = no AI qualification)
+  let promptText = null;
   let promptFilters = {};
   if (job.promptId) {
     const promptDoc = await Prompt.findById(job.promptId).lean();
@@ -195,36 +195,40 @@ async function processJob(jobId) {
           const mapped = applyColumnMapping(row, columnMapping);
           const bio = mapped.bio || "";
 
-          let qualification;
-          try {
-            qualification = await qualifyBio(bio, promptText, openaiClient);
-          } catch (err) {
-            logger.error(
-              `OpenAI error for ${mapped.username || "unknown"}, skipping:`,
-              err.message,
-            );
-            fileEntry.failedRows++;
-            job.failedLeads++;
-            fileEntry.processedRows++;
-            job.processedLeads++;
-            pendingDbUpdate++;
+          // Only run AI qualification if a prompt was selected
+          let qualified = true;
+          if (promptText) {
+            try {
+              const qualification = await qualifyBio(bio, promptText, openaiClient);
+              qualified = qualification === "Qualified";
+            } catch (err) {
+              logger.error(
+                `OpenAI error for ${mapped.username || "unknown"}, skipping:`,
+                err.message,
+              );
+              fileEntry.failedRows++;
+              job.failedLeads++;
+              fileEntry.processedRows++;
+              job.processedLeads++;
+              pendingDbUpdate++;
 
-            if (pendingDbUpdate >= 10) {
-              await job.save();
-              pendingDbUpdate = 0;
-              emitToAccount(accountId, "job:progress", {
-                jobId,
-                fileIndex,
-                processedRows: fileEntry.processedRows,
-                totalFilteredRows: fileEntry.filteredRows,
-                qualifiedCount: fileEntry.qualifiedCount,
-                failedRows: fileEntry.failedRows,
-              });
+              if (pendingDbUpdate >= 10) {
+                await job.save();
+                pendingDbUpdate = 0;
+                emitToAccount(accountId, "job:progress", {
+                  jobId,
+                  fileIndex,
+                  processedRows: fileEntry.processedRows,
+                  totalFilteredRows: fileEntry.filteredRows,
+                  qualifiedCount: fileEntry.qualifiedCount,
+                  failedRows: fileEntry.failedRows,
+                });
+              }
+              continue;
             }
-            continue;
           }
 
-          if (qualification === "Qualified") {
+          if (qualified) {
             const username = mapped.username || "";
             const followingKey = `${username}::${sourceAccount}`;
 
