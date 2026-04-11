@@ -52,9 +52,8 @@ async function qualifyBio(bio, promptText, openaiClient) {
 function parseFilename(filename) {
   const match = filename.match(FILENAME_REGEX);
   if (!match) {
-    throw new Error(
-      `Invalid filename format: ${filename}. Expected: follower-of-{account}-{YYYYMMDD}.xlsx/.csv or following-of-{account}-{YYYYMMDD}.xlsx/.csv`,
-    );
+    // Arbitrary filename — no metadata extractable
+    return { sourceAccount: null, scrapeDate: null };
   }
 
   const sourceAccount = match[1];
@@ -76,8 +75,10 @@ function parseXlsx(buffer) {
 }
 
 async function processUpload(fileBuffer, filename, promptId, accountId) {
-  // 1. Extract metadata from filename
-  const { sourceAccount, scrapeDate } = parseFilename(filename);
+  // 1. Extract metadata from filename (null for arbitrary filenames)
+  const { sourceAccount: filenameSource, scrapeDate: filenameScrapeDate } = parseFilename(filename);
+  const sourceAccount = filenameSource || filename.replace(/\.(xlsx|csv|xls)$/i, "");
+  const scrapeDate = filenameScrapeDate || new Date().toISOString().slice(0, 10);
 
   // 2. Resolve qualification prompt
   let promptDoc = null;

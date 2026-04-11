@@ -1,15 +1,13 @@
 const XLSX = require("xlsx");
 
-// Extract the regex and parseFilename by re-declaring them (they're not exported)
+// Mirror the regex and functions from uploadService.js (they're not exported individually)
 const FILENAME_REGEX =
   /^(?:follower|following)-of-([A-Za-z0-9._-]+)-(\d{8})\.(xlsx|csv)$/;
 
 function parseFilename(filename) {
   const match = filename.match(FILENAME_REGEX);
   if (!match) {
-    throw new Error(
-      `Invalid filename format: ${filename}. Expected: follower-of-{account}-{YYYYMMDD}.xlsx/.csv or following-of-{account}-{YYYYMMDD}.xlsx/.csv`,
-    );
+    return { sourceAccount: null, scrapeDate: null };
   }
   const sourceAccount = match[1];
   const rawDate = match[2];
@@ -36,27 +34,21 @@ describe("FILENAME_REGEX", () => {
     expect(FILENAME_REGEX.test("following-of-jane_doe-20260315.csv")).toBe(true);
   });
 
-  it("rejects other extensions", () => {
-    expect(FILENAME_REGEX.test("follower-of-johndoe-20260401.pdf")).toBe(false);
-    expect(FILENAME_REGEX.test("follower-of-johndoe-20260401.xls")).toBe(false);
-    expect(FILENAME_REGEX.test("follower-of-johndoe-20260401.json")).toBe(false);
-  });
-
-  it("rejects malformed filenames", () => {
-    expect(FILENAME_REGEX.test("random-file.xlsx")).toBe(false);
-    expect(FILENAME_REGEX.test("follower-of-20260401.csv")).toBe(false);
-    expect(FILENAME_REGEX.test("follower-of-account.csv")).toBe(false);
+  it("does not match arbitrary filenames", () => {
+    expect(FILENAME_REGEX.test("random-leads.csv")).toBe(false);
+    expect(FILENAME_REGEX.test("ALL_IG_LEADS.xlsx")).toBe(false);
+    expect(FILENAME_REGEX.test("my-file.csv")).toBe(false);
   });
 });
 
 describe("parseFilename", () => {
-  it("parses .xlsx filename correctly", () => {
+  it("parses structured .xlsx filename", () => {
     const result = parseFilename("follower-of-testaccount-20260401.xlsx");
     expect(result.sourceAccount).toBe("testaccount");
     expect(result.scrapeDate).toBe("2026-04-01");
   });
 
-  it("parses .csv filename correctly", () => {
+  it("parses structured .csv filename", () => {
     const result = parseFilename("follower-of-testaccount-20260401.csv");
     expect(result.sourceAccount).toBe("testaccount");
     expect(result.scrapeDate).toBe("2026-04-01");
@@ -68,8 +60,16 @@ describe("parseFilename", () => {
     expect(result.scrapeDate).toBe("2026-03-15");
   });
 
-  it("throws on invalid filename", () => {
-    expect(() => parseFilename("bad-file.csv")).toThrow(/Invalid filename format/);
+  it("returns nulls for arbitrary filenames instead of throwing", () => {
+    const result = parseFilename("ALL_IG_LEADS.csv");
+    expect(result.sourceAccount).toBeNull();
+    expect(result.scrapeDate).toBeNull();
+  });
+
+  it("returns nulls for any non-matching filename", () => {
+    const result = parseFilename("random-leads.xlsx");
+    expect(result.sourceAccount).toBeNull();
+    expect(result.scrapeDate).toBeNull();
   });
 });
 
@@ -87,7 +87,6 @@ describe("parseXlsx — CSV buffer support", () => {
   });
 
   it("parses an XLSX buffer via SheetJS", () => {
-    // Build a real XLSX buffer using SheetJS
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet([
       { Username: "alice", Email: "alice@test.com" },
