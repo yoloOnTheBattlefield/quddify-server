@@ -107,10 +107,12 @@ async function processJob(jobId) {
       });
 
       try {
-        // Parse filename
-        const { sourceAccount, scrapeDate } = parseFilename(
+        // Parse filename (returns nulls for arbitrary filenames)
+        const { sourceAccount: filenameSource, scrapeDate: filenameScrapeDate } = parseFilename(
           fileEntry.filename,
         );
+        const sourceAccount = filenameSource || fileEntry.filename.replace(/\.(xlsx|csv|xls)$/i, "");
+        const scrapeDate = filenameScrapeDate || new Date().toISOString().slice(0, 10);
         fileEntry.sourceAccount = sourceAccount;
         fileEntry.scrapeDate = scrapeDate;
 
@@ -130,6 +132,9 @@ async function processJob(jobId) {
         // Resolve column mapping
         const columnMapping = job.columnMapping || DEFAULT_COLUMN_MAPPING;
 
+        // Check which fields are actually mapped
+        const mappedFields = new Set(Object.values(columnMapping).filter(Boolean));
+
         // Filter rows using prompt filters (or defaults)
         const filtered = rows.filter((row) => {
           const mapped = applyColumnMapping(row, columnMapping);
@@ -144,9 +149,10 @@ async function processJob(jobId) {
           const bio = mapped.bio || "";
 
           if (!username || existingUsernames.has(username)) return false;
-          if (followers === null || followers < minFollowers) return false;
-          if (posts === null || posts <= minPosts) return false;
-          if (excludePrivate && isPrivate !== "NO") return false;
+          // Only apply numeric filters when the column is mapped
+          if (mappedFields.has("followersCount") && (followers === null || followers < minFollowers)) return false;
+          if (mappedFields.has("postsCount") && (posts === null || posts <= minPosts)) return false;
+          if (excludePrivate && isPrivate && isPrivate !== "NO") return false;
           if (verifiedOnly && isVerified !== true) return false;
           if (bioRequired && !bio) return false;
 
