@@ -33,7 +33,8 @@ function applyColumnMapping(row, mapping) {
         result[field] = toDate(rawValue);
         break;
       case "username":
-        result[field] = String(rawValue).replace(/^@/, "").trim().toLowerCase();
+      case "ig":
+        result[field] = String(rawValue).trim().replace(/^@/, "").toLowerCase();
         break;
       default:
         result[field] = String(rawValue).trim() || null;

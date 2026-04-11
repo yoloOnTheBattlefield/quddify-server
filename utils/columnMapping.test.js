@@ -72,6 +72,22 @@ describe("applyColumnMapping", () => {
     expect(result.username).toBe("johndoe");
   });
 
+  it("strips leading @ from username even with leading spaces", () => {
+    const row = { User: " @MoorGs " };
+    const mapping = { User: "username" };
+
+    const result = applyColumnMapping(row, mapping);
+    expect(result.username).toBe("moorgs");
+  });
+
+  it("strips leading @ from ig field and lowercases", () => {
+    const row = { IG: "@TestHandle" };
+    const mapping = { IG: "ig" };
+
+    const result = applyColumnMapping(row, mapping);
+    expect(result.ig).toBe("testhandle");
+  });
+
   it("trims string fields and returns null for empty after trim", () => {
     const row = { Source: "  Instagram  ", Bio: "   " };
     const mapping = { Source: "source", Bio: "bio" };
