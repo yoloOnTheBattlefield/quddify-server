@@ -37,7 +37,7 @@ router.post("/upload-xlsx", upload.array("files"), async (req, res) => {
       account_id,
       status: "queued",
       promptId: promptId || null,
-      promptLabel: promptLabel || "Default (hardcoded)",
+      promptLabel: promptLabel || null,
       files: fileEntries,
     });
 

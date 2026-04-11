@@ -219,7 +219,7 @@ async function processUpload(fileBuffer, filename, promptId, accountId) {
     sourceAccount,
     scrapeDate,
     promptId: promptDoc ? promptDoc._id : null,
-    promptLabel: promptDoc ? promptDoc.label : "Default (hardcoded)",
+    promptLabel: promptDoc ? promptDoc.label : null,
   };
 }
 
