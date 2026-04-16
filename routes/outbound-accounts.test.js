@@ -99,6 +99,50 @@ describe("GET /api/outbound-accounts", () => {
   });
 });
 
+describe("GET /api/outbound-accounts/export", () => {
+  it("returns CSV with headers and account rows", async () => {
+    await OutboundAccount.create({ account_id: accountId, username: "user1", password: "p1", email: "a@b.com", status: "ready" });
+    await OutboundAccount.create({ account_id: accountId, username: "user2", proxy: "1.2.3.4:8080" });
+
+    const res = await request(app).get("/api/outbound-accounts/export");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/csv/);
+    expect(res.headers["content-disposition"]).toBe("attachment; filename=outbound-accounts.csv");
+
+    const lines = res.text.split("\n");
+    expect(lines[0]).toBe("username,password,email,emailPassword,proxy,status,assignedTo,isBlacklisted,isConnectedToAISetter,notes,twoFA,hidemyacc_profile_id,createdAt");
+    expect(lines.length).toBe(3); // header + 2 rows
+    expect(lines[1]).toContain("user2"); // sorted by createdAt desc
+    expect(lines[2]).toContain("user1");
+  });
+
+  it("returns empty CSV when no accounts", async () => {
+    const res = await request(app).get("/api/outbound-accounts/export");
+    expect(res.status).toBe(200);
+
+    const lines = res.text.split("\n");
+    expect(lines.length).toBe(1); // header only
+  });
+
+  it("only exports accounts for the current tenant", async () => {
+    await OutboundAccount.create({ account_id: accountId, username: "mine" });
+    await OutboundAccount.create({ account_id: new mongoose.Types.ObjectId(), username: "theirs" });
+
+    const res = await request(app).get("/api/outbound-accounts/export");
+    const lines = res.text.split("\n");
+    expect(lines.length).toBe(2); // header + 1 row
+    expect(lines[1]).toContain("mine");
+  });
+
+  it("escapes CSV values with commas and quotes", async () => {
+    await OutboundAccount.create({ account_id: accountId, username: "user1", notes: 'has, commas and "quotes"' });
+
+    const res = await request(app).get("/api/outbound-accounts/export");
+    const lines = res.text.split("\n");
+    expect(lines[1]).toContain('"has, commas and ""quotes"""');
+  });
+});
+
 describe("POST /api/outbound-accounts", () => {
   it("creates an account", async () => {
     const res = await request(app)

@@ -118,6 +118,38 @@ router.post("/", async (req, res) => {
   }
 });
 
+// GET /api/outbound-accounts/export — export all accounts as CSV
+router.get("/export", async (req, res) => {
+  try {
+    const accounts = await OutboundAccount.find({ account_id: req.account._id })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const headers = ["username", "password", "email", "emailPassword", "proxy", "status", "assignedTo", "isBlacklisted", "isConnectedToAISetter", "notes", "twoFA", "hidemyacc_profile_id", "createdAt"];
+
+    const escapeCSV = (val) => {
+      if (val == null) return "";
+      const str = String(val);
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const rows = [headers.join(",")];
+    for (const a of accounts) {
+      rows.push(headers.map((h) => escapeCSV(a[h])).join(","));
+    }
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=outbound-accounts.csv");
+    res.send(rows.join("\n"));
+  } catch (err) {
+    logger.error("Export outbound accounts error:", err);
+    res.status(500).json({ error: "Failed to export accounts" });
+  }
+});
+
 // POST /api/outbound-accounts/bulk — bulk import accounts from CSV/XLSX
 router.post("/bulk", async (req, res) => {
   try {
