@@ -168,7 +168,7 @@ router.post("/generate-from-topic", validate(carouselSchemas.generateFromTopic),
       goal: goal || "saveable_educational",
       slideCount: slide_count || null,
       additionalInstructions: additional_instructions || "",
-      showBrandName: show_brand_name !== false,
+      showBrandName: show_brand_name === true,
     }).catch((err) => {
       logger.error("Background topic pipeline failed:", err);
     });

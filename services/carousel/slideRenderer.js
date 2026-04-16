@@ -312,7 +312,7 @@ async function renderSlideToBuffer(browser, html) {
 
 // ── Main ──────────────────────────────────────
 
-async function renderSlides({ carouselId, clientId, accountId, slides, imageSelections, templateId, lutId, showBrandName = true, brandKitOverride }) {
+async function renderSlides({ carouselId, clientId, accountId, slides, imageSelections, templateId, lutId, showBrandName = false, brandKitOverride }) {
   const [client, lutDoc] = await Promise.all([
     brandKitOverride ? null : Client.findById(clientId),
     lutId ? ClientLut.findById(lutId) : null,

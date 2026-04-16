@@ -165,7 +165,7 @@ Use the right content type for each slide. NOT every slide is just a headline �
 /**
  * Simplified pipeline: topic → copy → images → render
  */
-async function runTopicPipeline({ carouselId, jobId, io, topic, goal, slideCount, additionalInstructions, showBrandName = true }) {
+async function runTopicPipeline({ carouselId, jobId, io, topic, goal, slideCount, additionalInstructions, showBrandName = false }) {
   const carousel = await Carousel.findById(carouselId);
   if (!carousel) throw new Error(`Carousel ${carouselId} not found`);
 
