@@ -28,6 +28,7 @@ const {
   waitForApifyRun: _waitForRun,
   getDatasetItems,
   abortApifyRun,
+  APIFY_MEMORY_MB,
 } = require("./apifyHelpers");
 
 const activeJobs = new Map(); // jobId -> { cancelled, paused, skipComments }
