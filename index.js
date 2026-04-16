@@ -35,6 +35,7 @@ const trackingPublicRoutes = require("./routes/tracking-public");
 const trackingRoutes = require("./routes/tracking");
 const deepScrapeRoutes = require("./routes/deep-scrape");
 const apifyTokenRoutes = require("./routes/apify-tokens");
+const aiUsageRoutes = require("./routes/ai-usage");
 const adminRoutes = require("./routes/admin");
 const replyCheckRoutes = require("./routes/reply-checks");
 const aiPromptRoutes = require("./routes/ai-prompts");
@@ -284,6 +285,7 @@ app.use("/api/outbound-accounts", requireOutbound, outboundAccountRoutes);
 app.use("/api/warmup", requireOutbound, warmupRoutes);
 app.use("/api/deep-scrape", deepScrapeRoutes);
 app.use("/api/apify-tokens", apifyTokenRoutes);
+app.use("/api/ai-usage", aiUsageRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reply-checks", requireOutbound, replyCheckRoutes);
 app.use("/api/ai-prompts", aiPromptRoutes);
@@ -348,7 +350,7 @@ connectDB()
     await recoverStuckJobs();
 
     // Recover stuck prospect scrape jobs (server restart mid-scrape)
-    const ProspectProfile = require("./models/ProspectProfile");
+    const { ProspectProfile } = require("./services/carouselDb");
     const stuckProspects = await ProspectProfile.updateMany(
       { status: { $in: ["scraping", "profiling"] } },
       { $set: { status: "failed", error: "Server restarted during scraping", current_step: "failed" } },
