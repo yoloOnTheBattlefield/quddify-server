@@ -90,7 +90,11 @@ router.post("/webhook", async (req, res) => {
 
     // Resolve GHL location ID → CRM account ObjectId
     const account = await Account.findOne({ ghl: ghlLocationId });
-    const accountId = account ? account._id.toString() : ghlLocationId;
+    if (!account) {
+      logger.warn("No CRM account found for GHL location %s", ghlLocationId);
+      return res.status(404).json({ error: "No CRM account linked to this GHL location", ghlLocationId });
+    }
+    const accountId = account._id.toString();
 
     // ---- Find existing lead by contact_id ----
     const existing = await Lead.findOne({ contact_id });
@@ -290,7 +294,11 @@ router.post("/conversation", async (req, res) => {
 
     // Resolve GHL location ID → CRM account ObjectId
     const account = ghlLocationId ? await Account.findOne({ ghl: ghlLocationId }) : null;
-    const accountId = account ? account._id.toString() : ghlLocationId;
+    if (!account) {
+      logger.warn("No CRM account found for GHL location %s", ghlLocationId);
+      return res.status(404).json({ error: "No CRM account linked to this GHL location", ghlLocationId });
+    }
+    const accountId = account._id.toString();
 
     // Build the update payload
     const update = {};

@@ -433,14 +433,30 @@ describe("POST /api/ghl/conversation", () => {
     expect(lead.chat_memory).toContain("I want to book");
   });
 
-  it("requires location.id for new leads", async () => {
+  it("returns 404 when location.id does not match any CRM account", async () => {
+    const res = await request(app).post("/api/ghl/conversation").send({
+      contact_id: "ghl_conv_unknown_loc",
+      first_name: "Unknown",
+      conversation: "\nUser: test\nBot: test",
+      location: { id: "unknown_location_xyz" },
+    });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/no crm account/i);
+    expect(res.body.ghlLocationId).toBe("unknown_location_xyz");
+
+    const lead = await Lead.findOne({ contact_id: "ghl_conv_unknown_loc" });
+    expect(lead).toBeNull();
+  });
+
+  it("returns 404 when location is missing entirely", async () => {
     const res = await request(app).post("/api/ghl/conversation").send({
       contact_id: "ghl_conv_3",
       conversation: "\nUser: test\nBot: test",
     });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Missing location.id for new lead");
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/no crm account/i);
   });
 
   it("handles missing conversation field gracefully", async () => {
@@ -634,7 +650,7 @@ describe("POST /api/ghl/webhook — account_id resolution", () => {
     expect(lead.account_id).toBe(account._id.toString());
   });
 
-  it("falls back to GHL location ID when no matching Account exists", async () => {
+  it("returns 404 when no matching Account exists for GHL location", async () => {
     const res = await request(app)
       .post("/api/ghl/webhook")
       .send({
@@ -643,9 +659,12 @@ describe("POST /api/ghl/webhook — account_id resolution", () => {
         location: { id: "unknown_ghl_location" },
       });
 
-    expect(res.body.action).toBe("created");
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/no crm account/i);
+    expect(res.body.ghlLocationId).toBe("unknown_ghl_location");
+
     const lead = await Lead.findOne({ contact_id: "ghl_resolve_2" });
-    expect(lead.account_id).toBe("unknown_ghl_location");
+    expect(lead).toBeNull();
   });
 
   it("auto-heals stale GHL account_id on existing lead", async () => {
