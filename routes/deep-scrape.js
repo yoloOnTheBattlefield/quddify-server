@@ -500,6 +500,51 @@ router.post("/:id/resume-comments", async (req, res) => {
   }
 });
 
+// POST /api/deep-scrape/:id/reprocess-ai — re-qualify leads with AI (no Apify needed)
+router.post("/:id/reprocess-ai", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: "Invalid job ID" });
+    }
+
+    const job = await DeepScrapeJob.findOne({
+      _id: req.params.id,
+      account_id: req.account._id,
+    });
+
+    if (!job) return res.status(404).json({ error: "Job not found" });
+
+    const activeStatuses = [
+      "pending",
+      "scraping_reels",
+      "scraping_comments",
+      "scraping_likers",
+      "scraping_followers",
+      "scraping_profiles",
+      "qualifying",
+    ];
+    if (activeStatuses.includes(job.status)) {
+      return res
+        .status(400)
+        .json({ error: "Cannot reprocess while job is actively running" });
+    }
+
+    if (!job.promptId) {
+      return res.status(400).json({ error: "No prompt configured on this job" });
+    }
+
+    // Run in background
+    deepScraper.reprocessAI(job._id.toString()).catch((err) => {
+      logger.error("Reprocess AI error:", err);
+    });
+
+    res.json({ success: true, message: "AI re-processing started" });
+  } catch (err) {
+    logger.error("Reprocess AI route error:", err);
+    res.status(500).json({ error: "Failed to start AI re-processing" });
+  }
+});
+
 // PATCH /api/deep-scrape/:id — edit job config (targets, settings)
 router.patch("/:id", async (req, res) => {
   try {

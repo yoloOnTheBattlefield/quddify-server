@@ -1093,8 +1093,114 @@ function isJobRunning(jobId) {
   return activeJobs.has(jobId);
 }
 
+// ─── Standalone AI re-qualification (no Apify needed) ───────────────────
+
+async function reprocessAI(jobId) {
+  const job = await DeepScrapeJob.findById(jobId);
+  if (!job) throw new Error("Job not found");
+
+  const accountId = job.account_id.toString();
+
+  if (!job.promptId) throw new Error("No prompt configured on this job");
+
+  // Resolve prompt
+  let promptText = DEFAULT_QUALIFICATION_PROMPT;
+  const promptDoc = await Prompt.findById(job.promptId).lean();
+  if (promptDoc) promptText = promptDoc.promptText;
+
+  // Resolve OpenAI client
+  const openaiClient = await getOpenAIClient({ accountId });
+
+  // Find leads that need AI qualification
+  const failedLeads = await OutboundLead.find({
+    account_id: job.account_id,
+    "metadata.executionId": `deep-scrape-${jobId}`,
+    ai_processed: false,
+    qualified: null,
+    unqualified_reason: null,
+    followersCount: { $gte: job.min_followers },
+  })
+    .select("username bio followersCount")
+    .lean();
+
+  if (failedLeads.length === 0) {
+    emitLog(accountId, jobId, "No leads need AI re-processing", "warn");
+    return { requalified: 0, rerejected: 0, refailed: 0 };
+  }
+
+  const prevStatus = job.status;
+  job.status = "qualifying";
+  job.error = null;
+  await job.save();
+  emitStatus(accountId, jobId, "qualifying");
+  emitLog(accountId, jobId, `Re-qualifying ${failedLeads.length} leads with AI`);
+
+  let requalified = 0;
+  let rerejected = 0;
+  let refailed = 0;
+
+  for (const lead of failedLeads) {
+    try {
+      const result = await qualifyBio(lead.bio || "", promptText, openaiClient);
+      const isQualified = result === "Qualified";
+
+      await OutboundLead.updateOne(
+        { _id: lead._id },
+        {
+          $set: {
+            qualified: isQualified,
+            unqualified_reason: isQualified ? null : "ai_rejected",
+            ai_processed: true,
+            promptId: job.promptId,
+            promptLabel: job.promptLabel,
+          },
+        },
+      );
+
+      if (isQualified) {
+        requalified++;
+        job.stats.qualified++;
+      } else {
+        rerejected++;
+        job.stats.rejected++;
+      }
+
+      emitLead(accountId, jobId, lead.username, {
+        fullName: null,
+        bio: lead.bio,
+        followerCount: lead.followersCount,
+        qualified: isQualified,
+        unqualified_reason: isQualified ? null : "ai_rejected",
+      });
+
+      if ((requalified + rerejected + refailed) % 10 === 0) {
+        await job.save();
+        emitProgress(accountId, jobId, job.stats);
+      }
+    } catch (err) {
+      refailed++;
+      logger.error(`[deep-scraper] Re-qualify AI error for @${lead.username}:`, err.message);
+      emitLog(accountId, jobId, `@${lead.username} → AI error on re-qualify`, "error");
+    }
+  }
+
+  job.status = prevStatus;
+  await job.save();
+  emitProgress(accountId, jobId, job.stats);
+  emitStatus(accountId, jobId, prevStatus);
+  emitLog(
+    accountId,
+    jobId,
+    `Re-qualification done — ${requalified} qualified, ${rerejected} rejected, ${refailed} still failed`,
+    "success",
+  );
+
+  return { requalified, rerejected, refailed };
+}
+
 module.exports = {
   processJob,
+  reprocessAI,
   cancelJob,
   pauseJob,
   skipComments,
