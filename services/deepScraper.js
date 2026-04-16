@@ -1139,61 +1139,69 @@ async function reprocessAI(jobId) {
   let rerejected = 0;
   let refailed = 0;
 
-  for (const lead of failedLeads) {
-    try {
-      const result = await qualifyBio(lead.bio || "", promptText, openaiClient);
-      const isQualified = result === "Qualified";
+  try {
+    for (const lead of failedLeads) {
+      try {
+        const result = await qualifyBio(lead.bio || "", promptText, openaiClient);
+        const isQualified = result === "Qualified";
 
-      await OutboundLead.updateOne(
-        { _id: lead._id },
-        {
-          $set: {
-            qualified: isQualified,
-            unqualified_reason: isQualified ? null : "ai_rejected",
-            ai_processed: true,
-            promptId: job.promptId,
-            promptLabel: job.promptLabel,
+        await OutboundLead.updateOne(
+          { _id: lead._id },
+          {
+            $set: {
+              qualified: isQualified,
+              unqualified_reason: isQualified ? null : "ai_rejected",
+              ai_processed: true,
+              promptId: job.promptId,
+              promptLabel: job.promptLabel,
+            },
           },
-        },
-      );
+        );
 
-      if (isQualified) {
-        requalified++;
-        job.stats.qualified++;
-      } else {
-        rerejected++;
-        job.stats.rejected++;
+        if (isQualified) {
+          requalified++;
+          job.stats.qualified++;
+        } else {
+          rerejected++;
+          job.stats.rejected++;
+        }
+
+        emitLead(accountId, jobId, lead.username, {
+          fullName: null,
+          bio: lead.bio,
+          followerCount: lead.followersCount,
+          qualified: isQualified,
+          unqualified_reason: isQualified ? null : "ai_rejected",
+        });
+
+        if ((requalified + rerejected + refailed) % 10 === 0) {
+          await job.save();
+          emitProgress(accountId, jobId, job.stats);
+        }
+      } catch (err) {
+        refailed++;
+        logger.error(`[deep-scraper] Re-qualify AI error for @${lead.username}:`, err.message);
+        emitLog(accountId, jobId, `@${lead.username} → AI error on re-qualify`, "error");
+        // If we get 5 consecutive failures, abort to avoid burning through a broken key
+        if (refailed >= 5 && requalified === 0 && rerejected === 0) {
+          emitLog(accountId, jobId, `Aborting — 5 consecutive AI failures, check your OpenAI key`, "error");
+          break;
+        }
       }
-
-      emitLead(accountId, jobId, lead.username, {
-        fullName: null,
-        bio: lead.bio,
-        followerCount: lead.followersCount,
-        qualified: isQualified,
-        unqualified_reason: isQualified ? null : "ai_rejected",
-      });
-
-      if ((requalified + rerejected + refailed) % 10 === 0) {
-        await job.save();
-        emitProgress(accountId, jobId, job.stats);
-      }
-    } catch (err) {
-      refailed++;
-      logger.error(`[deep-scraper] Re-qualify AI error for @${lead.username}:`, err.message);
-      emitLog(accountId, jobId, `@${lead.username} → AI error on re-qualify`, "error");
     }
+  } finally {
+    // Always restore status even if the process crashes
+    job.status = prevStatus;
+    await job.save();
+    emitProgress(accountId, jobId, job.stats);
+    emitStatus(accountId, jobId, prevStatus);
+    emitLog(
+      accountId,
+      jobId,
+      `Re-qualification done — ${requalified} qualified, ${rerejected} rejected, ${refailed} still failed`,
+      "success",
+    );
   }
-
-  job.status = prevStatus;
-  await job.save();
-  emitProgress(accountId, jobId, job.stats);
-  emitStatus(accountId, jobId, prevStatus);
-  emitLog(
-    accountId,
-    jobId,
-    `Re-qualification done — ${requalified} qualified, ${rerejected} rejected, ${refailed} still failed`,
-    "success",
-  );
 
   return { requalified, rerejected, refailed };
 }
