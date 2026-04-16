@@ -133,7 +133,7 @@ router.get("/", async (req, res) => {
     const [jobs, total] = await Promise.all([
       DeepScrapeJob.find(filter)
         .select("-reel_urls -reel_seeds -commenter_usernames -liker_usernames -followers_scraped_seeds -commenter_seed_map")
-        .sort({ createdAt: -1 })
+        .sort({ updatedAt: -1 })
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
         .lean(),
