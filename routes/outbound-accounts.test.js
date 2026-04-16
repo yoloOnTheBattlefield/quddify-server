@@ -210,6 +210,165 @@ describe("DELETE /api/outbound-accounts/:id", () => {
   });
 });
 
+describe("POST /api/outbound-accounts/bulk", () => {
+  it("creates multiple accounts", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({
+        accounts: [
+          { username: "@User1", password: "pass1", email: "a@b.com" },
+          { username: "user2", proxy: "1.2.3.4:8080:u:p" },
+          { username: "User3", notes: "test" },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toBe(3);
+    expect(res.body.duplicates).toBe(0);
+    expect(res.body.errors).toHaveLength(0);
+
+    const all = await OutboundAccount.find({ account_id: accountId }).lean();
+    expect(all).toHaveLength(3);
+    expect(all.map((a) => a.username).sort()).toEqual(["user1", "user2", "user3"]);
+  });
+
+  it("cleans usernames (@ prefix, trim, lowercase)", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({ accounts: [{ username: "  @MyHandle  " }] });
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toBe(1);
+
+    const doc = await OutboundAccount.findOne({ account_id: accountId });
+    expect(doc.username).toBe("myhandle");
+  });
+
+  it("skips duplicates that already exist in DB", async () => {
+    await OutboundAccount.create({ account_id: accountId, username: "existing" });
+
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({
+        accounts: [
+          { username: "existing" },
+          { username: "brandnew" },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toBe(1);
+    expect(res.body.duplicates).toBe(1);
+  });
+
+  it("deduplicates within the same batch", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({
+        accounts: [
+          { username: "samename" },
+          { username: "samename" },
+          { username: "unique" },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toBe(2);
+    expect(res.body.duplicates).toBe(1);
+  });
+
+  it("returns errors for rows with missing username", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({
+        accounts: [
+          { username: "" },
+          { password: "no-username" },
+          { username: "good" },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toBe(1);
+    expect(res.body.errors).toHaveLength(2);
+    expect(res.body.errors[0].reason).toBe("Missing username");
+    expect(res.body.errors[1].reason).toBe("Missing username");
+  });
+
+  it("defaults status to 'new' for invalid values", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({ accounts: [{ username: "statustest", status: "bogus" }] });
+
+    expect(res.status).toBe(201);
+    const doc = await OutboundAccount.findOne({ account_id: accountId, username: "statustest" });
+    expect(doc.status).toBe("new");
+  });
+
+  it("accepts valid status values", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({ accounts: [{ username: "readyone", status: "ready" }] });
+
+    expect(res.status).toBe(201);
+    const doc = await OutboundAccount.findOne({ account_id: accountId, username: "readyone" });
+    expect(doc.status).toBe("ready");
+  });
+
+  it("stores optional fields (password, email, proxy, etc.)", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({
+        accounts: [{
+          username: "full",
+          password: "p",
+          email: "e@e.com",
+          emailPassword: "ep",
+          proxy: "1:2:3:4",
+          assignedTo: "Bob",
+          notes: "note",
+          twoFA: "ABC123",
+          hidemyacc_profile_id: "hma1",
+        }],
+      });
+
+    expect(res.status).toBe(201);
+    const doc = await OutboundAccount.findOne({ account_id: accountId, username: "full" });
+    expect(doc.password).toBe("p");
+    expect(doc.email).toBe("e@e.com");
+    expect(doc.emailPassword).toBe("ep");
+    expect(doc.proxy).toBe("1:2:3:4");
+    expect(doc.assignedTo).toBe("Bob");
+    expect(doc.notes).toBe("note");
+    expect(doc.twoFA).toBe("ABC123");
+    expect(doc.hidemyacc_profile_id).toBe("hma1");
+  });
+
+  it("returns 400 for empty array", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({ accounts: [] });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 for non-array body", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({ accounts: "not-an-array" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when accounts field is missing", async () => {
+    const res = await request(app)
+      .post("/api/outbound-accounts/bulk")
+      .send({});
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("POST /api/outbound-accounts/:id/token", () => {
   it("generates a browser token", async () => {
     const oa = await OutboundAccount.create({ account_id: accountId, username: "tokenuser" });

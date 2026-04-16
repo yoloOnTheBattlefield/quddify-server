@@ -118,6 +118,108 @@ router.post("/", async (req, res) => {
   }
 });
 
+// POST /api/outbound-accounts/bulk — bulk import accounts from CSV/XLSX
+router.post("/bulk", async (req, res) => {
+  try {
+    const { accounts } = req.body;
+
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      return res.status(400).json({ error: "accounts must be a non-empty array" });
+    }
+    if (accounts.length > 5000) {
+      return res.status(400).json({ error: "Maximum 5000 accounts per import" });
+    }
+
+    const errors = [];
+    const cleaned = [];
+
+    for (let i = 0; i < accounts.length; i++) {
+      const row = accounts[i];
+      const raw = row.username;
+      if (!raw || typeof raw !== "string" || !raw.trim()) {
+        errors.push({ row: i + 1, username: String(raw ?? ""), reason: "Missing username" });
+        continue;
+      }
+      const username = raw.trim().replace(/^@/, "").trim().toLowerCase();
+      if (!username) {
+        errors.push({ row: i + 1, username: raw, reason: "Invalid username" });
+        continue;
+      }
+
+      // Validate status if provided
+      const validStatuses = ["new", "warming", "ready", "restricted", "disabled"];
+      const status = row.status && validStatuses.includes(row.status) ? row.status : "new";
+
+      cleaned.push({
+        _index: i + 1,
+        account_id: req.account._id,
+        username,
+        password: row.password || null,
+        email: row.email || null,
+        emailPassword: row.emailPassword || null,
+        proxy: row.proxy || null,
+        status,
+        assignedTo: row.assignedTo || null,
+        notes: row.notes || null,
+        twoFA: row.twoFA || null,
+        hidemyacc_profile_id: row.hidemyacc_profile_id || null,
+      });
+    }
+
+    // Deduplicate within the batch (keep first occurrence)
+    const seenInBatch = new Map();
+    const deduped = [];
+    let inBatchDupes = 0;
+    for (const item of cleaned) {
+      if (seenInBatch.has(item.username)) {
+        inBatchDupes++;
+        continue;
+      }
+      seenInBatch.set(item.username, true);
+      deduped.push(item);
+    }
+
+    // Check which usernames already exist in DB
+    const usernames = deduped.map((a) => a.username);
+    const existing = await OutboundAccount.find(
+      { account_id: req.account._id, username: { $in: usernames } },
+      { username: 1 },
+    ).lean();
+    const existingSet = new Set(existing.map((e) => e.username));
+
+    const toInsert = [];
+    let duplicates = inBatchDupes;
+    for (const item of deduped) {
+      if (existingSet.has(item.username)) {
+        duplicates++;
+        continue;
+      }
+      const { _index, ...doc } = item;
+      toInsert.push(doc);
+    }
+
+    let created = 0;
+    if (toInsert.length > 0) {
+      try {
+        const result = await OutboundAccount.insertMany(toInsert, { ordered: false });
+        created = result.length;
+      } catch (err) {
+        // With ordered: false, some may succeed even if others fail
+        if (err.insertedDocs) created = err.insertedDocs.length;
+        const writeErrors = err.writeErrors || [];
+        for (const we of writeErrors) {
+          errors.push({ row: 0, username: toInsert[we.index]?.username || "unknown", reason: we.errmsg || "Write error" });
+        }
+      }
+    }
+
+    res.status(201).json({ created, duplicates, errors });
+  } catch (err) {
+    logger.error("Bulk import outbound accounts error:", err);
+    res.status(500).json({ error: "Failed to bulk import accounts" });
+  }
+});
+
 // GET /api/outbound-accounts/:id — single account
 router.get("/:id", async (req, res) => {
   try {
