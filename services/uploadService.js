@@ -6,9 +6,13 @@ const IgAccount = require("../models/IgAccount");
 const Prompt = require("../models/Prompt");
 const { toNumber, toDate, toBoolean } = require("../utils/normalize");
 
+// getOpenAI is only used as a last-resort fallback inside qualifyBio
+// when no openaiClient is passed. Callers should always pass their own client.
 let _openai = null;
 function getOpenAI() {
-  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI || "missing" });
+  if (!_openai) {
+    throw new Error("No OpenAI client provided — callers must pass an openaiClient");
+  }
   return _openai;
 }
 

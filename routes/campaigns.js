@@ -1547,7 +1547,7 @@ router.post("/:id/preview-message", async (req, res) => {
       });
       generatedMessage = response.content[0]?.text?.trim();
     } else {
-      const apiKey = (account && decrypt(account.openai_token)) || process.env.OPENAI;
+      const apiKey = account && decrypt(account.openai_token);
       if (!apiKey) return res.status(400).json({ error: "No OpenAI API key configured" });
       const openai = new OpenAI({ apiKey });
       const response = await openai.chat.completions.create({
@@ -1681,7 +1681,7 @@ router.post("/:id/generate-messages", async (req, res) => {
           }
           aiClient = new Anthropic({ apiKey });
         } else {
-          const apiKey = (account && decrypt(account.openai_token)) || process.env.OPENAI;
+          const apiKey = account && decrypt(account.openai_token);
           if (!apiKey) {
             await Campaign.findByIdAndUpdate(campaign._id, {
               $set: { "ai_personalization.status": "failed", "ai_personalization.error": "No OpenAI API key configured" },
@@ -1867,7 +1867,7 @@ router.post("/:id/leads/:leadId/regenerate", async (req, res) => {
       });
       generatedMessage = response.content[0]?.text?.trim();
     } else {
-      const apiKey = (account && decrypt(account.openai_token)) || process.env.OPENAI;
+      const apiKey = account && decrypt(account.openai_token);
       if (!apiKey) return res.status(400).json({ error: "No OpenAI API key configured" });
 
       const openai = new OpenAI({ apiKey });

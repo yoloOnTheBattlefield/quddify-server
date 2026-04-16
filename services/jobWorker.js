@@ -1,5 +1,4 @@
 const logger = require("../utils/logger").child({ module: "jobWorker" });
-const OpenAI = require("openai");
 const QualificationJob = require("../models/QualificationJob");
 const Account = require("../models/Account");
 const OutboundLead = require("../models/OutboundLead");
@@ -12,6 +11,7 @@ const {
   qualifyBio,
   DEFAULT_QUALIFICATION_PROMPT,
 } = require("./uploadService");
+const { getOpenAIClient } = require("../utils/aiClients");
 const { toNumber, toDate, toBoolean } = require("../utils/normalize");
 const { applyColumnMapping, DEFAULT_COLUMN_MAPPING } = require("../utils/columnMapping");
 
@@ -52,10 +52,8 @@ async function processJob(jobId) {
     return;
   }
 
-  // Resolve account's OpenAI token (fall back to env var)
-  const account = await Account.findById(job.account_id, "openai_token").lean();
-  const apiKey = (account && account.openai_token) || process.env.OPENAI;
-  const openaiClient = new OpenAI({ apiKey });
+  // Resolve account's OpenAI token (account → env fallback via aiClients)
+  const openaiClient = await getOpenAIClient({ accountId });
 
   // Resolve prompt once for the entire job (null = no AI qualification)
   let promptText = null;

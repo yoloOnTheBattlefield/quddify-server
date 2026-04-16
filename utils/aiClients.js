@@ -24,8 +24,8 @@ async function resolveToken({ accountId, clientId }, field, envVar) {
   const val = account?.[field];
   if (val) return Account.decryptField(val);
 
-  // 3. Env fallback
-  return process.env[envVar] || null;
+  // No env fallback — each account must configure its own token
+  return null;
 }
 
 async function getClaudeClient({ accountId, clientId }) {

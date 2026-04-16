@@ -1,5 +1,4 @@
 const logger = require("../utils/logger").child({ module: "deepScraper" });
-const OpenAI = require("openai");
 const DeepScrapeJob = require("../models/DeepScrapeJob");
 const ApifyToken = require("../models/ApifyToken");
 const ResearchPost = require("../models/ResearchPost");
@@ -8,6 +7,7 @@ const OutboundLead = require("../models/OutboundLead");
 const Account = require("../models/Account");
 const Prompt = require("../models/Prompt");
 const { qualifyBio, DEFAULT_QUALIFICATION_PROMPT } = require("./uploadService");
+const { getOpenAIClient } = require("../utils/aiClients");
 const { emitToAccount } = require("./socketManager");
 
 // ─── Apify helpers (shared module) ──────────────────────────────────────
@@ -133,14 +133,98 @@ async function processJob(jobId) {
   if (!isResearch && job.promptId) {
     const promptDoc = await Prompt.findById(job.promptId).lean();
     if (promptDoc) promptText = promptDoc.promptText;
-    const apiKey = account.openai_token || process.env.OPENAI;
-    if (apiKey) openaiClient = new OpenAI({ apiKey });
+    try {
+      openaiClient = await getOpenAIClient({ accountId });
+    } catch (err) {
+      logger.warn(`[deep-scraper] No OpenAI token for account ${accountId}: ${err.message}`);
+    }
   }
 
   job.started_at = job.started_at || new Date();
   await job.save();
 
   try {
+    // ── Re-qualify leads that failed AI on a previous run ──────────────
+    if (!isResearch && openaiClient && job.promptId) {
+      const failedLeads = await OutboundLead.find({
+        account_id: job.account_id,
+        "metadata.executionId": `deep-scrape-${jobId}`,
+        ai_processed: false,
+        qualified: null,
+        unqualified_reason: null,
+        followersCount: { $gte: job.min_followers },
+      })
+        .select("username bio followersCount")
+        .lean();
+
+      if (failedLeads.length > 0) {
+        emitLog(accountId, jobId, `Re-qualifying ${failedLeads.length} leads that failed AI previously`);
+        job.status = "qualifying";
+        await job.save();
+        emitStatus(accountId, jobId, "qualifying");
+
+        let requalified = 0;
+        let rerejected = 0;
+        let refailed = 0;
+
+        for (const lead of failedLeads) {
+          if (handle.cancelled || handle.paused) break;
+
+          try {
+            const result = await qualifyBio(lead.bio || "", promptText, openaiClient);
+            const isQualified = result === "Qualified";
+
+            await OutboundLead.updateOne(
+              { _id: lead._id },
+              {
+                $set: {
+                  qualified: isQualified,
+                  unqualified_reason: isQualified ? null : "ai_rejected",
+                  ai_processed: true,
+                  promptId: job.promptId,
+                  promptLabel: job.promptLabel,
+                },
+              },
+            );
+
+            if (isQualified) {
+              requalified++;
+              job.stats.qualified++;
+            } else {
+              rerejected++;
+              job.stats.rejected++;
+            }
+
+            emitLead(accountId, jobId, lead.username, {
+              fullName: null,
+              bio: lead.bio,
+              followerCount: lead.followersCount,
+              qualified: isQualified,
+              unqualified_reason: isQualified ? null : "ai_rejected",
+            });
+
+            if ((requalified + rerejected + refailed) % 10 === 0) {
+              await job.save();
+              emitProgress(accountId, jobId, job.stats);
+            }
+          } catch (err) {
+            refailed++;
+            logger.error(`[deep-scraper] Re-qualify AI error for @${lead.username}:`, err.message);
+            emitLog(accountId, jobId, `@${lead.username} → AI error on re-qualify`, "error");
+          }
+        }
+
+        await job.save();
+        emitProgress(accountId, jobId, job.stats);
+        emitLog(
+          accountId,
+          jobId,
+          `Re-qualification done — ${requalified} qualified, ${rerejected} rejected, ${refailed} still failed`,
+          "success",
+        );
+      }
+    }
+
     // Accumulated reel data (restored from checkpoint on resume)
     const allReelUrls = [...(job.reel_urls || [])];
     const allReelSeeds = [...(job.reel_seeds || [])];
