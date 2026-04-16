@@ -16,11 +16,15 @@ const logger = require("../../utils/logger").child({ module: "confidenceScorer" 
  * @param {Object} [opts.swipeFile] - Reference swipe file
  * @returns {Object} ConfidenceScore
  */
-async function scoreCarousel({ slides, imageSelections, transcriptIds, angle, goal, voiceProfile, ctaDefaults, swipeFile }) {
+async function scoreCarousel({ slides, imageSelections, transcriptIds, angle, goal, voiceProfile, ctaDefaults, swipeFile, prospectProfile }) {
+  // If scoring an outreach carousel, map prospect profile fields to expected shapes
+  const effectiveVoice = voiceProfile || (prospectProfile ? { raw_text: prospectProfile.voice_notes } : {});
+  const effectiveCta = ctaDefaults || (prospectProfile?.cta_style ? { primary_cta: prospectProfile.cta_style.detected_cta } : {});
+
   const scores = {};
 
   // 1. Transcript strength (0-100): How rich was the source material?
-  const transcripts = await Transcript.find({ _id: { $in: transcriptIds } }).lean();
+  const transcripts = transcriptIds?.length ? await Transcript.find({ _id: { $in: transcriptIds } }).lean() : [];
   const avgStrength = transcripts.reduce((sum, t) => sum + (t.extracted?.overall_strength || 0), 0) / (transcripts.length || 1);
   scores.transcript_strength = Math.round(avgStrength);
 
@@ -52,7 +56,7 @@ async function scoreCarousel({ slides, imageSelections, transcriptIds, angle, go
 
   // 4. Brand fit (0-100): Is the voice profile well-defined?
   let brandScore = 40; // Base
-  if (voiceProfile?.raw_text) brandScore += 60;
+  if (effectiveVoice?.raw_text) brandScore += 60;
   scores.brand_fit = Math.min(100, brandScore);
 
   // 5. Style fit (0-100): Was a reference swipe file used?
@@ -82,7 +86,7 @@ async function scoreCarousel({ slides, imageSelections, transcriptIds, angle, go
   let ctaScore = 50;
   if (ctaSlide?.copy) {
     ctaScore = 65;
-    if (ctaDefaults?.primary_cta && ctaSlide.copy.toLowerCase().includes(ctaDefaults.primary_cta.toLowerCase().substring(0, 10))) {
+    if (effectiveCta?.primary_cta && ctaSlide.copy.toLowerCase().includes(effectiveCta.primary_cta.toLowerCase().substring(0, 10))) {
       ctaScore += 20;
     }
     // Has action words

@@ -5,6 +5,7 @@ const request = require("supertest");
 
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
+const Booking = require("../models/Booking");
 const Account = require("../models/Account");
 const calendlyRouter = require("./calendly");
 
@@ -42,6 +43,7 @@ beforeEach(() => {
 afterEach(async () => {
   await Lead.deleteMany({});
   await OutboundLead.deleteMany({});
+  await Booking.deleteMany({});
   await Account.deleteMany({});
 });
 
@@ -65,22 +67,26 @@ function calendlyPayload(overrides = {}) {
       tracking: {
         utm_source: accountGhl,
         utm_medium: null,
+        utm_campaign: null,
         ...overrides.tracking,
       },
       scheduled_event: "https://api.calendly.com/scheduled_events/abc123",
+      uri: "https://api.calendly.com/invitees/inv123",
       ...overrides,
     },
   };
 }
 
 describe("POST /api/calendly — Calendly webhook", () => {
-  it("ignores non-invitee.created events", async () => {
-    const res = await request(app)
-      .post("/api/calendly")
-      .send({ event: "invitee.canceled", payload: {} });
+  describe("Event handling", () => {
+    it("ignores unknown events", async () => {
+      const res = await request(app)
+        .post("/api/calendly")
+        .send({ event: "invitee.rescheduled", payload: {} });
 
-    expect(res.status).toBe(200);
-    expect(res.body.message).toBe("Event ignored");
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe("Event ignored");
+    });
   });
 
   it("returns 400 when account cannot be resolved", async () => {
@@ -237,6 +243,170 @@ describe("POST /api/calendly — Calendly webhook", () => {
 
       const leads = await Lead.find({ email: "john@example.com" });
       expect(leads).toHaveLength(1);
+    });
+  });
+
+  describe("Auto-create Booking record", () => {
+    it("creates a Booking when invitee.created fires", async () => {
+      await createAccount();
+
+      await request(app)
+        .post(`/api/calendly?account=${accountGhl}`)
+        .send(
+          calendlyPayload({
+            tracking: { utm_source: "ig", utm_medium: null, utm_campaign: "spring" },
+          }),
+        );
+
+      const bookings = await Booking.find({});
+      expect(bookings).toHaveLength(1);
+      expect(bookings[0].status).toBe("scheduled");
+      expect(bookings[0].email).toBe("john@example.com");
+      expect(bookings[0].contact_name).toBe("John Doe");
+      expect(bookings[0].utm_source).toBe("ig");
+      expect(bookings[0].utm_campaign).toBe("spring");
+      expect(bookings[0].calendly_event_uri).toBe("https://api.calendly.com/scheduled_events/abc123");
+      expect(bookings[0].calendly_invitee_uri).toBe("https://api.calendly.com/invitees/inv123");
+      expect(bookings[0].source).toBe("inbound");
+    });
+
+    it("creates Booking with source outbound when outbound lead is linked", async () => {
+      const account = await createAccount();
+
+      const obLead = await OutboundLead.create({
+        account_id: account._id,
+        followingKey: "johndoe",
+        username: "johndoe",
+        email: "john@example.com",
+      });
+
+      await request(app)
+        .post(`/api/calendly?account=${accountGhl}`)
+        .send(
+          calendlyPayload({
+            tracking: { utm_source: null, utm_medium: null },
+          }),
+        );
+
+      const bookings = await Booking.find({});
+      expect(bookings).toHaveLength(1);
+      expect(bookings[0].source).toBe("outbound");
+      expect(bookings[0].outbound_lead_id.toString()).toBe(obLead._id.toString());
+    });
+
+    it("deduplicates Booking by calendly_event_uri", async () => {
+      await createAccount();
+
+      // Send same event twice
+      const payload = calendlyPayload({
+        tracking: { utm_source: accountGhl, utm_medium: null },
+      });
+
+      await request(app).post("/api/calendly").send(payload);
+      await request(app).post("/api/calendly").send(payload);
+
+      const bookings = await Booking.find({});
+      expect(bookings).toHaveLength(1);
+    });
+  });
+
+  describe("Cancellation handling", () => {
+    it("cancels a Booking on invitee.canceled event", async () => {
+      const account = await createAccount();
+
+      // Create a booking first
+      await Booking.create({
+        account_id: account._id,
+        booking_date: new Date(),
+        status: "scheduled",
+        calendly_event_uri: "https://api.calendly.com/scheduled_events/cancel123",
+      });
+
+      const res = await request(app)
+        .post(`/api/calendly?account=${accountGhl}`)
+        .send({
+          event: "invitee.canceled",
+          payload: {
+            scheduled_event: "https://api.calendly.com/scheduled_events/cancel123",
+            tracking: {},
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.cancelled).toBe(true);
+
+      const booking = await Booking.findOne({ calendly_event_uri: "https://api.calendly.com/scheduled_events/cancel123" });
+      expect(booking.status).toBe("cancelled");
+      expect(booking.cancelled_at).toBeTruthy();
+    });
+
+    it("handles cancellation gracefully when no booking exists", async () => {
+      await createAccount();
+
+      const res = await request(app)
+        .post(`/api/calendly?account=${accountGhl}`)
+        .send({
+          event: "invitee.canceled",
+          payload: {
+            scheduled_event: "https://api.calendly.com/scheduled_events/nonexistent",
+            tracking: {},
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.cancelled).toBe(true);
+    });
+  });
+
+  describe("Outbound lead auto-linking", () => {
+    it("auto-links lead to outbound by email match", async () => {
+      const account = await createAccount();
+
+      const obLead = await OutboundLead.create({
+        account_id: account._id,
+        followingKey: "johndoe",
+        username: "johndoe",
+        email: "john@example.com",
+      });
+
+      await request(app)
+        .post(`/api/calendly?account=${accountGhl}`)
+        .send(
+          calendlyPayload({
+            tracking: { utm_source: null, utm_medium: null },
+          }),
+        );
+
+      const lead = await Lead.findOne({ email: "john@example.com" });
+      expect(lead.outbound_lead_id.toString()).toBe(obLead._id.toString());
+
+      const updatedOb = await OutboundLead.findById(obLead._id);
+      expect(updatedOb.booked).toBe(true);
+    });
+
+    it("auto-links lead to outbound by IG username from Q&A", async () => {
+      const account = await createAccount();
+
+      const obLead = await OutboundLead.create({
+        account_id: account._id,
+        followingKey: "cooluser",
+        username: "cooluser",
+      });
+
+      await request(app)
+        .post(`/api/calendly?account=${accountGhl}`)
+        .send(
+          calendlyPayload({
+            email: "unknown@test.com",
+            questions_and_answers: [
+              { question: "What is your Instagram handle?", answer: "@cooluser" },
+            ],
+            tracking: { utm_source: null, utm_medium: null },
+          }),
+        );
+
+      const lead = await Lead.findOne({ email: "unknown@test.com" });
+      expect(lead.outbound_lead_id.toString()).toBe(obLead._id.toString());
     });
   });
 

@@ -208,7 +208,7 @@ router.post("/:token/accept", async (req, res) => {
         account_id: account._id,
         role: 1,
         has_outbound: false,
-        has_research: true,
+        has_research: false,
         is_default: true,
       });
     } else if (invitation.type === "team_member") {

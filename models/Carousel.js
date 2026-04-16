@@ -39,6 +39,8 @@ const CarouselSchema = new mongoose.Schema(
     swipe_file_id: { type: mongoose.Schema.Types.ObjectId, ref: "SwipeFile", default: null },
     template_id: { type: mongoose.Schema.Types.ObjectId, ref: "CarouselTemplate", default: null },
     lut_id: { type: mongoose.Schema.Types.ObjectId, ref: "ClientLut", default: null },
+    prospect_profile_id: { type: mongoose.Schema.Types.ObjectId, ref: "ProspectProfile", default: null },
+    is_outreach: { type: Boolean, default: false },
     layout_preset: {
       mode: { type: String, enum: ["uniform", "sequence", "ai_suggested"], default: "ai_suggested" },
       default_composition: {
@@ -86,6 +88,13 @@ const CarouselSchema = new mongoose.Schema(
       why_this_angle: { type: String, default: "" },
     },
     strategy_notes: { type: String, default: "" },
+    cost: {
+      apify_usd: { type: Number, default: 0 },
+      claude_usd: { type: Number, default: 0 },
+      openai_usd: { type: Number, default: 0 },
+      total_usd: { type: Number, default: 0 },
+      breakdown: [{ label: String, usd: Number }],
+    },
     status: { type: String, enum: ["queued", "generating", "ready", "failed"], default: "queued" },
     generation_log: [{ type: String }],
     exported_at: { type: Date, default: null },

@@ -492,6 +492,23 @@ router.post("/:id/slides/:position/rerender", async (req, res) => {
       extra_image_keys: slide.extra_image_keys || [],
     }];
 
+    // For outreach carousels, use inferred brand from prospect profile
+    let brandKitOverride = null;
+    if (carousel.is_outreach && carousel.prospect_profile_id) {
+      const ProspectProfile = require("../models/ProspectProfile");
+      const prospect = await ProspectProfile.findById(carousel.prospect_profile_id).select("inferred_brand profile.name ig_handle").lean();
+      if (prospect) {
+        brandKitOverride = {
+          primary_color: prospect.inferred_brand?.primary_color || "#000000",
+          secondary_color: prospect.inferred_brand?.secondary_color || "#ffffff",
+          accent_color: prospect.inferred_brand?.accent_color || "#3b82f6",
+          font_heading: "Playfair Display",
+          font_body: "DM Sans",
+          name: prospect.profile?.name || prospect.ig_handle,
+        };
+      }
+    }
+
     const { renderSlides } = require("../services/carousel/slideRenderer");
     const rendered = await renderSlides({
       carouselId: carousel._id.toString(),
@@ -501,6 +518,7 @@ router.post("/:id/slides/:position/rerender", async (req, res) => {
       imageSelections,
       templateId: carousel.template_id?.toString(),
       lutId: carousel.lut_id?.toString() || null,
+      ...(brandKitOverride ? { showBrandName: false, brandKitOverride } : {}),
     });
 
     // Update just this slide in the carousel

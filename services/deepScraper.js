@@ -10,232 +10,43 @@ const Prompt = require("../models/Prompt");
 const { qualifyBio, DEFAULT_QUALIFICATION_PROMPT } = require("./uploadService");
 const { emitToAccount } = require("./socketManager");
 
-// Apify actor IDs
-const REEL_SCRAPER = "apify~instagram-reel-scraper";
-const POST_SCRAPER = "apify~instagram-post-scraper";
-const COMMENT_SCRAPER = "SbK00X0JYCPblD2wp";
-const PROFILE_SCRAPER = "dSCLg0C3YEZ83HzYX";
-const LIKER_SCRAPER = "datadoping~instagram-likes-scraper";
-const FOLLOWERS_SCRAPER = "scraping_solutions~instagram-scraper-followers-following-no-cookies";
-
-const APIFY_BASE = "https://api.apify.com/v2";
+// ─── Apify helpers (shared module) ──────────────────────────────────────
+const {
+  REEL_SCRAPER,
+  POST_SCRAPER,
+  COMMENT_SCRAPER,
+  PROFILE_SCRAPER,
+  LIKER_SCRAPER,
+  FOLLOWERS_SCRAPER,
+  ApifyLimitError,
+  startApifyRun,
+  pickApifyToken,
+  markTokenLimitReached,
+  fetchApifyUsage,
+  startApifyRunWithRotation: _startWithRotation,
+  pollApifyRun,
+  waitForApifyRun: _waitForRun,
+  getDatasetItems,
+  abortApifyRun,
+} = require("./apifyHelpers");
 
 const activeJobs = new Map(); // jobId -> { cancelled, paused, skipComments }
 
-// ─── Apify helpers ───────────────────────────────────────────────────────
+// Wrap shared helpers to match existing call signatures used throughout this file
 
-const APIFY_MEMORY_MB = 4096; // 4GB — uses more of the available compute for faster runs
-
-// Custom error for 403 hard limit so callers can detect and rotate tokens
-class ApifyLimitError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "ApifyLimitError";
-  }
-}
-
-// Per-run USD cap for pay-per-result actors. Apify enforces a minimum of $0.0026
-// per run; small maxItems values can fall below that, so we pass a direct USD cap
-// instead. The actor's own input (resultsLimit/resultsPerPost/etc) still caps
-// actual output — this is purely a billing safeguard.
-const APIFY_MAX_CHARGE_USD = 10;
-
-async function startApifyRun(actorId, input, token) {
-  const qs = `memory=${APIFY_MEMORY_MB}&maxTotalChargeUsd=${APIFY_MAX_CHARGE_USD}`;
-  const res = await fetch(`${APIFY_BASE}/acts/${actorId}/runs?${qs}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(input),
+function startApifyRunWithRotation(actorId, input, accountId, legacyToken, jobId, accountIdStr) {
+  return _startWithRotation(actorId, input, accountId, legacyToken, (msg, level) => {
+    emitLog(accountIdStr, jobId, msg, level);
   });
-  if (!res.ok) {
-    const text = await res.text();
-    // Detect 401 invalid token, 402 monthly spending limit, or 403 hard limit / actor-disabled errors
-    if (res.status === 401 || res.status === 402 || res.status === 403) {
-      throw new ApifyLimitError(`Apify ${res.status}: ${text}`);
-    }
-    // Also treat "monthly-usage-hard-limit-exceeded" error type as limit reached
-    // (Apify sometimes returns this with other status codes)
-    if (/monthly-usage-hard-limit|usage-limit-exceeded|insufficient-credits/i.test(text)) {
-      throw new ApifyLimitError(`Apify ${res.status}: ${text}`);
-    }
-    throw new Error(`Apify start failed (${res.status}): ${text}`);
-  }
-  const data = await res.json();
-  return data.data; // { id, defaultDatasetId, status, ... }
 }
 
-// ─── Token rotation ─────────────────────────────────────────────────────
-//
-// Picks the first active ApifyToken for an account. Falls back to account.apify_token
-// for backward compatibility. Returns { tokenValue, tokenDocId } or null.
-
-async function pickApifyToken(accountId, legacyToken) {
-  // Try multi-token system first
-  const tokens = await ApifyToken.find({
-    account_id: accountId,
-    status: "active",
-  })
-    .sort({ last_used_at: 1 }) // least recently used first
-    .lean();
-
-  if (tokens.length > 0) {
-    const picked = tokens[0];
-    await ApifyToken.updateOne(
-      { _id: picked._id },
-      { $set: { last_used_at: new Date() }, $inc: { usage_count: 1 } },
-    );
-    return { tokenValue: picked.token, tokenDocId: picked._id.toString() };
-  }
-
-  // Fallback to legacy single token on Account
-  if (legacyToken) {
-    return { tokenValue: legacyToken, tokenDocId: null };
-  }
-
-  return null;
-}
-
-async function markTokenLimitReached(tokenDocId, errorMsg) {
-  if (!tokenDocId) return; // legacy token — nothing to mark
-  await ApifyToken.updateOne(
-    { _id: tokenDocId },
-    { $set: { status: "limit_reached", last_error: errorMsg } },
-  );
-}
-
-async function fetchApifyUsage(token) {
-  try {
-    const res = await fetch(`${APIFY_BASE}/users/me/limits`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    const { data } = await res.json();
-    return {
-      usedUsd: data.current?.monthlyUsageUsd ?? null,
-      limitUsd: data.limits?.maxMonthlyUsageUsd ?? null,
-      resetAt: data.monthlyUsageCycle?.endAt ?? null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-// Try to start an Apify run with token rotation. If 403, mark token and try next.
-// Returns { run, tokenValue, tokenDocId } or throws if all tokens exhausted.
-async function startApifyRunWithRotation(actorId, input, accountId, legacyToken, jobId, accountIdStr) {
-  const MAX_ROTATIONS = 10; // safety cap
-  for (let attempt = 0; attempt < MAX_ROTATIONS; attempt++) {
-    const picked = await pickApifyToken(accountId, legacyToken);
-    if (!picked) {
-      throw new ApifyLimitError("No active Apify tokens available");
-    }
-
-    const masked = picked.tokenValue.slice(0, 6) + "…" + picked.tokenValue.slice(-4);
-    const usage = await fetchApifyUsage(picked.tokenValue);
-    let tokenMsg = `Using token ${masked}${picked.tokenDocId ? ` (${picked.tokenDocId})` : " (legacy)"}`;
-    if (usage) {
-      const spent = usage.usedUsd != null ? `$${usage.usedUsd.toFixed(2)}` : "?";
-      const limit = usage.limitUsd != null ? `$${usage.limitUsd.toFixed(2)}` : "?";
-      const reset = usage.resetAt ? new Date(usage.resetAt).toLocaleDateString() : "?";
-      tokenMsg += ` — usage: ${spent}/${limit}, resets ${reset}`;
-    }
-    emitLog(accountIdStr, jobId, tokenMsg);
-
-    try {
-      const run = await startApifyRun(actorId, input, picked.tokenValue);
-      return { run, tokenValue: picked.tokenValue, tokenDocId: picked.tokenDocId };
-    } catch (err) {
-      if (err instanceof ApifyLimitError) {
-        const isAuthError = err.message.includes("Apify 401");
-        const isPaymentError = err.message.includes("Apify 402");
-        const reason = isAuthError ? "auth failed" : isPaymentError ? "hit monthly spending limit" : "hit limit";
-        logger.info(`[deep-scraper] Token ${picked.tokenDocId || "legacy"} ${reason}: ${err.message}`);
-        if (picked.tokenDocId) {
-          await markTokenLimitReached(picked.tokenDocId, err.message);
-          emitLog(accountIdStr, jobId, `Apify token "${picked.tokenDocId}" ${reason} — rotating to next token`, "warn");
-          continue; // try next token
-        }
-        // Legacy token failed — no rotation possible
-        throw err;
-      }
-      throw err; // non-403 error — don't rotate
-    }
-  }
-  throw new ApifyLimitError("All Apify tokens exhausted after rotation attempts");
-}
-
-async function pollApifyRun(runId, token) {
-  const MAX_RETRIES = 4;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const res = await fetch(`${APIFY_BASE}/actor-runs/${runId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.data;
-      }
-      // Retry on transient errors (5xx, 429)
-      if ((res.status >= 500 || res.status === 429) && attempt < MAX_RETRIES) {
-        const delay = Math.min(5000 * Math.pow(2, attempt), 30000);
-        logger.info(`[deep-scraper] Poll got ${res.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
-        await new Promise((r) => setTimeout(r, delay));
-        continue;
-      }
-      throw new Error(`Apify poll failed (${res.status})`);
-    } catch (err) {
-      if (attempt < MAX_RETRIES && err.message && !err.message.startsWith("Apify poll failed")) {
-        const delay = Math.min(5000 * Math.pow(2, attempt), 30000);
-        logger.info(`[deep-scraper] Poll network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}):`, err.message);
-        await new Promise((r) => setTimeout(r, delay));
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
-// Returns the run object for all terminal states (SUCCEEDED, ABORTED, FAILED, TIMED-OUT).
-// Returns null only when the job is paused/cancelled by the user.
-// Callers should check run.status and handle partial data for non-SUCCEEDED runs.
-async function waitForApifyRun(runId, token, jobId, handle) {
-  while (true) {
-    if (handle.cancelled || handle.paused || handle.skipComments) return null;
-    const run = await pollApifyRun(runId, token);
-    if (["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"].includes(run.status)) {
-      return run;
-    }
-    await new Promise((r) => setTimeout(r, 5000));
-  }
+function waitForApifyRun(runId, token, jobId, handle) {
+  return _waitForRun(runId, token, handle);
 }
 
 function logRunCost(run, accountId, jobId) {
   if (!run || run.usageTotalUsd == null) return;
   emitLog(accountId, jobId, `Run cost: $${run.usageTotalUsd.toFixed(4)}`);
-}
-
-// Safely get dataset items — returns empty array if dataset is unavailable
-async function getDatasetItems(datasetId, token) {
-  if (!datasetId) return [];
-  const res = await fetch(`${APIFY_BASE}/datasets/${datasetId}/items?format=json`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-async function abortApifyRun(runId, token) {
-  try {
-    await fetch(`${APIFY_BASE}/actor-runs/${runId}/abort`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  } catch {
-    // best-effort
-  }
 }
 
 // ─── Logging helper ──────────────────────────────────────────────────────

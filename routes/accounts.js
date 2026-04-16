@@ -177,7 +177,7 @@ router.post("/register", validate(registerSchema), async (req, res) => {
     account_id: account._id,
     role: 1,
     has_outbound: false,
-    has_research: true,
+    has_research: false,
     is_default: true,
   });
 
@@ -675,7 +675,7 @@ router.delete("/ig-sessions/:username", async (req, res) => {
 
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, has_outbound, has_research, ghl, calendly, openai_token, claude_token, gemini_token, apify_token, ig_session, ig_username, ig_proxy, lead_visibility } = req.body;
+    const { first_name, last_name, email, has_outbound, has_research, role, ghl, calendly, openai_token, claude_token, gemini_token, apify_token, ig_session, ig_username, ig_proxy, lead_visibility, account_id } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
@@ -723,6 +723,21 @@ router.patch("/:id", async (req, res) => {
     const membershipUpdates = {};
     if (has_outbound !== undefined) membershipUpdates.has_outbound = has_outbound;
     if (has_research !== undefined) membershipUpdates.has_research = has_research;
+    if (role !== undefined) {
+      // Only global admins or account owners can change membership roles
+      const canChangeRole = req.user?.role === 0 || req.membership?.role === 1;
+      if (!canChangeRole) {
+        return res.status(403).json({ error: "Not authorized to change role" });
+      }
+      if (![0, 1, 2].includes(role)) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+      // Prevent users from changing their own role to avoid lockout
+      if (String(req.params.id) === String(req.user?.userId)) {
+        return res.status(400).json({ error: "Cannot change your own role" });
+      }
+      membershipUpdates.role = role;
+    }
 
     if (Object.keys(userUpdates).length === 0 && Object.keys(accountUpdates).length === 0 && Object.keys(membershipUpdates).length === 0) {
       return res.status(400).json({ error: "No fields to update" });
@@ -740,8 +755,8 @@ router.patch("/:id", async (req, res) => {
       }
     }
 
-    // Resolve which account to update — use active account from JWT
-    const activeAccountId = req.account._id;
+    // Resolve which account to update — admins can target a different account
+    const activeAccountId = (account_id && req.user?.role === 0) ? account_id : req.account._id;
 
     if (Object.keys(userUpdates).length > 0) {
       await User.findByIdAndUpdate(req.params.id, userUpdates);

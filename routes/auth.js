@@ -35,7 +35,10 @@ router.post("/login", async (req, res) => {
     // A user is considered a "client user" (managed by someone else) if any
     // Client doc has `user_id === user._id`. These users are technically
     // role=1 owners of their own isolated account, so we cannot rely on role.
-    const isClientUser = !!(await Client.exists({ user_id: user._id }));
+    // Admins (role 0) are never treated as client users even if they have a
+    // Client doc linked to them (e.g. they created a client for themselves).
+    const isClientUser =
+      accountUser.role !== 0 && !!(await Client.exists({ user_id: user._id }));
 
     res.json({
       token,
@@ -61,7 +64,8 @@ router.get("/me", auth, async (req, res) => {
     const user = await User.findById(req.user.userId).lean();
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    const isClientUser = !!(await Client.exists({ user_id: user._id }));
+    const isClientUser =
+      req.user.role !== 0 && !!(await Client.exists({ user_id: user._id }));
 
     res.json({
       user_id: user._id,

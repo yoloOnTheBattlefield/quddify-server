@@ -41,8 +41,9 @@ const Client = require("../models/Client");
 async function getOwnedClientIds(req) {
   if (req._ownedClientIds) return req._ownedClientIds;
 
-  // 1. Try the "client user" path first.
-  if (req.user?.userId) {
+  // 1. Try the "client user" path first (admins always use the admin path
+  //    even if they have a Client doc linked to them).
+  if (req.user?.userId && req.user.role !== 0) {
     const asClientUser = await Client.find({ user_id: req.user.userId }, { _id: 1 }).lean();
     if (asClientUser.length > 0) {
       req._ownedClientIds = asClientUser.map((c) => c._id);
@@ -51,9 +52,15 @@ async function getOwnedClientIds(req) {
     }
   }
 
-  // 2. Admin/creator path.
+  // 2. Admin/creator path — include clients in the admin's account AND any
+  //    Client doc linked to the admin's own user_id (e.g. created by another
+  //    account for them) so they appear in the client picker too.
   if (req.account?._id) {
-    const asAdmin = await Client.find({ account_id: req.account._id }, { _id: 1 }).lean();
+    const conditions = [{ account_id: req.account._id }];
+    if (req.user?.userId) {
+      conditions.push({ user_id: req.user.userId });
+    }
+    const asAdmin = await Client.find({ $or: conditions }, { _id: 1 }).lean();
     req._ownedClientIds = asAdmin.map((c) => c._id);
     req._ownershipMode = "admin";
     return req._ownedClientIds;
@@ -74,7 +81,12 @@ async function ownershipFilter(req) {
   if (req._ownershipMode === "client_user") {
     return { user_id: req.user.userId };
   }
-  return { account_id: req.account._id };
+  // For admins, include their account's clients + any Client linked to them.
+  const conditions = [{ account_id: req.account._id }];
+  if (req.user?.userId) {
+    conditions.push({ user_id: req.user.userId });
+  }
+  return { $or: conditions };
 }
 
 /**

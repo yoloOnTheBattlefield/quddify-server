@@ -6,6 +6,30 @@ const Booking = require("../models/Booking");
 const OutboundLead = require("../models/OutboundLead");
 const Lead = require("../models/Lead");
 
+/**
+ * Normalize a utm_source value to a display-friendly channel name.
+ */
+function normalizeChannel(utmSource) {
+  if (!utmSource) return null;
+  const val = utmSource.trim().toLowerCase();
+  const map = {
+    ig: "Instagram",
+    instagram: "Instagram",
+    li: "LinkedIn",
+    linkedin: "LinkedIn",
+    yt: "YouTube",
+    youtube: "YouTube",
+    fb: "Facebook",
+    facebook: "Facebook",
+    tw: "Twitter",
+    twitter: "Twitter",
+    tiktok: "TikTok",
+    tt: "TikTok",
+    email: "Email",
+  };
+  return map[val] || utmSource.charAt(0).toUpperCase() + utmSource.slice(1);
+}
+
 // GET /api/bookings/stats — aggregate stats
 router.get("/stats", async (req, res) => {
   try {
@@ -80,6 +104,32 @@ router.get("/analytics", async (req, res) => {
     }
     const source_distribution = Object.entries(sourceMap).map(([source, count]) => ({ source, count }));
 
+    // Channel breakdown (by utm_source → normalized channel name)
+    const channelMap = {};
+    for (const b of bookings) {
+      const channel = normalizeChannel(b.utm_source) || (b.source === "inbound" ? "Direct" : "Outbound DM");
+      if (!channelMap[channel]) channelMap[channel] = [];
+      channelMap[channel].push(b);
+    }
+    const by_channel = Object.entries(channelMap)
+      .map(([channel, group]) => {
+        const nonCancelled = group.filter((b) => b.status !== "cancelled");
+        const comp = group.filter((b) => b.status === "completed");
+        const ns = group.filter((b) => b.status === "no_show");
+        const showDenom = comp.length + ns.length;
+        const rev = group.reduce((s, b) => s + (b.cash_collected || 0), 0);
+        return {
+          channel,
+          bookings: group.length,
+          completed: comp.length,
+          no_show: ns.length,
+          show_rate: showDenom > 0 ? Math.round((comp.length / showDenom) * 10000) / 100 : 0,
+          close_rate: nonCancelled.length > 0 ? Math.round((comp.length / nonCancelled.length) * 10000) / 100 : 0,
+          revenue: Math.round(rev * 100) / 100,
+        };
+      })
+      .sort((a, b) => b.bookings - a.bookings);
+
     res.json({
       total: bookings.length,
       close_rate: totalNonCancelled > 0 ? Math.round((completed / totalNonCancelled) * 10000) / 100 : 0,
@@ -87,6 +137,7 @@ router.get("/analytics", async (req, res) => {
       avg_cash_collected: avgCashCollected,
       over_time,
       source_distribution,
+      by_channel,
     });
   } catch (err) {
     logger.error({ err }, "Failed to fetch booking analytics");

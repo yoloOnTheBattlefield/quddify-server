@@ -42,7 +42,8 @@ const ClientImageSchema = new mongoose.Schema(
     last_used_at: { type: Date, default: null },
     used_in_carousels: [{ type: mongoose.Schema.Types.ObjectId }],
     status: { type: String, enum: ["processing", "ready", "failed", "archived"], default: "processing" },
-    source: { type: String, enum: ["google_drive", "manual_upload", "ai_generated"], default: "manual_upload" },
+    source: { type: String, enum: ["google_drive", "manual_upload", "ai_generated", "prospect_scrape"], default: "manual_upload" },
+    prospect_profile_id: { type: mongoose.Schema.Types.ObjectId, ref: "ProspectProfile", default: null },
     google_drive_file_id: { type: String, default: null },
     summary: { type: String, default: "" },
   },
@@ -54,5 +55,6 @@ ClientImageSchema.index({ client_id: 1, "tags.emotion": 1 });
 ClientImageSchema.index({ client_id: 1, "tags.context": 1 });
 ClientImageSchema.index({ client_id: 1, last_used_at: 1 });
 ClientImageSchema.index({ client_id: 1, suitable_as_cover: 1, quality_score: -1 });
+ClientImageSchema.index({ prospect_profile_id: 1, status: 1 });
 
 module.exports = mongoose.model("ClientImage", ClientImageSchema);

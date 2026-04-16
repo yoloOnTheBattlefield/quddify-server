@@ -55,6 +55,7 @@ const swipeFileRoutes = require("./routes/swipe-files");
 const carouselTemplateRoutes = require("./routes/carousel-templates");
 const carouselStyleRoutes = require("./routes/carousel-styles");
 const carouselRoutes = require("./routes/carousels");
+const outreachRoutes = require("./routes/outreach");
 const thumbnailRoutes = require("./routes/thumbnails");
 const thumbnailTemplateRoutes = require("./routes/thumbnail-templates");
 const clientImageUploadRoutes = require("./routes/client-image-upload");
@@ -307,6 +308,7 @@ app.use("/api/swipe-files", swipeFileRoutes);
 app.use("/api/carousel-templates", carouselTemplateRoutes);
 app.use("/api/carousel-styles", carouselStyleRoutes);
 app.use("/api/carousels", carouselRoutes);
+app.use("/api/outreach", outreachRoutes);
 app.use("/api/thumbnails", thumbnailRoutes);
 app.use("/api/thumbnail-templates", thumbnailTemplateRoutes);
 app.use("/api/client-images", clientImageUploadRoutes);
@@ -344,6 +346,20 @@ server.listen(PORT, "0.0.0.0", () => {
 connectDB()
   .then(async () => {
     await recoverStuckJobs();
+
+    // Recover stuck prospect scrape jobs (server restart mid-scrape)
+    const ProspectProfile = require("./models/ProspectProfile");
+    const stuckProspects = await ProspectProfile.updateMany(
+      { status: { $in: ["scraping", "profiling"] } },
+      { $set: { status: "failed", error: "Server restarted during scraping", current_step: "failed" } },
+    );
+    if (stuckProspects.modifiedCount > 0) {
+      logger.info(`Recovered ${stuckProspects.modifiedCount} stuck prospect scrape job(s)`);
+    }
+
+    // Start prospect profile cleanup scheduler
+    const { startCleanupScheduler } = require("./services/prospectCleanup");
+    startCleanupScheduler();
 
     // Reset abandoned in_progress tasks back to pending
     const Task = require("./models/Task");

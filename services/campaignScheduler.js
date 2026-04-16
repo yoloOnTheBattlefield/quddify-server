@@ -8,6 +8,7 @@ const Account = require("../models/Account");
 const WarmupLog = require("../models/WarmupLog");
 const Task = require("../models/Task");
 const { emitToAccount, emitToSender } = require("./socketManager");
+const { notifyCampaignCompleted } = require("./telegramNotifier");
 
 let tickInterval = null;
 
@@ -521,6 +522,16 @@ async function processTick() {
           campaign.status = "completed";
           await campaign.save();
           logger.info(`[scheduler] Campaign ${campaign.name} completed — no pending leads`);
+
+          // Send Telegram notification
+          try {
+            const account = await Account.findById(campaign.account_id).lean();
+            if (account) {
+              await notifyCampaignCompleted(account, campaign, campaign.stats);
+            }
+          } catch (err) {
+            logger.error({ err }, "Failed to send campaign-completed Telegram notification");
+          }
         }
         continue;
       }

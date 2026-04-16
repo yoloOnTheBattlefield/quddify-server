@@ -168,6 +168,55 @@ describe("GET /api/bookings/analytics", () => {
     expect(res.body.show_up_rate).toBe(50);
     expect(res.body.avg_cash_collected).toBe(1000);
   });
+
+  it("returns by_channel breakdown grouped by utm_source", async () => {
+    await Booking.create({ account_id: accountId, booking_date: new Date(), status: "completed", utm_source: "ig", cash_collected: 2000 });
+    await Booking.create({ account_id: accountId, booking_date: new Date(), status: "no_show", utm_source: "ig" });
+    await Booking.create({ account_id: accountId, booking_date: new Date(), status: "completed", utm_source: "yt", cash_collected: 5000 });
+    await Booking.create({ account_id: accountId, booking_date: new Date(), status: "completed", utm_source: "li" });
+
+    const res = await request(app).get("/api/bookings/analytics");
+    expect(res.status).toBe(200);
+    expect(res.body.by_channel).toBeDefined();
+    expect(res.body.by_channel.length).toBeGreaterThanOrEqual(3);
+
+    const ig = res.body.by_channel.find((c) => c.channel === "Instagram");
+    expect(ig).toBeTruthy();
+    expect(ig.bookings).toBe(2);
+    expect(ig.completed).toBe(1);
+    expect(ig.no_show).toBe(1);
+    expect(ig.show_rate).toBe(50);
+    expect(ig.revenue).toBe(2000);
+
+    const yt = res.body.by_channel.find((c) => c.channel === "YouTube");
+    expect(yt).toBeTruthy();
+    expect(yt.bookings).toBe(1);
+    expect(yt.completed).toBe(1);
+    expect(yt.close_rate).toBe(100);
+
+    const li = res.body.by_channel.find((c) => c.channel === "LinkedIn");
+    expect(li).toBeTruthy();
+    expect(li.bookings).toBe(1);
+  });
+
+  it("falls back to source field when no utm_source", async () => {
+    await Booking.create({ account_id: accountId, booking_date: new Date(), status: "completed", source: "inbound" });
+    await Booking.create({ account_id: accountId, booking_date: new Date(), status: "completed", source: "outbound" });
+
+    const res = await request(app).get("/api/bookings/analytics");
+    const channels = res.body.by_channel.map((c) => c.channel);
+    expect(channels).toContain("Direct");
+    expect(channels).toContain("Outbound DM");
+  });
+
+  it("filters by date range", async () => {
+    await Booking.create({ account_id: accountId, booking_date: new Date("2026-03-01"), status: "completed", utm_source: "ig" });
+    await Booking.create({ account_id: accountId, booking_date: new Date("2026-04-01"), status: "completed", utm_source: "ig" });
+
+    const res = await request(app).get("/api/bookings/analytics?start_date=2026-03-15&end_date=2026-04-15");
+    expect(res.body.total).toBe(1);
+    expect(res.body.by_channel).toHaveLength(1);
+  });
 });
 
 describe("POST /api/bookings/sync", () => {

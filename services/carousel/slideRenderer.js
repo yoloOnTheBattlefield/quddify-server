@@ -312,9 +312,9 @@ async function renderSlideToBuffer(browser, html) {
 
 // ── Main ──────────────────────────────────────
 
-async function renderSlides({ carouselId, clientId, accountId, slides, imageSelections, templateId, lutId, showBrandName = true }) {
+async function renderSlides({ carouselId, clientId, accountId, slides, imageSelections, templateId, lutId, showBrandName = true, brandKitOverride }) {
   const [client, lutDoc] = await Promise.all([
-    Client.findById(clientId),
+    brandKitOverride ? null : Client.findById(clientId),
     lutId ? ClientLut.findById(lutId) : null,
   ]);
 
@@ -327,11 +327,11 @@ async function renderSlides({ carouselId, clientId, accountId, slides, imageSele
     } catch (err) { logger.warn(`Could not load LUT ${lutId}: ${err.message}`); }
   }
 
-  const brandKit = client?.brand_kit || {};
+  const brandKit = brandKitOverride || client?.brand_kit || {};
   const palette = derivePalette(brandKit.primary_color);
   palette._headingFont = brandKit.font_heading || "Playfair Display";
   palette._bodyFont = brandKit.font_body || "DM Sans";
-  const brandName = showBrandName ? (client?.name || "") : "";
+  const brandName = showBrandName ? (brandKitOverride?.name || client?.name || "") : "";
 
   let browser;
   try {

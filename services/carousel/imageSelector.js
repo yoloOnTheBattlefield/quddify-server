@@ -3,6 +3,23 @@ const { ROLE_IMAGE_PROFILE, GOAL_VIBE_MAP } = require("./tagVocabulary");
 const logger = require("../../utils/logger").child({ module: "imageSelector" });
 
 /**
+ * Weighted random pick from scored candidates.
+ * Higher-scored images are more likely to be chosen but not guaranteed,
+ * giving variety while still favoring quality.
+ */
+function weightedRandomPick(candidates) {
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  const totalScore = candidates.reduce((sum, c) => sum + c.score, 0);
+  let rand = Math.random() * totalScore;
+  for (const candidate of candidates) {
+    rand -= candidate.score;
+    if (rand <= 0) return candidate;
+  }
+  return candidates[0];
+}
+
+/**
  * Score how well an image matches a slide's requirements.
  * Returns { score, reasons[] } for debugging/transparency.
  */
@@ -13,6 +30,16 @@ function scoreImageForSlide(image, slide, goal) {
   const tags = image.tags || {};
   const role = slide.role || "";
   const profile = ROLE_IMAGE_PROFILE[role] || ROLE_IMAGE_PROFILE.hook;
+
+  // ── Untagged images (e.g. prospect scrape without tagging) get a baseline ──
+  const isUntagged = !image.quality_score && (!tags.emotion || tags.emotion.length === 0);
+  if (isUntagged) {
+    // Give a flat score so they pass MIN_SCORE and are selected round-robin
+    score = 20;
+    if (image.is_portrait) { score += 5; reasons.push("portrait"); }
+    reasons.push("untagged — baseline score");
+    // Jitter + recency/reuse penalties applied below (fall through)
+  }
 
   // ── Quality baseline (0-25) ──
   const qualityPts = (image.quality_score || 0) * 0.25;
@@ -119,21 +146,30 @@ function scoreImageForSlide(image, slide, goal) {
     score += 3;
   }
 
-  // ── Reuse penalty (0 to -15) ──
+  // ── Reuse penalty (0 to -30) ──
   const uses = image.total_uses || 0;
   if (uses > 0) {
-    score -= Math.min(uses * 3, 15);
-    if (uses > 0) reasons.push(`used ${uses}x (penalty)`);
+    score -= Math.min(uses * 5, 30);
+    reasons.push(`used ${uses}x (penalty)`);
   }
 
-  // ── Recency penalty (-5 if used in last 7 days) ──
+  // ── Recency penalty (graduated — stronger the more recent) ──
   if (image.last_used_at) {
     const daysSinceUse = (Date.now() - new Date(image.last_used_at).getTime()) / (1000 * 60 * 60 * 24);
-    if (daysSinceUse < 7) {
-      score -= 5;
-      reasons.push("used recently (penalty)");
+    if (daysSinceUse < 3) {
+      score -= 25;
+      reasons.push("used in last 3 days (heavy penalty)");
+    } else if (daysSinceUse < 7) {
+      score -= 15;
+      reasons.push("used in last 7 days (penalty)");
+    } else if (daysSinceUse < 14) {
+      score -= 8;
+      reasons.push("used in last 14 days (light penalty)");
     }
   }
+
+  // ── Random jitter so equally-scored images rotate (0-8) ──
+  score += Math.random() * 8;
 
   return { score: Math.max(0, score), reasons };
 }
@@ -159,13 +195,15 @@ const IMAGES_NEEDED = {
  * @param {string[]} [opts.excludeCarouselIds] - Carousel IDs to check for reuse
  * @returns {Array<{position, image_id, image_key, score, needs_ai_image, extra_image_ids, extra_image_keys}>}
  */
-async function selectImages({ clientId, accountId, slides, goal, excludeCarouselIds = [] }) {
-  // Fetch all ready images for this client
-  const images = await ClientImage.find({
+async function selectImages({ clientId, accountId, slides, goal, excludeCarouselIds = [], imageFilter }) {
+  // Fetch all ready images — use custom filter for outreach (prospect images) or default to client images
+  const filter = imageFilter || {
     client_id: clientId,
     account_id: accountId,
     status: "ready",
-  }).lean();
+    source: { $ne: "prospect_scrape" },
+  };
+  const images = await ClientImage.find(filter).lean();
 
   if (images.length === 0) {
     logger.warn(`No ready images found for client ${clientId}`);
@@ -216,8 +254,10 @@ async function selectImages({ clientId, accountId, slides, goal, excludeCarousel
       })
       .sort((a, b) => b.score - a.score);
 
-    const best = scored[0];
+    // Pick from top candidates weighted by score instead of always taking #1
     const MIN_SCORE = 15;
+    const topCandidates = scored.filter((s) => s.score >= MIN_SCORE).slice(0, 5);
+    const best = weightedRandomPick(topCandidates);
 
     if (best && best.score >= MIN_SCORE) {
       usedImageIds.add(best.image._id.toString());

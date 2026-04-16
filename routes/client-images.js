@@ -19,7 +19,7 @@ router.get("/", async (req, res) => {
     // Scope by client_id (their owned Clients) instead of account_id.
     const baseFilter = await buildClientScopedFilter(req);
     if (baseFilter === null) return res.json({ images: [], total: 0, page: Number(page), limit: Number(limit) });
-    const filter = { ...baseFilter };
+    const filter = { ...baseFilter, source: { $ne: "prospect_scrape" } };
     if (client_id) filter.client_id = client_id;
     if (status) filter.status = status;
     else filter.status = { $in: ["ready", "processing", "failed"] };

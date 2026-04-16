@@ -14,7 +14,7 @@ const AccountUserSchema = new mongoose.Schema(
     },
     role: { type: Number, default: 2 }, // 0=admin, 1=owner, 2=member
     has_outbound: { type: Boolean, default: false },
-    has_research: { type: Boolean, default: true },
+    has_research: { type: Boolean, default: false },
     is_default: { type: Boolean, default: false },
   },
   { collection: "account_users", versionKey: false, timestamps: true },
