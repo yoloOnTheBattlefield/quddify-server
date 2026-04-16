@@ -1962,4 +1962,81 @@ router.get("/outbound/sources", async (req, res) => {
   }
 });
 
+// GET /analytics/seed-network — graph data for seed-lead network visualization
+router.get("/seed-network", async (req, res) => {
+  try {
+    const { qualified, limit: qLimit } = req.query;
+    const limitNum = Math.min(3000, Math.max(100, parseInt(qLimit) || 2000));
+
+    const match = {
+      account_id: req.account._id,
+      source_seeds: { $exists: true, $not: { $size: 0 } },
+    };
+    if (qualified === "true") match.qualified = true;
+    else if (qualified === "false") match.qualified = false;
+
+    const leads = await OutboundLead.find(match)
+      .select("username qualified unqualified_reason followersCount source_seeds")
+      .sort({ followersCount: -1 })
+      .limit(limitNum)
+      .lean();
+
+    // Build nodes and links
+    const seedNodes = new Map(); // seed -> { leadCount }
+    const leadNodes = [];
+    const links = [];
+    let crossConnected = 0;
+
+    for (const lead of leads) {
+      const seeds = lead.source_seeds || [];
+      if (seeds.length === 0) continue;
+
+      const leadId = `lead::${lead.username}`;
+      leadNodes.push({
+        id: leadId,
+        type: "lead",
+        label: lead.username,
+        qualified: lead.qualified,
+        unqualified_reason: lead.unqualified_reason,
+        followersCount: lead.followersCount || 0,
+        seedCount: seeds.length,
+      });
+
+      if (seeds.length > 1) crossConnected++;
+
+      for (const seed of seeds) {
+        const seedId = `seed::${seed}`;
+        if (!seedNodes.has(seed)) {
+          seedNodes.set(seed, { leadCount: 0 });
+        }
+        seedNodes.get(seed).leadCount++;
+        links.push({ source: seedId, target: leadId });
+      }
+    }
+
+    const nodes = [
+      ...[...seedNodes.entries()].map(([seed, data]) => ({
+        id: `seed::${seed}`,
+        type: "seed",
+        label: seed,
+        leadCount: data.leadCount,
+      })),
+      ...leadNodes,
+    ];
+
+    res.json({
+      nodes,
+      links,
+      stats: {
+        totalSeeds: seedNodes.size,
+        totalLeads: leadNodes.length,
+        crossConnected,
+      },
+    });
+  } catch (err) {
+    logger.error("Seed network error:", err);
+    res.status(500).json({ error: "Failed to fetch seed network data" });
+  }
+});
+
 module.exports = router;
