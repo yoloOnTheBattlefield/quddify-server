@@ -350,18 +350,22 @@ connectDB()
     await recoverStuckJobs();
 
     // Recover stuck prospect scrape jobs (server restart mid-scrape)
-    const { ProspectProfile } = require("./services/carouselDb");
-    const stuckProspects = await ProspectProfile.updateMany(
-      { status: { $in: ["scraping", "profiling"] } },
-      { $set: { status: "failed", error: "Server restarted during scraping", current_step: "failed" } },
-    );
-    if (stuckProspects.modifiedCount > 0) {
-      logger.info(`Recovered ${stuckProspects.modifiedCount} stuck prospect scrape job(s)`);
-    }
+    try {
+      const { ProspectProfile } = require("./services/carouselDb");
+      const stuckProspects = await ProspectProfile.updateMany(
+        { status: { $in: ["scraping", "profiling"] } },
+        { $set: { status: "failed", error: "Server restarted during scraping", current_step: "failed" } },
+      );
+      if (stuckProspects.modifiedCount > 0) {
+        logger.info(`Recovered ${stuckProspects.modifiedCount} stuck prospect scrape job(s)`);
+      }
 
-    // Start prospect profile cleanup scheduler
-    const { startCleanupScheduler } = require("./services/prospectCleanup");
-    startCleanupScheduler();
+      // Start prospect profile cleanup scheduler
+      const { startCleanupScheduler } = require("./services/prospectCleanup");
+      startCleanupScheduler();
+    } catch (err) {
+      logger.error("Prospect recovery failed (non-fatal):", err.message);
+    }
 
     // Reset abandoned in_progress tasks back to pending
     const Task = require("./models/Task");
