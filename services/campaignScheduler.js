@@ -160,19 +160,6 @@ async function checkStaleSenders() {
     logger.info(`[scheduler] Marked ${stale.modifiedCount} stale sender(s) offline`);
   }
 
-  // Mark zombie senders offline: they heartbeat to stay "online" but have no
-  // live websocket connection, so they can never pick up or execute tasks.
-  const connectedIds = getConnectedSenderIds();
-  const onlineSenders = await SenderAccount.find({ status: "online" }).lean();
-  for (const s of onlineSenders) {
-    if (!connectedIds.has(s._id.toString())) {
-      await SenderAccount.findByIdAndUpdate(s._id, {
-        $set: { status: "offline", socket_id: null },
-      });
-      logger.info(`[scheduler] Marked zombie sender ${s.ig_username || s._id} offline — no live socket`);
-    }
-  }
-
   // Auto-complete warmup for accounts past day 14
   const msPerDay = 86400000;
   const warmupCutoff = new Date(Date.now() - 14 * msPerDay);
@@ -337,9 +324,13 @@ async function processTick() {
       }).lean();
       const outboundById = Object.fromEntries(outboundAccounts.map((a) => [a._id.toString(), a]));
 
-      // Count only online senders for delay calculation — avoids
-      // cramming messages when some senders are offline
-      const onlineSenders = allSenders.filter((s) => s.status === "online");
+      // Only consider senders that are online AND have a live websocket
+      // connection. Senders that only HTTP-heartbeat but never connect via
+      // socket are zombies — they cannot pick up or execute tasks.
+      const connectedSenderIds = getConnectedSenderIds();
+      const onlineSenders = allSenders.filter(
+        (s) => s.status === "online" && connectedSenderIds.has(s._id.toString()),
+      );
       if (onlineSenders.length === 0) {
         // Track how long there have been no online senders
         if (!campaign.no_senders_since) {
@@ -410,7 +401,7 @@ async function processTick() {
       while (attempts < allSenders.length) {
         const candidate = allSenders[senderIndex % allSenders.length];
 
-        if (candidate.status === "online") {
+        if (candidate.status === "online" && connectedSenderIds.has(candidate._id.toString())) {
           // In test mode, skip warmup/daily limit checks
           if (isTestMode) {
             // Only check no pending task exists
