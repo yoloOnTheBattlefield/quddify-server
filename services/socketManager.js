@@ -231,4 +231,13 @@ function getIO() {
   return io;
 }
 
-module.exports = { init, getIO, emitToAccount, emitToSender };
+// Returns the Set of sender IDs that have a live socket connection right now.
+function getConnectedSenderIds() {
+  const ids = new Set();
+  for (const [, info] of senderSockets) {
+    ids.add(info.senderId);
+  }
+  return ids;
+}
+
+module.exports = { init, getIO, emitToAccount, emitToSender, getConnectedSenderIds };

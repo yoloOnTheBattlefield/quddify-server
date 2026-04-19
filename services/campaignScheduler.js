@@ -7,7 +7,7 @@ const OutboundAccount = require("../models/OutboundAccount");
 const Account = require("../models/Account");
 const WarmupLog = require("../models/WarmupLog");
 const Task = require("../models/Task");
-const { emitToAccount, emitToSender } = require("./socketManager");
+const { emitToAccount, emitToSender, getConnectedSenderIds } = require("./socketManager");
 const { notifyCampaignCompleted } = require("./telegramNotifier");
 
 let tickInterval = null;
@@ -158,6 +158,19 @@ async function checkStaleSenders() {
   );
   if (stale.modifiedCount > 0) {
     logger.info(`[scheduler] Marked ${stale.modifiedCount} stale sender(s) offline`);
+  }
+
+  // Mark zombie senders offline: they heartbeat to stay "online" but have no
+  // live websocket connection, so they can never pick up or execute tasks.
+  const connectedIds = getConnectedSenderIds();
+  const onlineSenders = await SenderAccount.find({ status: "online" }).lean();
+  for (const s of onlineSenders) {
+    if (!connectedIds.has(s._id.toString())) {
+      await SenderAccount.findByIdAndUpdate(s._id, {
+        $set: { status: "offline", socket_id: null },
+      });
+      logger.info(`[scheduler] Marked zombie sender ${s.ig_username || s._id} offline — no live socket`);
+    }
   }
 
   // Auto-complete warmup for accounts past day 14
