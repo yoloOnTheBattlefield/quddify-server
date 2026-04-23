@@ -324,13 +324,10 @@ async function processTick() {
       }).lean();
       const outboundById = Object.fromEntries(outboundAccounts.map((a) => [a._id.toString(), a]));
 
-      // Only consider senders that are online AND have a live websocket
-      // connection. Senders that only HTTP-heartbeat but never connect via
-      // socket are zombies — they cannot pick up or execute tasks.
+      // Only consider senders that are online. If the socket push path is
+      // unavailable, the extension can still poll for tasks via heartbeat.
       const connectedSenderIds = getConnectedSenderIds();
-      const onlineSenders = allSenders.filter(
-        (s) => s.status === "online" && connectedSenderIds.has(s._id.toString()),
-      );
+      const onlineSenders = allSenders.filter((s) => s.status === "online");
       if (onlineSenders.length === 0) {
         // Track how long there have been no online senders
         if (!campaign.no_senders_since) {
