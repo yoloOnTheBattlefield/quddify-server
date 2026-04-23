@@ -173,6 +173,7 @@ router.post("/:taskId/failed", async (req, res) => {
 
     // Update CampaignLead + Campaign stats if this is a campaign task
     // Use conditional update to avoid double-decrementing stats.queued
+    const isUserNotFound = errorType === "USER_NOT_FOUND";
     if (task.campaign_lead_id) {
       const leadUpdate = await CampaignLead.findOneAndUpdate(
         { _id: task.campaign_lead_id, status: "queued" },
@@ -193,6 +194,15 @@ router.post("/:taskId/failed", async (req, res) => {
             $inc: { "stats.pending": -1, "stats.failed": 1 },
           });
         }
+      }
+
+      if (isUserNotFound) {
+        await Campaign.findByIdAndUpdate(task.campaign_id, {
+          $set: { last_sent_at: null },
+        });
+        logger.info(
+          `[tasks] USER_NOT_FOUND for task ${task._id} — resetting last_sent_at so next lead can queue immediately`,
+        );
       }
     }
 
