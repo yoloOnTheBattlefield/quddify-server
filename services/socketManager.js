@@ -63,6 +63,7 @@ function init(httpServer, allowedOrigins) {
               $set: {
                 account_id: account._id,
                 ig_username: outbound.username,
+                outbound_account_id: outbound._id,
                 browser_id: browserId,
                 status: "online",
                 last_seen: new Date(),
@@ -116,15 +117,26 @@ function init(httpServer, allowedOrigins) {
 
         // If extension sent ig_username, auto-create/update sender
         if (igUsername) {
+          const senderUpdate = {
+            $set: {
+              status: "online",
+              last_seen: new Date(),
+              socket_id: socket.id,
+            },
+          };
+
+          const outbound = await OutboundAccount.findOne({
+            account_id: account._id,
+            username: igUsername,
+          }).lean();
+
+          if (outbound) {
+            senderUpdate.$set.outbound_account_id = outbound._id;
+          }
+
           const sender = await SenderAccount.findOneAndUpdate(
             { account_id: account._id, ig_username: igUsername },
-            {
-              $set: {
-                status: "online",
-                last_seen: new Date(),
-                socket_id: socket.id,
-              },
-            },
+            senderUpdate,
             { upsert: true, new: true },
           );
 
