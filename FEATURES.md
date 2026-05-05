@@ -57,6 +57,31 @@ Replaces the n8n "DM tracking sheets" workflow. Receives GHL contact webhooks, c
 | low_ticket        | low_ticket      |
 | link_sent         | link_sent_at    |
 
+## Mock Lead Generator (Admin)
+
+Admin-only endpoint that bulk-creates synthetic leads for any account, used by the dm-setting `/settings` page to seed demo/staging data. Generates a configurable funnel distribution (link_sent / booked / ghosted / follow_up / closed) with realistic timestamps, IG-style Q&A on booked leads, and optional contract values.
+
+### Files
+
+- `routes/leads.js` — `POST /leads/generate` handler
+- `routes/leads.test.js` — Unit tests including regressions for the two bugs below
+- `apps/dm-setting/src/pages/UserSettings.tsx` — Frontend form (account dropdown + funnel inputs)
+
+### API Routes
+
+| Method | Path             | Description                                   |
+| ------ | ---------------- | --------------------------------------------- |
+| POST   | /leads/generate  | Insert mock leads for `body.ghl` (admin only) |
+
+### Account targeting (important)
+
+The endpoint targets the account chosen in the dropdown via `body.ghl`, NOT the authenticated admin's own account. The handler resolves `body.ghl` → `Account._id` and writes leads with `account_id: account._id.toString()`.
+
+### Past bugs (regression tests cover both)
+
+1. **Wrong account used.** The handler originally read `req.account.ghl` and ignored `body.ghl` entirely, so leads landed under the admin's own account regardless of which account the dropdown selected.
+2. **GHL string stored as account_id.** Leads were inserted with `account_id: ghl` (the raw GHL location string like `pkXiD3IjJQZccab8ABZ6`). The dashboard queries by `Account._id.toString()` (post-2026-04-02 migration), so they were invisible. This mirrors the GHL webhook fix from 2026-04-02.
+
 ## Advisory Module
 
 Track advisory/coaching clients, their sessions, and monthly business metrics.

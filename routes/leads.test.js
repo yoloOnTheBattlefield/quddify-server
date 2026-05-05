@@ -5,12 +5,14 @@ const request = require("supertest");
 
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
+const Account = require("../models/Account");
 const leadsRouter = require("./leads");
 
 let mongoServer;
 let app;
 const accountId = new mongoose.Types.ObjectId();
 const ghl = "ghl_test_location";
+let currentRole = 1;
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
@@ -20,7 +22,7 @@ beforeAll(async () => {
   app.use(express.json());
   app.use((req, _res, next) => {
     req.account = { _id: accountId, ghl };
-    req.user = { role: 1, userId: new mongoose.Types.ObjectId() };
+    req.user = { role: currentRole, userId: new mongoose.Types.ObjectId() };
     next();
   });
   app.use("/api/leads", leadsRouter);
@@ -34,6 +36,8 @@ afterAll(async () => {
 afterEach(async () => {
   await Lead.deleteMany({});
   await OutboundLead.deleteMany({});
+  await Account.deleteMany({});
+  currentRole = 1;
 });
 
 function createLead(overrides = {}) {
@@ -441,6 +445,99 @@ describe("GET /api/leads/:id — outbound lead population", () => {
     expect(res.status).toBe(200);
     expect(res.body.outbound_lead_id).toBe(deletedId.toString());
     expect(res.body.outbound_lead).toBeUndefined();
+  });
+});
+
+describe("POST /api/leads/generate", () => {
+  it("returns 403 for non-admin", async () => {
+    currentRole = 1;
+    const res = await request(app)
+      .post("/api/leads/generate")
+      .send({ ghl: "anything", total: 5 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns 404 when no Account matches body.ghl", async () => {
+    currentRole = 0;
+    const res = await request(app)
+      .post("/api/leads/generate")
+      .send({ ghl: "ghl_does_not_exist", total: 5 });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/no account found/i);
+  });
+
+  it("stores account_id as the target account's ObjectId, not the raw GHL string", async () => {
+    // Regression: the route originally inserted leads with account_id = ghl
+    // (the raw GHL location string from the dropdown), so they never matched
+    // the dashboard's filter, which queries by Account._id.toString().
+    currentRole = 0;
+    const targetAccount = await Account.create({ ghl: "pkXiD3IjJQZccab8ABZ6" });
+
+    const res = await request(app)
+      .post("/api/leads/generate")
+      .send({ ghl: "pkXiD3IjJQZccab8ABZ6", total: 3 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(3);
+
+    const leads = await Lead.find({});
+    expect(leads).toHaveLength(3);
+    for (const lead of leads) {
+      expect(lead.account_id).toBe(targetAccount._id.toString());
+      expect(lead.account_id).not.toBe("pkXiD3IjJQZccab8ABZ6");
+    }
+  });
+
+  it("targets the body.ghl account, not the authenticated admin's own account", async () => {
+    // Regression: the route originally used req.account.ghl (the admin's own
+    // account) and ignored body.ghl, so an admin generating leads for a
+    // client account ended up populating their own account instead.
+    currentRole = 0;
+    const otherAccount = await Account.create({ ghl: "client_ghl_xyz" });
+
+    const res = await request(app)
+      .post("/api/leads/generate")
+      .send({ ghl: "client_ghl_xyz", total: 2 });
+
+    expect(res.status).toBe(200);
+
+    const leads = await Lead.find({});
+    expect(leads).toHaveLength(2);
+    for (const lead of leads) {
+      expect(lead.account_id).toBe(otherAccount._id.toString());
+      expect(lead.account_id).not.toBe(accountId.toString());
+    }
+  });
+
+  it("rejects when booked exceeds link_sent", async () => {
+    currentRole = 0;
+    await Account.create({ ghl });
+
+    const res = await request(app)
+      .post("/api/leads/generate")
+      .send({ ghl, total: 10, link_sent: 2, booked: 5 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/booked cannot exceed link_sent/i);
+  });
+
+  it("populates funnel timestamps according to the requested distribution", async () => {
+    currentRole = 0;
+    await Account.create({ ghl });
+
+    const res = await request(app)
+      .post("/api/leads/generate")
+      .send({ ghl, total: 10, link_sent: 5, booked: 2, ghosted: 3 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(10);
+
+    const leads = await Lead.find({});
+    expect(leads.filter((l) => l.link_sent_at)).toHaveLength(5);
+    expect(leads.filter((l) => l.booked_at)).toHaveLength(2);
+    expect(leads.filter((l) => l.ghosted_at)).toHaveLength(3);
   });
 });
 
