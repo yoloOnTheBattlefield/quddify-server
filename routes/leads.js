@@ -421,6 +421,7 @@ router.post("/generate", async (req, res) => {
     if (!ghl) {
       return res.status(400).json({ error: "Account has no GHL location ID" });
     }
+    const accountId = req.account._id.toString();
 
     // Randomize mode — generate realistic funnel distributions
     if (randomize) {
@@ -523,7 +524,7 @@ router.post("/generate", async (req, res) => {
         first_name: firstName,
         last_name: lastName,
         contact_id: randId(),
-        account_id: ghl,
+        account_id: accountId,
         date_created: createdAt.toISOString(),
         email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${Math.floor(Math.random() * 99)}@email.com`,
         link_sent_at: null,
