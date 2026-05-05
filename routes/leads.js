@@ -395,14 +395,19 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// POST /leads/generate - Generate mock leads
+// POST /leads/generate - Generate mock leads (admin only)
 router.post("/generate", async (req, res) => {
   try {
+    if (req.user?.role !== 0) {
+      return res.status(403).json({ error: "Admin only" });
+    }
+
     const {
       total = 100,
       days_back = 30,
       mode = "raw",
       randomize = false,
+      ghl: bodyGhl,
     } = req.body;
 
     let {
@@ -417,11 +422,16 @@ router.post("/generate", async (req, res) => {
       score_max = null,
     } = req.body;
 
-    const ghl = req.account.ghl;
+    // Admin can target any account via body.ghl; fallback to their own account
+    const ghl = bodyGhl || req.account.ghl;
     if (!ghl) {
-      return res.status(400).json({ error: "Account has no GHL location ID" });
+      return res.status(400).json({ error: "Missing ghl location ID" });
     }
-    const accountId = req.account._id.toString();
+    const targetAccount = await Account.findOne({ ghl }).lean();
+    if (!targetAccount) {
+      return res.status(404).json({ error: `No account found for ghl=${ghl}` });
+    }
+    const accountId = targetAccount._id.toString();
 
     // Randomize mode — generate realistic funnel distributions
     if (randomize) {
