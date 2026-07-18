@@ -178,9 +178,29 @@ router.post("/", validate(leadCreateSchema), async (req, res) => {
     // Default date_created to now — the contacts list filters by date range
     // and a null date_created makes the lead invisible. Better to record
     // creation time on the server than to depend on every client sending it.
+    // Dedupe: don't add the same person twice for this account. Match on the
+    // social handle (ig_username holds the IG handle or LinkedIn slug) scoped
+    // to platform, case-insensitive.
+    const accountId = req.account._id.toString();
+    const rawHandle = (req.body.ig_username || "").replace(/^@+/, "").trim();
+    if (rawHandle) {
+      const existing = await Lead.findOne({
+        account_id: accountId,
+        platform: req.body.platform || "instagram",
+        ig_username: { $regex: `^@?${escapeRegex(rawHandle)}$`, $options: "i" },
+      }).lean();
+      if (existing) {
+        return res.status(409).json({
+          error: "This person is already in your pipeline.",
+          duplicate: true,
+          lead: existing,
+        });
+      }
+    }
+
     const lead = await Lead.create({
       ...req.body,
-      account_id: req.account._id.toString(),
+      account_id: accountId,
       date_created: req.body.date_created || new Date().toISOString(),
     });
 

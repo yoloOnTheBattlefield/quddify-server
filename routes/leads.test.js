@@ -193,6 +193,29 @@ describe("POST /api/leads", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects a duplicate handle for the same account+platform (409)", async () => {
+    const first = await request(app)
+      .post("/api/leads")
+      .send({ first_name: "Jane", platform: "linkedin", ig_username: "jane-doe" });
+    expect(first.status).toBe(201);
+
+    const dupe = await request(app)
+      .post("/api/leads")
+      .send({ first_name: "Jane again", platform: "linkedin", ig_username: "@Jane-Doe" });
+    expect(dupe.status).toBe(409);
+    expect(dupe.body.duplicate).toBe(true);
+    expect(dupe.body.lead.ig_username).toBe("jane-doe");
+
+    const count = await Lead.countDocuments({ account_id: accountId, ig_username: "jane-doe" });
+    expect(count).toBe(1);
+  });
+
+  it("allows the same handle on a different platform", async () => {
+    await request(app).post("/api/leads").send({ first_name: "X", platform: "instagram", ig_username: "same" });
+    const res = await request(app).post("/api/leads").send({ first_name: "Y", platform: "linkedin", ig_username: "same" });
+    expect(res.status).toBe(201);
+  });
+
   it("ignores account_id from the request body and uses the session account", async () => {
     // Regression: AllContacts.tsx used to send `account_id: user.ghl`,
     // which (a) was a tenant-isolation hole and (b) saved the new lead
