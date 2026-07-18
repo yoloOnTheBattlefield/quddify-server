@@ -5,6 +5,7 @@ const OutboundLeadSchema = new mongoose.Schema(
     account_id: { type: mongoose.Schema.Types.ObjectId, ref: "Account", required: true },
     followingKey: { type: String, required: true },
     username: { type: String },
+    platform: { type: String, enum: ["instagram", "linkedin"], default: "instagram" },
     fullName: { type: String, default: null },
     profileLink: { type: String, default: null },
     isVerified: { type: Boolean, default: null },

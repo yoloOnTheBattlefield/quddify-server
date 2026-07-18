@@ -21,9 +21,25 @@ const bulkDeleteSchema = z.object({
   params: z.object({}).strip(),
 });
 
+const createLeadSchema = z.object({
+  body: z.object({
+    username: z.string().trim().min(1, "username is required"),
+    platform: z.enum(["instagram", "linkedin"]).optional(),
+    fullName: z.string().optional().nullable(),
+    profileLink: z.string().optional().nullable(),
+    followersCount: z.number().optional().nullable(),
+    bio: z.string().optional().nullable(),
+    email: z.string().optional().nullable(),
+    source: z.string().optional(),
+  }).strip(),
+  query: z.object({}).strip(),
+  params: z.object({}).strip(),
+});
+
 const patchLeadSchema = z.object({
   body: z.object({
     username: z.string().optional(),
+    platform: z.enum(["instagram", "linkedin"]).optional(),
     fullName: z.string().optional().nullable(),
     bio: z.string().optional().nullable(),
     email: z.string().optional().nullable(),
@@ -54,4 +70,4 @@ const patchLeadSchema = z.object({
   }),
 });
 
-module.exports = { bulkDeleteSchema, patchLeadSchema };
+module.exports = { bulkDeleteSchema, createLeadSchema, patchLeadSchema };

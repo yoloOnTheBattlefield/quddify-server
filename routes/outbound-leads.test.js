@@ -323,6 +323,61 @@ describe("DELETE /api/outbound-leads/:id", () => {
   });
 });
 
+describe("POST /api/outbound-leads (manual create)", () => {
+  it("creates a LinkedIn lead with the slug stored in username", async () => {
+    const res = await request(app)
+      .post("/api/outbound-leads")
+      .send({ username: "john-doe-123", platform: "linkedin", fullName: "John Doe" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.platform).toBe("linkedin");
+    expect(res.body.username).toBe("john-doe-123");
+    expect(res.body.source).toBe("manual");
+    expect(res.body.followingKey).toBe("john-doe-123::manual");
+
+    const lead = await OutboundLead.findById(res.body._id);
+    expect(lead.platform).toBe("linkedin");
+    expect(lead.metadata.source).toBe("manual");
+  });
+
+  it("defaults platform to instagram and strips a leading @", async () => {
+    const res = await request(app)
+      .post("/api/outbound-leads")
+      .send({ username: "@somehandle" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.platform).toBe("instagram");
+    expect(res.body.username).toBe("somehandle");
+  });
+
+  it("returns 409 for a duplicate username in the same account", async () => {
+    await createLead({ username: "dupe", followingKey: "dupe::manual", platform: "linkedin" });
+
+    const res = await request(app)
+      .post("/api/outbound-leads")
+      .send({ username: "dupe", platform: "linkedin" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already exists/i);
+  });
+
+  it("returns 400 when username is missing", async () => {
+    const res = await request(app)
+      .post("/api/outbound-leads")
+      .send({ platform: "linkedin" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 for an invalid platform", async () => {
+    const res = await request(app)
+      .post("/api/outbound-leads")
+      .send({ username: "x", platform: "twitter" });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("POST /api/outbound-leads/bulk-delete", () => {
   it("deletes by ids", async () => {
     const lead1 = await createLead({ username: "del1", followingKey: "del1" });

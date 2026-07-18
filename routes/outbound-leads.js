@@ -12,7 +12,7 @@ const { parseXlsx } = require("../services/uploadService");
 const { toBoolean } = require("../utils/normalize");
 const { applyColumnMapping, DEFAULT_COLUMN_MAPPING } = require("../utils/columnMapping");
 const validate = require("../middleware/validate");
-const { bulkDeleteSchema, patchLeadSchema } = require("../schemas/outbound-leads");
+const { bulkDeleteSchema, createLeadSchema, patchLeadSchema } = require("../schemas/outbound-leads");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -227,6 +227,47 @@ router.get("/", async (req, res) => {
       totalPages: Math.ceil(total / limitNum),
     },
   });
+});
+
+// POST /outbound-leads — manually create a single lead (IG or LinkedIn)
+router.post("/", validate(createLeadSchema), async (req, res) => {
+  try {
+    const accountId = req.account._id;
+    const username = req.body.username.replace(/^@+/, "").trim();
+    if (!username) {
+      return res.status(400).json({ error: "username is required" });
+    }
+
+    const platform = req.body.platform || "instagram";
+    const source = req.body.source || "manual";
+
+    const existing = await OutboundLead.findOne({ username, account_id: accountId }).lean();
+    if (existing) {
+      return res.status(409).json({ error: "Lead already exists", lead: existing });
+    }
+
+    const lead = await OutboundLead.create({
+      account_id: accountId,
+      followingKey: `${username}::manual`,
+      username,
+      platform,
+      fullName: req.body.fullName || null,
+      profileLink: req.body.profileLink || null,
+      followersCount: req.body.followersCount ?? null,
+      bio: req.body.bio || null,
+      email: req.body.email || null,
+      source,
+      metadata: { source: "manual", syncedAt: new Date() },
+    });
+
+    res.status(201).json(lead);
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ error: "Lead already exists" });
+    }
+    logger.error("Create lead error:", err);
+    res.status(500).json({ error: "Failed to create lead" });
+  }
 });
 
 // GET /outbound-leads/sources — distinct source values
