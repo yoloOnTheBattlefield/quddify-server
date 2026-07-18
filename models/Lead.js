@@ -15,7 +15,11 @@ const LeadSchema = new mongoose.Schema(
 
     // ghl tags
     date_created: { type: String, default: null }, // when the lead entered the system
+    messaged_at: { type: Date, default: null }, // setter sent the first message
+    replied_at: { type: Date, default: null }, // lead replied
     ghosted_at: { type: Date, default: null },
+    disqualified_at: { type: Date, default: null }, // not a fit
+    disqualified_reason: { type: String, default: null },
     link_sent_at: { type: Date, default: null }, // link was sent
     link_clicked_at: { type: Date, default: null }, // lead clicked the link and visited the site
     booked_at: { type: Date, default: null }, // booking has been made

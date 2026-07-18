@@ -234,6 +234,38 @@ describe("POST /api/leads", () => {
   });
 });
 
+describe("GET /api/leads — stage filters (messaged/replied/disqualified)", () => {
+  it("buckets a messaged lead and excludes it from new", async () => {
+    await createLead({ first_name: "Msg", messaged_at: new Date() });
+    await createLead({ first_name: "Fresh" });
+
+    const msg = await request(app).get("/api/leads?status=messaged");
+    expect(msg.body.leads.map((l) => l.first_name)).toEqual(["Msg"]);
+
+    const fresh = await request(app).get("/api/leads?status=new");
+    expect(fresh.body.leads.map((l) => l.first_name)).toEqual(["Fresh"]);
+  });
+
+  it("buckets a replied lead (messaged not required)", async () => {
+    await createLead({ first_name: "Rep", messaged_at: new Date(), replied_at: new Date() });
+    const res = await request(app).get("/api/leads?status=replied");
+    expect(res.body.leads.map((l) => l.first_name)).toEqual(["Rep"]);
+    // Not in messaged (replied is later)
+    const m = await request(app).get("/api/leads?status=messaged");
+    expect(m.body.leads.map((l) => l.first_name)).not.toContain("Rep");
+  });
+
+  it("disqualified outranks funnel stages and hides from active buckets", async () => {
+    await createLead({ first_name: "DQ", link_sent_at: new Date(), disqualified_at: new Date(), disqualified_reason: "not a fit" });
+
+    const dq = await request(app).get("/api/leads?status=disqualified");
+    expect(dq.body.leads.map((l) => l.first_name)).toEqual(["DQ"]);
+
+    const ls = await request(app).get("/api/leads?status=link_sent");
+    expect(ls.body.leads.map((l) => l.first_name)).not.toContain("DQ");
+  });
+});
+
 describe("GET /api/leads/:id", () => {
   it("returns a single lead", async () => {
     const lead = await createLead({ first_name: "Single" });

@@ -42,15 +42,20 @@ router.get("/", async (req, res) => {
     if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
     if (status) {
       const statuses = Array.isArray(status) ? status : status.split(",");
-      // Build mutually exclusive stage conditions matching the frontend pipeline priority:
-      // ghosted > closed > booked > follow_up > link_sent > new
+      // Build mutually exclusive stage conditions. Funnel order (early->late):
+      // new > messaged > replied > link_sent > follow_up > booked > closed.
+      // Off-ramps rank highest: disqualified > ghosted > (funnel).
+      // Each stage = its date set AND every later funnel date + both off-ramps null.
       const stageConditions = {
-        new: { link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null },
-        link_sent: { link_sent_at: { $ne: null }, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null },
-        follow_up: { follow_up_at: { $ne: null }, booked_at: null, closed_at: null, ghosted_at: null },
-        booked: { booked_at: { $ne: null }, closed_at: null, ghosted_at: null },
-        closed: { closed_at: { $ne: null }, ghosted_at: null },
-        ghosted: { ghosted_at: { $ne: null } },
+        new: { messaged_at: null, replied_at: null, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+        messaged: { messaged_at: { $ne: null }, replied_at: null, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+        replied: { replied_at: { $ne: null }, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+        link_sent: { link_sent_at: { $ne: null }, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+        follow_up: { follow_up_at: { $ne: null }, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+        booked: { booked_at: { $ne: null }, closed_at: null, ghosted_at: null, disqualified_at: null },
+        closed: { closed_at: { $ne: null }, ghosted_at: null, disqualified_at: null },
+        ghosted: { ghosted_at: { $ne: null }, disqualified_at: null },
+        disqualified: { disqualified_at: { $ne: null } },
       };
       const statusConditions = statuses
         .map((s) => stageConditions[s])

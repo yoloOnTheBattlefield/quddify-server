@@ -16,11 +16,15 @@ const leadCreateSchema = z.object({
     score: z.number().min(1).max(10).optional().nullable(),
     contract_value: z.number().min(0).optional().nullable(),
     // Stage dates — the add-lead modal sets these when the user picks an
-    // initial status (link_sent / booked / closed).
+    // initial status (messaged / link_sent / booked / closed / ...).
+    messaged_at: z.string().datetime().optional().nullable(),
+    replied_at: z.string().datetime().optional().nullable(),
     link_sent_at: z.string().datetime().optional().nullable(),
     follow_up_at: z.string().datetime().optional().nullable(),
     booked_at: z.string().datetime().optional().nullable(),
     ghosted_at: z.string().datetime().optional().nullable(),
+    disqualified_at: z.string().datetime().optional().nullable(),
+    disqualified_reason: z.string().optional().nullable(),
     closed_at: z.string().datetime().optional().nullable(),
   }).strip(),
   query: z.object({}).strip(),
@@ -41,10 +45,14 @@ const leadUpdateSchema = z.object({
     outbound_lead_id: z.string().optional().nullable(),
     ig_thread_id: z.string().optional().nullable(),
     // Stage dates
+    messaged_at: z.string().datetime().optional().nullable(),
+    replied_at: z.string().datetime().optional().nullable(),
     link_sent_at: z.string().datetime().optional().nullable(),
     follow_up_at: z.string().datetime().optional().nullable(),
     booked_at: z.string().datetime().optional().nullable(),
     ghosted_at: z.string().datetime().optional().nullable(),
+    disqualified_at: z.string().datetime().optional().nullable(),
+    disqualified_reason: z.string().optional().nullable(),
     closed_at: z.string().datetime().optional().nullable(),
   }).strip(),
   query: z.object({}).strip(),
