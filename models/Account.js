@@ -16,6 +16,7 @@ const AccountSchema = new mongoose.Schema(
     openai_token: { type: String, default: null },
     claude_token: { type: String, default: null },
     gemini_token: { type: String, default: null },
+    default_platform: { type: String, enum: ["instagram", "linkedin"], default: "instagram" },
     has_outbound: { type: Boolean, default: false },
     has_research: { type: Boolean, default: false },
     disabled: { type: Boolean, default: false },

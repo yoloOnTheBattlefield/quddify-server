@@ -8,6 +8,7 @@ const leadCreateSchema = z.object({
     // from the authenticated session to prevent cross-tenant writes.
     contact_id: z.string().optional().nullable(),
     ig_username: z.string().optional().nullable(),
+    platform: z.enum(["instagram", "linkedin"]).optional(),
     email: z.string().email().optional().nullable(),
     source: z.string().optional().nullable(),
     summary: z.string().optional().nullable(),
@@ -33,6 +34,7 @@ const leadUpdateSchema = z.object({
     email: z.string().optional().nullable(),
     emails: z.array(z.string()).optional(),
     ig_username: z.string().optional().nullable(),
+    platform: z.enum(["instagram", "linkedin"]).optional(),
     source: z.string().optional().nullable(),
     score: z.number().min(1).max(10).optional().nullable(),
     contract_value: z.number().min(0).optional().nullable(),

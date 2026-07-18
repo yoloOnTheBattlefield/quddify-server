@@ -166,6 +166,33 @@ describe("POST /api/leads", () => {
     expect(names).toContain("Modal");
   });
 
+  it("creates a LinkedIn lead with platform and handle", async () => {
+    const res = await request(app)
+      .post("/api/leads")
+      .send({ first_name: "Jane", platform: "linkedin", ig_username: "jane-doe-123" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.platform).toBe("linkedin");
+    expect(res.body.ig_username).toBe("jane-doe-123");
+  });
+
+  it("defaults platform to instagram when omitted", async () => {
+    const res = await request(app)
+      .post("/api/leads")
+      .send({ first_name: "Iggy", ig_username: "iggy" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.platform).toBe("instagram");
+  });
+
+  it("rejects an invalid platform", async () => {
+    const res = await request(app)
+      .post("/api/leads")
+      .send({ first_name: "Bad", platform: "twitter" });
+
+    expect(res.status).toBe(400);
+  });
+
   it("ignores account_id from the request body and uses the session account", async () => {
     // Regression: AllContacts.tsx used to send `account_id: user.ghl`,
     // which (a) was a tenant-isolation hole and (b) saved the new lead

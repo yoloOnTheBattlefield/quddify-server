@@ -34,6 +34,7 @@ function buildLoginResponse(user, account, accountUser) {
     },
     ghl: account.ghl,
     calendly: account.calendly,
+    default_platform: account.default_platform || "instagram",
     ghl_lead_booked_webhook: account.ghl_lead_booked_webhook,
     openai_token: account.openai_token,
     api_key: account.api_key,
@@ -675,7 +676,7 @@ router.delete("/ig-sessions/:username", async (req, res) => {
 
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, has_outbound, has_research, role, ghl, calendly, openai_token, claude_token, gemini_token, apify_token, ig_session, ig_username, ig_proxy, lead_visibility, account_id } = req.body;
+    const { first_name, last_name, email, has_outbound, has_research, role, ghl, calendly, openai_token, claude_token, gemini_token, apify_token, ig_session, ig_username, ig_proxy, lead_visibility, account_id, default_platform } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
@@ -690,6 +691,9 @@ router.patch("/:id", async (req, res) => {
     if (gemini_token !== undefined) accountUpdates.gemini_token = gemini_token ? encrypt(gemini_token) : gemini_token;
     if (apify_token !== undefined) accountUpdates.apify_token = apify_token ? encrypt(apify_token) : apify_token;
     if (ig_proxy !== undefined) accountUpdates.ig_proxy = ig_proxy || null;
+    if (default_platform !== undefined && ["instagram", "linkedin"].includes(default_platform)) {
+      accountUpdates.default_platform = default_platform;
+    }
     if (lead_visibility !== undefined && lead_visibility && typeof lead_visibility === "object") {
       // Only account admins/owners can change lead visibility
       if (req.membership && (req.membership.role === 0 || req.membership.role === 1)) {
