@@ -220,6 +220,13 @@ router.get("/", async (req, res) => {
 
     // 1. FUNNEL METRICS
     const totalContacts = leads.length;
+    // Inbound "messaged" — the setter sent the first message (LinkedIn flow).
+    const messagedCount = leads.filter((l) => l.messaged_at).length;
+    const messagedRate =
+      totalContacts > 0 ? round2((messagedCount / totalContacts) * 100) : 0;
+    const repliedCount = leads.filter((l) => l.replied_at).length;
+    const repliedRate =
+      messagedCount > 0 ? round2((repliedCount / messagedCount) * 100) : 0;
     const linkSentCount = leads.filter((l) => l.link_sent_at).length;
     const linkSentRate =
       totalContacts > 0 ? round2((linkSentCount / totalContacts) * 100) : 0;
@@ -258,6 +265,10 @@ router.get("/", async (req, res) => {
 
     const funnel = {
       totalContacts,
+      messagedCount,
+      messagedRate,
+      repliedCount,
+      repliedRate,
       linkSentCount,
       linkSentRate,
       linkClickedCount,
