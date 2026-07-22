@@ -114,10 +114,37 @@ describe("POST /api/ghl/webhook", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.action).toBe("updated");
-    expect(res.body.field).toBe("link_sent_at");
+    expect(res.body.fields).toContain("link_sent_at");
 
     const lead = await Lead.findOne({ contact_id: "ghl_c3" });
     expect(lead.link_sent_at).toBeTruthy();
+  });
+
+  it("sets every mapped tag, not just the last one", async () => {
+    // GHL sends the full tag list, unordered. link_sent must still be applied
+    // even when follow_up is the last element of the array.
+    await Lead.create({
+      contact_id: "ghl_c3b",
+      account_id: ghl,
+      first_name: "MultiTag",
+      date_created: "2026-03-20",
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        contact_id: "ghl_c3b",
+        location: { id: ghl },
+        tags: ["link_sent", "follow_up"],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe("updated");
+    expect(res.body.fields).toEqual(expect.arrayContaining(["link_sent_at", "follow_up_at"]));
+
+    const lead = await Lead.findOne({ contact_id: "ghl_c3b" });
+    expect(lead.link_sent_at).toBeTruthy();
+    expect(lead.follow_up_at).toBeTruthy();
   });
 
   it("does not overwrite existing field", async () => {
@@ -157,7 +184,7 @@ describe("POST /api/ghl/webhook", () => {
       });
 
     expect(res.body.action).toBe("updated");
-    expect(res.body.field).toBe("booked_at");
+    expect(res.body.fields).toContain("booked_at");
   });
 
   it("ignores untracked tags", async () => {

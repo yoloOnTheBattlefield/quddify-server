@@ -215,41 +215,48 @@ router.post("/webhook", async (req, res) => {
       tagsArr = Object.values(tags).map((t) => String(t).trim()).filter(Boolean);
     }
 
-    const lastRawTag = tagsArr.length ? tagsArr[tagsArr.length - 1] : null;
-    if (!lastRawTag) {
+    if (!tagsArr.length) {
       return res.json({ success: true, action: "no_tags", lead_id: existing._id });
     }
 
-    const lastTag = normalizeTag(lastRawTag);
-    const fieldToUpdate = TAG_MAP[lastTag];
+    // GHL sends the full current tag list each webhook, and its order is NOT
+    // "most-recently-added last". The funnel is cumulative (e.g. link_sent AND
+    // follow_up can both be true), so map EVERY tag to its field — not just the
+    // last one — and set each mapped field that isn't already set.
+    const mappedFields = [
+      ...new Set(
+        tagsArr
+          .map((t) => TAG_MAP[normalizeTag(t)])
+          .filter(Boolean),
+      ),
+    ];
 
-    if (!fieldToUpdate) {
-      return res.json({ success: true, action: "tag_not_tracked", tag: lastTag, lead_id: existing._id });
-    }
-
-    // Only update if field is not already set
-    const existingVal = existing[fieldToUpdate];
-    if (existingVal) {
-      return res.json({ success: true, action: "already_set", field: fieldToUpdate, lead_id: existing._id });
+    if (!mappedFields.length) {
+      return res.json({ success: true, action: "tag_not_tracked", tags: tagsArr, lead_id: existing._id });
     }
 
     const today = new Date();
-    const updated = await Lead.findByIdAndUpdate(
-      existing._id,
-      { [fieldToUpdate]: today },
-      { new: true },
-    );
+    const setNow = {};
+    for (const field of mappedFields) {
+      if (!existing[field]) setNow[field] = today;
+    }
 
-    logger.info({ leadId: existing._id, field: fieldToUpdate, tag: lastTag }, "GHL webhook: lead updated");
+    if (!Object.keys(setNow).length) {
+      return res.json({ success: true, action: "already_set", fields: mappedFields, lead_id: existing._id });
+    }
+
+    const updated = await Lead.findByIdAndUpdate(existing._id, setNow, { new: true });
+
+    logger.info({ leadId: existing._id, fields: Object.keys(setNow) }, "GHL webhook: lead updated");
 
     // Sync to outbound lead if linked
     if (updated.outbound_lead_id) {
       const outboundUpdate = {};
-      if (fieldToUpdate === "link_sent_at") {
+      if (setNow.link_sent_at) {
         outboundUpdate.link_sent = true;
         outboundUpdate.link_sent_at = today;
       }
-      if (fieldToUpdate === "booked_at") {
+      if (setNow.booked_at) {
         outboundUpdate.booked = true;
         outboundUpdate.booked_at = today;
       }
@@ -259,7 +266,7 @@ router.post("/webhook", async (req, res) => {
     }
 
     // Telegram notification on significant updates (booked, link_sent)
-    if (account && (fieldToUpdate === "booked_at" || fieldToUpdate === "link_sent_at")) {
+    if (account && (setNow.booked_at || setNow.link_sent_at)) {
       const outbound = updated.outbound_lead_id
         ? await OutboundLead.findById(updated.outbound_lead_id).lean()
         : null;
@@ -268,7 +275,7 @@ router.post("/webhook", async (req, res) => {
       );
     }
 
-    return res.json({ success: true, action: "updated", field: fieldToUpdate, lead_id: existing._id });
+    return res.json({ success: true, action: "updated", fields: Object.keys(setNow), lead_id: existing._id });
   } catch (error) {
     logger.error({ err: error }, "GHL webhook error");
     res.status(500).json({ error: "Internal server error" });
