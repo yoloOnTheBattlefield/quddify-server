@@ -132,6 +132,54 @@ router.get("/:id", async (req, res) => {
 });
 
 // get parsed GHL conversation for a lead
+// Speaker labels we recognize when parsing a GHL chat_memory transcript.
+// Matched case-insensitively against the first word of a "Label: text" line.
+const INBOUND_SPEAKERS = new Set(["user", "contact", "lead", "customer", "prospect", "client", "them", "visitor", "guest"]);
+const OUTBOUND_SPEAKERS = new Set(["bot", "assistant", "ai", "agent", "system", "setter", "rep", "support", "me", "you"]);
+
+// Tolerant parser for GHL DM transcripts. The canonical format is
+// "User: ...\nBot: ...", but GHL / AI bots emit other labels ("Contact:",
+// "Assistant:") and multi-line messages. Recognized labels set the direction;
+// any other line is folded into the previous message (or, if it's the very
+// first line, kept as an inbound message) so no content is ever dropped.
+function parseChatMemory(raw) {
+  const messages = [];
+  const lines = String(raw)
+    .split(/(?:\\n|\r\n|\n|\r)+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const m = line.match(/^([A-Za-z][A-Za-z0-9 ._'-]{0,30}?)\s*[:>\-]\s*(.*)$/);
+    if (m) {
+      const label = m[1].toLowerCase().replace(/[._-]+/g, " ").trim();
+      const first = label.split(" ")[0];
+      let role = null;
+      if (INBOUND_SPEAKERS.has(label) || INBOUND_SPEAKERS.has(first)) role = "user";
+      else if (OUTBOUND_SPEAKERS.has(label) || OUTBOUND_SPEAKERS.has(first)) role = "bot";
+      if (role) {
+        messages.push({
+          _id: `ghl-${messages.length}`,
+          role,
+          direction: role === "user" ? "inbound" : "outbound",
+          text: m[2].trim(),
+        });
+        continue;
+      }
+    }
+    // Unrecognized label / no label — continuation of the previous message,
+    // or a standalone inbound message if it's the first line.
+    if (messages.length) {
+      const prev = messages[messages.length - 1];
+      prev.text = prev.text ? `${prev.text}\n${line}` : line;
+    } else {
+      messages.push({ _id: "ghl-0", role: "user", direction: "inbound", text: line });
+    }
+  }
+
+  return messages;
+}
+
 router.get("/:id/ghl-conversation", async (req, res) => {
   try {
     const filter = { _id: req.params.id };
@@ -142,29 +190,7 @@ router.get("/:id/ghl-conversation", async (req, res) => {
     if (!lead) return res.status(404).json({ error: "Not found" });
     if (!lead.chat_memory) return res.json({ messages: [], total: 0 });
 
-    // Parse chat_memory: format is "nUser: ...\nnBot: ..." or "\nUser: ...\nBot: ..."
-    const messages = [];
-    // Split on newline boundaries before User: or Bot: labels
-    const parts = lead.chat_memory.split(/(?:\\n|\n)+/).filter(Boolean);
-    for (const part of parts) {
-      const trimmed = part.trim();
-      if (trimmed.startsWith("User:")) {
-        messages.push({
-          _id: `ghl-${messages.length}`,
-          role: "user",
-          direction: "inbound",
-          text: trimmed.slice(5).trim(),
-        });
-      } else if (trimmed.startsWith("Bot:")) {
-        messages.push({
-          _id: `ghl-${messages.length}`,
-          role: "bot",
-          direction: "outbound",
-          text: trimmed.slice(4).trim(),
-        });
-      }
-    }
-
+    const messages = parseChatMemory(lead.chat_memory);
     return res.json({ messages, total: messages.length });
   } catch (error) {
     logger.error("Get GHL conversation error:", error);

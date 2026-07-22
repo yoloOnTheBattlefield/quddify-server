@@ -120,6 +120,50 @@ describe("POST /api/ghl/webhook", () => {
     expect(lead.link_sent_at).toBeTruthy();
   });
 
+  it("stores the conversation from the webhook payload on a new lead", async () => {
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        contact_id: "ghl_conv1",
+        location: { id: ghl },
+        customData: { conversation: "User: hi\nBot: hello there" },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe("created");
+
+    const lead = await Lead.findOne({ contact_id: "ghl_conv1" });
+    expect(lead.chat_memory).toBe("User: hi\nBot: hello there");
+    expect(lead.first_conversation_at).toBeTruthy();
+    expect(lead.conversation_count).toBe(1);
+  });
+
+  it("refreshes chat_memory on an existing lead from the status webhook", async () => {
+    await Lead.create({
+      contact_id: "ghl_conv2",
+      account_id: ghl,
+      first_name: "Conv",
+      date_created: "2026-03-20",
+      chat_memory: "User: first",
+      conversation_count: 1,
+    });
+
+    const res = await request(app)
+      .post("/api/ghl/webhook")
+      .send({
+        contact_id: "ghl_conv2",
+        location: { id: ghl },
+        tags: "link_sent",
+        chat_memory: "User: first\nBot: reply\nUser: second",
+      });
+
+    expect(res.status).toBe(200);
+    const lead = await Lead.findOne({ contact_id: "ghl_conv2" });
+    expect(lead.chat_memory).toBe("User: first\nBot: reply\nUser: second");
+    expect(lead.conversation_count).toBe(2);
+    expect(lead.link_sent_at).toBeTruthy();
+  });
+
   it("sets every mapped tag, not just the last one", async () => {
     // GHL sends the full tag list, unordered. link_sent must still be applied
     // even when follow_up is the last element of the array.

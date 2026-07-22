@@ -430,6 +430,33 @@ describe("GET /api/leads/:id/ghl-conversation", () => {
     expect(res.body.messages[3]).toMatchObject({ role: "bot", direction: "outbound", text: "Great, here is the link" });
   });
 
+  it("recognizes Contact/Assistant labels (tolerant parser)", async () => {
+    const lead = await createLead({
+      chat_memory: "Contact: hey there\nAssistant: hi, how can I help?",
+    });
+    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
+    expect(res.body.messages).toHaveLength(2);
+    expect(res.body.messages[0]).toMatchObject({ role: "user", direction: "inbound", text: "hey there" });
+    expect(res.body.messages[1]).toMatchObject({ role: "bot", direction: "outbound", text: "hi, how can I help?" });
+  });
+
+  it("folds unlabeled lines into the previous message", async () => {
+    const lead = await createLead({
+      chat_memory: "User: line one\ncontinued line two\nBot: reply",
+    });
+    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
+    expect(res.body.messages).toHaveLength(2);
+    expect(res.body.messages[0].text).toBe("line one\ncontinued line two");
+    expect(res.body.messages[1].text).toBe("reply");
+  });
+
+  it("keeps unstructured text as a single inbound message (no content dropped)", async () => {
+    const lead = await createLead({ chat_memory: "just some freeform text" });
+    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
+    expect(res.body.messages).toHaveLength(1);
+    expect(res.body.messages[0]).toMatchObject({ role: "user", text: "just some freeform text" });
+  });
+
   it("returns 404 for nonexistent lead", async () => {
     const res = await request(app).get(`/api/leads/${new mongoose.Types.ObjectId()}/ghl-conversation`);
     expect(res.status).toBe(404);

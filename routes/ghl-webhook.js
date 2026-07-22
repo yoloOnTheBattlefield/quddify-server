@@ -74,10 +74,26 @@ async function findMatchingOutboundLead(accountId, { first_name, last_name, emai
   return null;
 }
 
+/**
+ * The status webhook already carries the full DM transcript (GHL fires it on
+ * every message exchange), so pull the conversation straight off the payload —
+ * no separate conversation webhook, no GHL API call, no IG connection. Mirrors
+ * the field precedence used by POST /conversation.
+ */
+function extractConversation(body) {
+  const custom = body.customData || {};
+  return custom.conversation || body.chat_memory || body.conversation || null;
+}
+
 // POST /api/ghl/webhook — replaces the n8n "DM tracking sheets" workflow
 router.post("/webhook", async (req, res) => {
   try {
+    // TEMP: log the full incoming GHL payload to inspect the real shape
+    // (conversation field + format, tag ordering). Remove once verified.
+    logger.info({ body: req.body }, "GHL webhook: incoming payload");
+
     const { first_name, last_name, contact_id, date_created, location, tags, email } = req.body;
+    const conversation = extractConversation(req.body);
 
     if (!contact_id) {
       return res.status(400).json({ error: "Missing contact_id" });
@@ -103,6 +119,7 @@ router.post("/webhook", async (req, res) => {
       // ---- New lead: try to cross-reference with outbound leads ----
       const outboundMatch = await findMatchingOutboundLead(ghlLocationId, { first_name, last_name, email });
 
+      const nowDate = new Date();
       const lead = await Lead.create({
         first_name: first_name || null,
         last_name: last_name || null,
@@ -112,6 +129,12 @@ router.post("/webhook", async (req, res) => {
         source: "ghl",
         ...(email && { email }),
         ...(outboundMatch && { outbound_lead_id: outboundMatch._id }),
+        ...(conversation && {
+          chat_memory: conversation,
+          first_conversation_at: nowDate,
+          last_conversation_at: nowDate,
+          conversation_count: 1,
+        }),
       });
 
       if (outboundMatch) {
@@ -157,6 +180,22 @@ router.post("/webhook", async (req, res) => {
     if (existing.account_id !== accountId) {
       await Lead.findByIdAndUpdate(existing._id, { account_id: accountId });
       existing.account_id = accountId;
+    }
+
+    // ---- Refresh the DM transcript from the webhook payload (fires on every
+    // message exchange), so chat_memory stays current without a separate
+    // conversation webhook. ----
+    if (conversation && conversation !== existing.chat_memory) {
+      const convUpdate = {
+        chat_memory: conversation,
+        last_conversation_at: new Date(),
+      };
+      if (!existing.first_conversation_at) convUpdate.first_conversation_at = new Date();
+      await Lead.findByIdAndUpdate(existing._id, {
+        $set: convUpdate,
+        $inc: { conversation_count: 1 },
+      });
+      existing.chat_memory = conversation;
     }
 
     // ---- Existing lead without outbound link: try to cross-reference now ----
