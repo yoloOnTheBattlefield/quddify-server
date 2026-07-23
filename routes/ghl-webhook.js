@@ -4,7 +4,6 @@ const express = require("express");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
 const Account = require("../models/Account");
-const GhlWebhookLog = require("../models/GhlWebhookLog");
 const { notifyNewLead } = require("../services/telegramNotifier");
 const { emitToAccount } = require("../services/socketManager");
 
@@ -89,15 +88,6 @@ function extractConversation(body) {
 // POST /api/ghl/webhook — replaces the n8n "DM tracking sheets" workflow
 router.post("/webhook", async (req, res) => {
   try {
-    // TEMP: log + persist the full incoming GHL payload to inspect the real
-    // shape (conversation/bot-reply fields, tag ordering). Remove once verified.
-    logger.info({ body: req.body }, "GHL webhook: incoming payload");
-    GhlWebhookLog.create({
-      endpoint: "webhook",
-      contact_id: req.body?.contact_id || null,
-      body: req.body,
-    }).catch((err) => logger.error({ err }, "GhlWebhookLog write failed"));
-
     const { first_name, last_name, contact_id, date_created, location, tags, email } = req.body;
     const conversation = extractConversation(req.body);
 
