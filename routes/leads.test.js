@@ -771,3 +771,85 @@ describe("POST /api/leads/bulk-delete", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("POST /api/leads/lookup", () => {
+  it("returns an empty map when no handles are sent", async () => {
+    const res = await request(app).post("/api/leads/lookup").send({});
+    expect(res.status).toBe(200);
+    expect(res.body.found).toEqual({});
+  });
+
+  it("reports which handles are already in the pipeline", async () => {
+    await createLead({ first_name: "Ana", ig_username: "ana-smith", platform: "linkedin" });
+
+    const res = await request(app)
+      .post("/api/leads/lookup")
+      .send({ platform: "linkedin", handles: ["ana-smith", "not-added"] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.found["ana-smith"]).toMatchObject({ stage: "new", first_name: "Ana" });
+    expect(res.body.found["not-added"]).toBeUndefined();
+  });
+
+  it("matches handles case-insensitively and ignores a leading @", async () => {
+    await createLead({ ig_username: "@Dan-Rosenthal", platform: "linkedin" });
+
+    const res = await request(app)
+      .post("/api/leads/lookup")
+      .send({ platform: "linkedin", handles: ["dan-rosenthal"] });
+
+    expect(res.body.found["dan-rosenthal"]).toBeDefined();
+  });
+
+  it("reports the lead's current stage", async () => {
+    await createLead({
+      ig_username: "booked-guy",
+      platform: "linkedin",
+      link_sent_at: new Date().toISOString(),
+      booked_at: new Date().toISOString(),
+    });
+
+    const res = await request(app)
+      .post("/api/leads/lookup")
+      .send({ platform: "linkedin", handles: ["booked-guy"] });
+
+    expect(res.body.found["booked-guy"].stage).toBe("booked");
+  });
+
+  it("does not match a handle on a different platform", async () => {
+    await createLead({ ig_username: "same-handle", platform: "instagram" });
+
+    const res = await request(app)
+      .post("/api/leads/lookup")
+      .send({ platform: "linkedin", handles: ["same-handle"] });
+
+    expect(res.body.found).toEqual({});
+  });
+
+  it("does not leak another account's leads", async () => {
+    await createLead({
+      ig_username: "theirs",
+      platform: "linkedin",
+      account_id: new mongoose.Types.ObjectId().toString(),
+    });
+
+    const res = await request(app)
+      .post("/api/leads/lookup")
+      .send({ platform: "linkedin", handles: ["theirs"] });
+
+    expect(res.body.found).toEqual({});
+  });
+
+  it("caps the number of handles it will look up", async () => {
+    const handles = Array.from({ length: 250 }, (_, i) => `person-${i}`);
+    await createLead({ ig_username: "person-240", platform: "linkedin" });
+
+    const res = await request(app)
+      .post("/api/leads/lookup")
+      .send({ platform: "linkedin", handles });
+
+    expect(res.status).toBe(200);
+    // person-240 is past the 200-handle cap, so it isn't looked up.
+    expect(res.body.found["person-240"]).toBeUndefined();
+  });
+});

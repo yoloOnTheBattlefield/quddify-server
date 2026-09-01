@@ -488,6 +488,68 @@ router.post("/bulk-delete", async (req, res) => {
   }
 });
 
+// Current funnel stage of a lead, latest-first (matches STAGE_CONDITIONS above).
+function leadStage(lead) {
+  if (lead.disqualified_at) return "disqualified";
+  if (lead.ghosted_at) return "ghosted";
+  if (lead.closed_at) return "closed";
+  if (lead.booked_at) return "booked";
+  if (lead.follow_up_at) return "follow_up";
+  if (lead.link_sent_at) return "link_sent";
+  if (lead.replied_at) return "replied";
+  if (lead.messaged_at) return "messaged";
+  return "new";
+}
+
+// Which of these social handles are already in this account's pipeline.
+// Body: { handles: ["slug", ...], platform: "linkedin" | "instagram" }
+// Returns: { found: { "<lowercased handle>": { id, stage, first_name, last_name } } }
+// Used by the LinkedIn capture extension to tag people it already has, so the
+// user doesn't re-add someone (and can see what stage they're at).
+const LOOKUP_HANDLE_LIMIT = 200;
+
+router.post("/lookup", async (req, res) => {
+  try {
+    const { handles, platform } = req.body || {};
+    const cleaned = [
+      ...new Set(
+        (Array.isArray(handles) ? handles : [])
+          .map((h) => String(h || "").replace(/^@+/, "").trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ].slice(0, LOOKUP_HANDLE_LIMIT);
+
+    if (cleaned.length === 0) return res.json({ found: {} });
+
+    const leads = await Lead.find({
+      account_id: req.account._id.toString(),
+      platform: platform || "instagram",
+      $or: cleaned.map((h) => ({
+        ig_username: { $regex: `^@?${escapeRegex(h)}$`, $options: "i" },
+      })),
+    })
+      .select("ig_username first_name last_name messaged_at replied_at link_sent_at follow_up_at booked_at closed_at ghosted_at disqualified_at")
+      .lean();
+
+    const found = {};
+    for (const lead of leads) {
+      const key = String(lead.ig_username || "").replace(/^@+/, "").trim().toLowerCase();
+      if (!key) continue;
+      found[key] = {
+        id: lead._id.toString(),
+        stage: leadStage(lead),
+        first_name: lead.first_name || "",
+        last_name: lead.last_name || "",
+      };
+    }
+
+    res.json({ found });
+  } catch (error) {
+    logger.error("Lead lookup error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // delete lead
 router.delete("/:id", async (req, res) => {
   try {
