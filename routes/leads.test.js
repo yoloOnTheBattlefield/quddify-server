@@ -674,3 +674,100 @@ describe("Lead conversation timestamps", () => {
     expect(res.body.conversation_count).toBe(0);
   });
 });
+
+describe("POST /api/leads/bulk-delete", () => {
+  it("deletes an explicit list of ids", async () => {
+    const a = await createLead({ first_name: "A" });
+    const b = await createLead({ first_name: "B" });
+    await createLead({ first_name: "C" });
+
+    const res = await request(app)
+      .post("/api/leads/bulk-delete")
+      .send({ ids: [a._id.toString(), b._id.toString()] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(2);
+    expect(await Lead.countDocuments({})).toBe(1);
+  });
+
+  it("deletes every matching lead in select-all mode, past the page size", async () => {
+    for (let i = 0; i < 45; i++) {
+      await createLead({ first_name: `Lead${i}` });
+    }
+
+    const res = await request(app)
+      .post("/api/leads/bulk-delete")
+      .send({ all: true, filters: {} });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(45);
+    expect(await Lead.countDocuments({})).toBe(0);
+  });
+
+  it("honors exclude_ids in select-all mode", async () => {
+    const keep = await createLead({ first_name: "Keep" });
+    await createLead({ first_name: "Drop1" });
+    await createLead({ first_name: "Drop2" });
+
+    const res = await request(app)
+      .post("/api/leads/bulk-delete")
+      .send({ all: true, filters: {}, exclude_ids: [keep._id.toString()] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(2);
+    const remaining = await Lead.find({}).lean();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]._id.toString()).toBe(keep._id.toString());
+  });
+
+  it("applies the list filters in select-all mode", async () => {
+    await createLead({ first_name: "Booked", booked_at: new Date().toISOString() });
+    await createLead({ first_name: "New" });
+
+    const res = await request(app)
+      .post("/api/leads/bulk-delete")
+      .send({ all: true, filters: { status: ["booked"] } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(1);
+    const remaining = await Lead.find({}).lean();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].first_name).toBe("New");
+  });
+
+  it("never deletes another account's leads in select-all mode", async () => {
+    const otherAccount = new mongoose.Types.ObjectId();
+    await createLead({ first_name: "Mine" });
+    await createLead({ first_name: "Theirs", account_id: otherAccount.toString() });
+
+    const res = await request(app)
+      .post("/api/leads/bulk-delete")
+      .send({ all: true, filters: { account_id: otherAccount.toString() } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(1);
+    const remaining = await Lead.find({}).lean();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].first_name).toBe("Theirs");
+  });
+
+  it("never deletes another account's leads by explicit id", async () => {
+    const theirs = await createLead({
+      first_name: "Theirs",
+      account_id: new mongoose.Types.ObjectId().toString(),
+    });
+
+    const res = await request(app)
+      .post("/api/leads/bulk-delete")
+      .send({ ids: [theirs._id.toString()] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(0);
+    expect(await Lead.countDocuments({})).toBe(1);
+  });
+
+  it("rejects an empty id list", async () => {
+    const res = await request(app).post("/api/leads/bulk-delete").send({ ids: [] });
+    expect(res.status).toBe(400);
+  });
+});

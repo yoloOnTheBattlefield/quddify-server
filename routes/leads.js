@@ -25,53 +25,63 @@ async function resolveAdminAccountId(rawValue) {
 
 const router = express.Router();
 
+// Build mutually exclusive stage conditions. Funnel order (early->late):
+// new > messaged > replied > link_sent > follow_up > booked > closed.
+// Off-ramps rank highest: disqualified > ghosted > (funnel).
+// Each stage = its date set AND every later funnel date + both off-ramps null.
+const STAGE_CONDITIONS = {
+  new: { messaged_at: null, replied_at: null, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+  messaged: { messaged_at: { $ne: null }, replied_at: null, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+  replied: { replied_at: { $ne: null }, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+  link_sent: { link_sent_at: { $ne: null }, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+  follow_up: { follow_up_at: { $ne: null }, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
+  booked: { booked_at: { $ne: null }, closed_at: null, ghosted_at: null, disqualified_at: null },
+  closed: { closed_at: { $ne: null }, ghosted_at: null, disqualified_at: null },
+  ghosted: { ghosted_at: { $ne: null }, disqualified_at: null },
+  disqualified: { disqualified_at: { $ne: null } },
+};
+
+// Translate the list-view filter params (query string on GET /, JSON body on
+// POST /bulk-delete) into a Mongo filter. Account scoping is always applied
+// from the session unless an admin explicitly targets another account.
+async function buildLeadFilter(req, params = {}) {
+  const { status, start_date, end_date, search, account_id, exclude_linked } = params;
+  const filter = {};
+  // Admins (role 0) can pass account_id="all" to see everything; otherwise always scoped
+  if (account_id === "all" && req.user?.role === 0) {
+    // No filter — admin viewing all accounts
+  } else if (account_id && req.user?.role === 0) {
+    const resolved = await resolveAdminAccountId(account_id);
+    filter.account_id = resolved || account_id;
+  } else {
+    filter.account_id = req.account._id.toString();
+  }
+  if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
+  if (status) {
+    const statuses = Array.isArray(status) ? status : String(status).split(",");
+    const statusConditions = statuses
+      .map((s) => STAGE_CONDITIONS[s])
+      .filter(Boolean);
+    if (statusConditions.length > 0) {
+      filter.$or = statusConditions;
+    }
+  }
+  if (start_date || end_date) {
+    filter.date_created = {};
+    if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
+    if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
+  }
+  if (exclude_linked === true || exclude_linked === "true") {
+    filter.outbound_lead_id = null;
+  }
+  return filter;
+}
+
 // get all leads (optionally filter by account_id/ghl, status, date range, search, and paginate)
 router.get("/", async (req, res) => {
   try {
-    const { status, start_date, end_date, search, page, limit, account_id, sort_by, sort_order } = req.query;
-    const filter = {};
-    // Admins (role 0) can pass account_id="all" to see everything; otherwise always scoped
-    if (account_id === "all" && req.user?.role === 0) {
-      // No filter — admin viewing all accounts
-    } else if (account_id && req.user?.role === 0) {
-      const resolved = await resolveAdminAccountId(account_id);
-      filter.account_id = resolved || account_id;
-    } else {
-      filter.account_id = req.account._id.toString();
-    }
-    if (search) filter.first_name = { $regex: escapeRegex(search), $options: "i" };
-    if (status) {
-      const statuses = Array.isArray(status) ? status : status.split(",");
-      // Build mutually exclusive stage conditions. Funnel order (early->late):
-      // new > messaged > replied > link_sent > follow_up > booked > closed.
-      // Off-ramps rank highest: disqualified > ghosted > (funnel).
-      // Each stage = its date set AND every later funnel date + both off-ramps null.
-      const stageConditions = {
-        new: { messaged_at: null, replied_at: null, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
-        messaged: { messaged_at: { $ne: null }, replied_at: null, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
-        replied: { replied_at: { $ne: null }, link_sent_at: null, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
-        link_sent: { link_sent_at: { $ne: null }, follow_up_at: null, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
-        follow_up: { follow_up_at: { $ne: null }, booked_at: null, closed_at: null, ghosted_at: null, disqualified_at: null },
-        booked: { booked_at: { $ne: null }, closed_at: null, ghosted_at: null, disqualified_at: null },
-        closed: { closed_at: { $ne: null }, ghosted_at: null, disqualified_at: null },
-        ghosted: { ghosted_at: { $ne: null }, disqualified_at: null },
-        disqualified: { disqualified_at: { $ne: null } },
-      };
-      const statusConditions = statuses
-        .map((s) => stageConditions[s])
-        .filter(Boolean);
-      if (statusConditions.length > 0) {
-        filter.$or = statusConditions;
-      }
-    }
-    if (start_date || end_date) {
-      filter.date_created = {};
-      if (start_date) filter.date_created.$gte = `${start_date}T00:00:00.000Z`;
-      if (end_date) filter.date_created.$lte = `${end_date}T23:59:59.999Z`;
-    }
-    if (req.query.exclude_linked === "true") {
-      filter.outbound_lead_id = null;
-    }
+    const { page, limit, sort_by, sort_order } = req.query;
+    const filter = await buildLeadFilter(req, req.query);
 
     // Sorting
     const allowedSortFields = ["date_created", "link_sent_at", "booked_at"];
@@ -419,6 +429,61 @@ router.post("/sync-outbound", async (req, res) => {
     res.json({ total: linked.length, updated });
   } catch (error) {
     logger.error("Sync outbound error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// bulk delete leads
+// Body is one of:
+//   { ids: ["<leadId>", ...] }                        - explicit selection
+//   { all: true, filters: {...}, exclude_ids: [...] } - every lead matching the
+//     current list filters, minus the ones the user unchecked.
+// The "all" form is what makes "select all N" delete all N instead of only the
+// page that happens to be loaded in the client.
+router.post("/bulk-delete", async (req, res) => {
+  try {
+    const { ids, all, filters, exclude_ids } = req.body || {};
+
+    let filter;
+    if (all) {
+      filter = await buildLeadFilter(req, filters || {});
+      const excluded = Array.isArray(exclude_ids)
+        ? exclude_ids.filter((id) => mongoose.isValidObjectId(id))
+        : [];
+      if (excluded.length > 0) {
+        filter._id = { $nin: excluded };
+      }
+    } else {
+      const validIds = Array.isArray(ids)
+        ? ids.filter((id) => mongoose.isValidObjectId(id))
+        : [];
+      if (validIds.length === 0) {
+        return res.status(400).json({ error: "No lead ids provided" });
+      }
+      filter = { _id: { $in: validIds } };
+      // Non-admins can only ever delete their own account's leads
+      if (req.user?.role !== 0) {
+        filter.account_id = req.account._id.toString();
+      }
+    }
+
+    // Resolve the ids first so related notes/tasks can be cleaned up too.
+    const docs = await Lead.find(filter).select("_id").lean();
+    const targetIds = docs.map((d) => d._id);
+    if (targetIds.length === 0) {
+      return res.json({ deleted: 0 });
+    }
+
+    const result = await Lead.deleteMany({ _id: { $in: targetIds } });
+
+    await Promise.all([
+      LeadNote.deleteMany({ lead_id: { $in: targetIds } }),
+      LeadTask.deleteMany({ lead_id: { $in: targetIds } }),
+    ]);
+
+    res.json({ deleted: result.deletedCount ?? targetIds.length });
+  } catch (error) {
+    logger.error("Bulk delete leads error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
