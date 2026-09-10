@@ -190,3 +190,33 @@ describe("DELETE /api/zernio", () => {
     expect(saved.zernio.webhook_id).toBe("wh_1");
   });
 });
+
+describe("webhook URL construction", () => {
+  const ORIGINAL = process.env.PUBLIC_SERVER_URL;
+
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.PUBLIC_SERVER_URL;
+    else process.env.PUBLIC_SERVER_URL = ORIGINAL;
+  });
+
+  it("uses PUBLIC_SERVER_URL when configured", async () => {
+    process.env.PUBLIC_SERVER_URL = "https://api.example.com";
+
+    const res = await request(app).get("/api/zernio/status");
+
+    expect(res.body.webhook_url).toBe(
+      `https://api.example.com/zernio-webhook/${accountId}`,
+    );
+  });
+
+  // Regression: with no env var and a proxy that terminates TLS, req.protocol
+  // reports "http" and Zernio would be handed an http webhook URL.
+  it("still derives an https URL when no env var is set", async () => {
+    delete process.env.PUBLIC_SERVER_URL;
+
+    const res = await request(app).get("/api/zernio/status");
+
+    expect(res.body.webhook_url.startsWith("https://")).toBe(true);
+    expect(res.body.webhook_url).toContain(`/zernio-webhook/${accountId}`);
+  });
+});

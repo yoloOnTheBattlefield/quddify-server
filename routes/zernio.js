@@ -27,10 +27,12 @@ async function resolveApiKey(req) {
 }
 
 function publicUrlFor(req, accountId) {
-  const base =
-    process.env.PUBLIC_SERVER_URL ||
-    process.env.SERVER_URL ||
-    `${req.protocol}://${req.get("host")}`;
+  // A webhook Zernio posts to must be publicly reachable over TLS. Prefer an
+  // explicit env var; when deriving from the request, force https rather than
+  // trusting req.protocol, so a misconfigured proxy can't register an http URL
+  // that silently drops events.
+  const configured = process.env.PUBLIC_SERVER_URL || process.env.SERVER_URL;
+  const base = configured || `https://${req.get("host")}`;
   return new URL(`/zernio-webhook/${accountId}`, base).toString();
 }
 

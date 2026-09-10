@@ -104,6 +104,11 @@ const midnightReportScheduler = require("./services/midnightReportScheduler");
 const commentAutomationScheduler = require("./services/commentAutomationScheduler");
 
 const app = express();
+// Railway terminates TLS at its proxy. Without this, req.protocol reports
+// "http" and req.ip is the proxy's address — which would make any URL we
+// hand to a third party (Zernio's webhook, for one) http, and would rate-limit
+// every client as if it were one IP.
+app.set("trust proxy", 1);
 const server = http.createServer(app);
 
 // Instagram webhook — registered BEFORE express.json() so we can capture raw body for signature verification
