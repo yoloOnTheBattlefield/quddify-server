@@ -31,6 +31,11 @@ router.post("/webhook", validate(webhookSchema), async (req, res) => {
     }
 
     const ghl = req.account.ghl;
+    // Lead.account_id must be the CRM ObjectId as a string — every read path
+    // filters on that. Writing the raw GHL location id here made ManyChat leads
+    // invisible in the UI. Same rule and fix as routes/ghl-webhook.js.
+    const accountId = req.account._id.toString();
+
     const firstName =
       first_name || (full_name ? full_name.split(" ")[0] : null);
     const lastName =
@@ -39,10 +44,15 @@ router.post("/webhook", validate(webhookSchema), async (req, res) => {
         ? full_name.split(" ").slice(1).join(" ")
         : null);
 
+    // Match leads stored either correctly or under the legacy GHL id, so an
+    // existing row is healed in place instead of duplicated.
+    const accountIds = [accountId, ...(ghl && ghl !== accountId ? [ghl] : [])];
+
     const lead = await Lead.findOneAndUpdate(
-      { ig_username: username, account_id: ghl },
+      { ig_username: username, account_id: { $in: accountIds } },
       {
         $set: {
+          account_id: accountId,
           first_name: firstName,
           last_name: lastName,
           source: `manychat:${trigger_type || "unknown"}`,

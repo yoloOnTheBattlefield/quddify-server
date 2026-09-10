@@ -51,6 +51,36 @@ describe("POST /api/manychat/webhook", () => {
     expect(lead.source).toBe("manychat:dm");
   });
 
+  // Regression: leads were written with the raw GHL location id as account_id,
+  // while every read path filters on Account._id.toString() — so they existed
+  // in the database but never appeared in the UI.
+  it("stores account_id as the CRM ObjectId string, not the GHL location id", async () => {
+    await request(app)
+      .post("/api/manychat/webhook")
+      .send({ ig_username: "visibleuser" });
+
+    const lead = await Lead.findOne({ ig_username: "visibleuser" });
+    expect(lead.account_id).toBe(accountId.toString());
+    expect(lead.account_id).not.toBe(ghl);
+  });
+
+  it("heals a lead already stored under the GHL location id instead of duplicating it", async () => {
+    const stale = await Lead.create({
+      ig_username: "staleuser",
+      account_id: ghl,
+      source: "manychat:comment",
+    });
+
+    await request(app)
+      .post("/api/manychat/webhook")
+      .send({ ig_username: "staleuser", trigger_type: "comment" });
+
+    const leads = await Lead.find({ ig_username: "staleuser" });
+    expect(leads).toHaveLength(1);
+    expect(leads[0]._id.toString()).toBe(stale._id.toString());
+    expect(leads[0].account_id).toBe(accountId.toString());
+  });
+
   it("strips @ from ig_username", async () => {
     const res = await request(app)
       .post("/api/manychat/webhook")
