@@ -7,13 +7,13 @@ const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const IgAttachment = require("../models/IgAttachment");
 const Account = require("../models/Account");
-const OutboundAccount = require("../models/OutboundAccount");
-const { decrypt } = require("../utils/crypto");
+const { findIgOwner } = require("../utils/igOwner");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
 const Notification = require("../models/Notification");
 const socketManager = require("../services/socketManager");
 const { sendPushToAccount } = require("../services/pushNotifications");
+const commentAutomation = require("../services/commentAutomation");
 
 // ─── Signature verification ─────────────────────────────────────────────────
 function verifySignature(req, res, next) {
@@ -108,6 +108,16 @@ async function processWebhookEvent(body) {
   if (body.object !== "instagram") return;
 
   for (const entry of body.entry || []) {
+    // Comment events arrive on `changes`, not `messaging`
+    for (const change of entry.changes || []) {
+      if (change.field !== "comments") continue;
+      try {
+        await commentAutomation.handleCommentChange(change.value, entry.id);
+      } catch (err) {
+        logger.error("[ig-webhook] Comment automation error:", err);
+      }
+    }
+
     for (const event of entry.messaging || []) {
       const senderId = event.sender?.id;
       const recipientId = event.recipient?.id;
@@ -141,27 +151,9 @@ async function resolveUsername(igScopedId, pageAccessToken) {
 }
 
 // ─── Find the owning account/outbound for an IG user ID ─────────────────────
-async function findOwner(igUserId) {
-  const account = await Account.findOne({ "ig_oauth.ig_user_id": igUserId });
-  if (account) {
-    return {
-      account_id: account._id,
-      outbound_account_id: null,
-      pageAccessToken: decrypt(account.ig_oauth?.page_access_token) || null,
-    };
-  }
-
-  const outbound = await OutboundAccount.findOne({ "ig_oauth.ig_user_id": igUserId });
-  if (outbound) {
-    return {
-      account_id: outbound.account_id,
-      outbound_account_id: outbound._id,
-      pageAccessToken: decrypt(outbound.ig_oauth?.page_access_token) || null,
-    };
-  }
-
-  return null;
-}
+// Shared with services/commentAutomation.js so both paths resolve ownership
+// (and decrypt the page token) identically.
+const findOwner = findIgOwner;
 
 // ─── Handle incoming/outgoing message ────────────────────────────────────────
 async function handleMessage(event, senderId, recipientId) {

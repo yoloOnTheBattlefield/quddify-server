@@ -41,6 +41,7 @@ const replyCheckRoutes = require("./routes/reply-checks");
 const aiPromptRoutes = require("./routes/ai-prompts");
 const researchRoutes = require("./routes/research");
 const manychatRoutes = require("./routes/manychat");
+const commentRuleRoutes = require("./routes/comment-rules");
 const igWebhookRoutes = require("./routes/instagram-webhook");
 const igConversationRoutes = require("./routes/ig-conversations");
 const dmAssistantRoutes = require("./routes/dm-assistant");
@@ -98,6 +99,7 @@ const campaignScheduler = require("./services/campaignScheduler");
 const deepScrapeScheduler = require("./services/deepScrapeScheduler");
 const youtubeScheduler = require("./services/youtubeScheduler");
 const midnightReportScheduler = require("./services/midnightReportScheduler");
+const commentAutomationScheduler = require("./services/commentAutomationScheduler");
 
 const app = express();
 const server = http.createServer(app);
@@ -291,6 +293,7 @@ app.use("/api/reply-checks", requireOutbound, replyCheckRoutes);
 app.use("/api/ai-prompts", aiPromptRoutes);
 app.use("/api/research", researchRoutes);
 app.use("/api/manychat", webhookLimiter, manychatRoutes);
+app.use("/api/comment-rules", commentRuleRoutes);
 app.use("/api/ig-conversations", igConversationRoutes);
 app.use("/api/dm-assistant", dmAssistantRoutes);
 app.use("/api/instagram", igOAuthRoutes);
@@ -402,6 +405,7 @@ connectDB()
     deepScrapeScheduler.start();
     youtubeScheduler.start();
     midnightReportScheduler.start();
+    commentAutomationScheduler.start();
 
     logger.info("Startup complete");
   })

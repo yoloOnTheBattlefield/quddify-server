@@ -92,7 +92,8 @@ async function exchangeCodeForToken(code, targetUsername = null) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        subscribed_fields: "messages",
+        // "comments" powers the comment-automation rules (see services/commentAutomation.js)
+        subscribed_fields: "messages,comments",
         access_token: selected.pageAccessToken,
       }),
     },
