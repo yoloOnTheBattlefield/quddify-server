@@ -46,6 +46,19 @@ const AccountSchema = new mongoose.Schema(
       ig_username: { type: String, default: null },
       connected_at: { type: Date, default: null },
     },
+    // Zernio — optional paid connection provider, an alternative to reaching
+    // Instagram through our own Meta app. Opt-in per account; Meta is default.
+    zernio: {
+      api_key: { type: String, default: null },
+      profile_id: { type: String, default: null },
+      zernio_account_id: { type: String, default: null },
+      ig_user_id: { type: String, default: null },
+      ig_username: { type: String, default: null },
+      webhook_id: { type: String, default: null },
+      webhook_secret: { type: String, default: null },
+      enabled: { type: Boolean, default: false },
+      connected_at: { type: Date, default: null },
+    },
     ig_proxy: { type: String, default: null },
     apify_token: { type: String, default: null },
     replicate_token: { type: String, default: null },
@@ -73,6 +86,8 @@ const ENCRYPTED_FIELDS = [
   "calendly_token",
   "ig_oauth.access_token",
   "ig_oauth.page_access_token",
+  "zernio.api_key",
+  "zernio.webhook_secret",
   "stripe_webhook_secret",
   "telegram_bot_token",
   "ghl_pit_token",
@@ -99,5 +114,6 @@ AccountSchema.statics.ENCRYPTED_FIELDS = ENCRYPTED_FIELDS;
 
 AccountSchema.index({ ghl: 1 }, { partialFilterExpression: { ghl: { $type: "string" } } });
 AccountSchema.index({ "ig_oauth.ig_user_id": 1 }, { sparse: true });
+AccountSchema.index({ "zernio.ig_user_id": 1 }, { sparse: true });
 
 module.exports = mongoose.model("Account", AccountSchema);

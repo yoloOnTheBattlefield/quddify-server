@@ -333,3 +333,6 @@ async function handleReadReceipt(event, senderId, recipientId) {
 }
 
 module.exports = router;
+// Zernio normalizes its events into this same Meta envelope, so its webhook
+// route reuses this processor rather than duplicating the handling.
+module.exports.processWebhookEvent = processWebhookEvent;

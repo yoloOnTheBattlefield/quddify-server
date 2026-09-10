@@ -42,6 +42,8 @@ const aiPromptRoutes = require("./routes/ai-prompts");
 const researchRoutes = require("./routes/research");
 const manychatRoutes = require("./routes/manychat");
 const commentRuleRoutes = require("./routes/comment-rules");
+const zernioRoutes = require("./routes/zernio");
+const zernioWebhookRoutes = require("./routes/zernio-webhook");
 const igWebhookRoutes = require("./routes/instagram-webhook");
 const igConversationRoutes = require("./routes/ig-conversations");
 const dmAssistantRoutes = require("./routes/dm-assistant");
@@ -115,6 +117,19 @@ app.use(
     },
   }),
   igWebhookRoutes,
+);
+
+// Zernio webhook — same reason: the HMAC covers the exact bytes Zernio sent
+app.use(
+  "/zernio-webhook",
+  webhookLimiter,
+  cors({ origin: true, credentials: false }),
+  express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+  zernioWebhookRoutes,
 );
 
 // Stripe webhook — needs raw body for signature verification
@@ -294,6 +309,7 @@ app.use("/api/ai-prompts", aiPromptRoutes);
 app.use("/api/research", researchRoutes);
 app.use("/api/manychat", webhookLimiter, manychatRoutes);
 app.use("/api/comment-rules", commentRuleRoutes);
+app.use("/api/zernio", zernioRoutes);
 app.use("/api/ig-conversations", igConversationRoutes);
 app.use("/api/dm-assistant", dmAssistantRoutes);
 app.use("/api/instagram", igOAuthRoutes);

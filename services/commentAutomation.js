@@ -6,6 +6,7 @@ const CommentEvent = require("../models/CommentEvent");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
 const { findIgOwner } = require("../utils/igOwner");
+const zernioClient = require("./zernioClient");
 const escapeRegex = require("../utils/escapeRegex");
 const { notifyNewLead } = require("./telegramNotifier");
 
@@ -163,6 +164,38 @@ async function handleCommentChange(value, entryIgUserId) {
   }
 }
 
+// ─── Provider-agnostic sends ─────────────────────────────────────────────────
+//
+// An account reaches Instagram either through our own Meta app or through
+// Zernio. `owner.provider` picks the path; everything above and below this
+// section is identical for both.
+
+async function deliverPrivateReply(owner, event, text) {
+  if (owner.provider === "zernio") {
+    return zernioClient.sendPrivateReply({
+      apiKey: owner.zernio.apiKey,
+      zernioAccountId: owner.zernio.zernioAccountId,
+      postId: event.media_id,
+      commentId: event.comment_id,
+      message: text,
+    });
+  }
+  return sendPrivateReply(event.ig_user_id, event.comment_id, text, owner.pageAccessToken);
+}
+
+async function deliverPublicReply(owner, event, text) {
+  if (owner.provider === "zernio") {
+    return zernioClient.sendPublicReply({
+      apiKey: owner.zernio.apiKey,
+      zernioAccountId: owner.zernio.zernioAccountId,
+      postId: event.media_id,
+      commentId: event.comment_id,
+      message: text,
+    });
+  }
+  return sendPublicReply(event.comment_id, text, owner.pageAccessToken);
+}
+
 // ─── Graph API calls ─────────────────────────────────────────────────────────
 
 async function sendPrivateReply(igUserId, commentId, text, pageAccessToken) {
@@ -257,7 +290,10 @@ async function sentInLastHour(igUserId) {
 
 async function processEvent(event) {
   const owner = await findIgOwner(event.ig_user_id);
-  if (!owner || !owner.pageAccessToken) {
+  // Zernio carries its own credentials, so a Meta page token is only required
+  // when Meta is the provider for this account.
+  const canSend = owner && (owner.provider === "zernio" ? !!owner.zernio : !!owner.pageAccessToken);
+  if (!canSend) {
     await CommentEvent.updateOne(
       { _id: event._id },
       { $set: { status: "skipped", skip_reason: "no_access_token" } },
@@ -274,9 +310,12 @@ async function processEvent(event) {
     return;
   }
 
-  const permalink = event.media_id
-    ? await fetchPermalink(event.media_id, owner.pageAccessToken)
-    : null;
+  // Permalink lookup is a Graph API call; Zernio exposes no equivalent, so
+  // post_url stays null for Zernio-sourced comments.
+  const permalink =
+    event.media_id && owner.provider !== "zernio"
+      ? await fetchPermalink(event.media_id, owner.pageAccessToken)
+      : null;
 
   const lead = await upsertLeadFromComment(event, rule, permalink);
 
@@ -288,7 +327,7 @@ async function processEvent(event) {
   });
 
   try {
-    await sendPrivateReply(event.ig_user_id, event.comment_id, dmText, owner.pageAccessToken);
+    await deliverPrivateReply(owner, event, dmText);
   } catch (err) {
     const attempts = event.attempts + 1;
     const exhausted = attempts >= MAX_ATTEMPTS;
@@ -315,10 +354,10 @@ async function processEvent(event) {
   if (rule.reply_publicly && rule.public_replies?.length > 0) {
     const pick = rule.public_replies[Math.floor(Math.random() * rule.public_replies.length)];
     try {
-      await sendPublicReply(
-        event.comment_id,
+      await deliverPublicReply(
+        owner,
+        event,
         resolveTemplate(pick, { username: event.commenter_username, link }),
-        owner.pageAccessToken,
       );
       publicReplied = true;
     } catch (err) {
