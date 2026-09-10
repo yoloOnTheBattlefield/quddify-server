@@ -5,6 +5,8 @@ const CommentRule = require("../models/CommentRule");
 const CommentEvent = require("../models/CommentEvent");
 const Lead = require("../models/Lead");
 const OutboundLead = require("../models/OutboundLead");
+const IgConversation = require("../models/IgConversation");
+const IgMessage = require("../models/IgMessage");
 const { findIgOwner } = require("../utils/igOwner");
 const zernioClient = require("./zernioClient");
 const escapeRegex = require("../utils/escapeRegex");
@@ -278,6 +280,82 @@ async function upsertLeadFromComment(event, rule, permalink) {
   return lead;
 }
 
+// ─── Conversation bookkeeping ────────────────────────────────────────────────
+
+// Same rule as the Instagram webhook: a thread id is the two participant IDs,
+// sorted and joined, so both directions resolve to one conversation.
+function buildThreadId(idA, idB) {
+  return [idA, idB].sort().join("_");
+}
+
+/**
+ * Writes the automated DM into the normal conversation store, so the lead's
+ * thread opens with our message instead of "No DM conversation linked". Their
+ * reply then lands in this same thread through the existing webhook path.
+ *
+ * The commenter's username is seeded onto the conversation here because the
+ * webhook otherwise resolves usernames through the Graph API — which a
+ * Zernio-only account has no token for.
+ */
+async function recordSentDm({ owner, event, lead, text, sendResult }) {
+  const contactId = event.commenter_ig_id;
+  if (!contactId) return null;
+
+  const ourId = event.ig_user_id;
+  const threadId = buildThreadId(ourId, contactId);
+  const now = new Date();
+
+  const set = {
+    account_id: owner.account_id,
+    owner_ig_user_id: ourId,
+    last_message_at: now,
+  };
+  if (event.commenter_username) {
+    set[`participant_usernames.${contactId}`] = event.commenter_username;
+  }
+  if (lead?._id) set.lead_id = lead._id;
+
+  const conversation = await IgConversation.findOneAndUpdate(
+    { instagram_thread_id: threadId },
+    {
+      $set: set,
+      $addToSet: { participant_ids: { $each: [ourId, contactId] } },
+      $setOnInsert: { instagram_thread_id: threadId },
+    },
+    { upsert: true, new: true },
+  );
+
+  // Deterministic id when the provider gives us none, so a retry of the same
+  // comment can't insert the message twice.
+  const messageId =
+    sendResult?.message_id ||
+    sendResult?.id ||
+    `comment-automation:${event.comment_id}`;
+
+  const existing = await IgMessage.findOne({ message_id: messageId }).select("_id").lean();
+  if (!existing) {
+    await IgMessage.create({
+      conversation_id: conversation._id,
+      account_id: owner.account_id,
+      direction: "outbound",
+      sender_id: ourId,
+      recipient_id: contactId,
+      message_text: text,
+      message_id: messageId,
+      timestamp: now,
+      raw_payload: { source: "comment-automation", comment_id: event.comment_id },
+    });
+  }
+
+  // Lets GET /ig-conversations/by-lead resolve the thread even before the
+  // conversation carries a lead_id.
+  if (lead?._id && !lead.ig_thread_id) {
+    await Lead.updateOne({ _id: lead._id }, { $set: { ig_thread_id: threadId } });
+  }
+
+  return conversation;
+}
+
 // ─── Drain path: send the queued replies ────────────────────────────────────
 
 async function sentInLastHour(igUserId) {
@@ -326,8 +404,9 @@ async function processEvent(event) {
     link,
   });
 
+  let sendResult;
   try {
-    await deliverPrivateReply(owner, event, dmText);
+    sendResult = await deliverPrivateReply(owner, event, dmText);
   } catch (err) {
     const attempts = event.attempts + 1;
     const exhausted = attempts >= MAX_ATTEMPTS;
@@ -347,6 +426,15 @@ async function processEvent(event) {
       `[comment-automation] Private reply failed for ${event.comment_id} (attempt ${attempts}): ${err.message}`,
     );
     return;
+  }
+
+  // Record the DM we just sent so the lead's thread isn't empty until they
+  // reply. Best-effort: the message is already delivered, so a bookkeeping
+  // failure must not mark the event failed or trigger a re-send.
+  try {
+    await recordSentDm({ owner, event, lead, text: dmText, sendResult });
+  } catch (err) {
+    logger.error(`[comment-automation] Could not record sent DM for ${event.comment_id}:`, err);
   }
 
   // Public reply is best-effort — a failure here must not re-send the DM.
@@ -379,6 +467,16 @@ async function processEvent(event) {
     },
   );
   await CommentRule.updateOne({ _id: rule._id }, { $inc: { sent_count: 1 } });
+
+  // The Instagram inbound funnel counts Link Sent, and the DM we just delivered
+  // contained the rule's link — so stamp it. Only when the rule actually has a
+  // link, and never overwrite an earlier one.
+  if (lead?._id && rule.link_url && !lead.link_sent_at) {
+    await Lead.updateOne(
+      { _id: lead._id, link_sent_at: null },
+      { $set: { link_sent_at: new Date() } },
+    );
+  }
 
   logger.info(`[comment-automation] Sent DM for comment ${event.comment_id} to @${event.commenter_username}`);
 
@@ -441,6 +539,8 @@ module.exports = {
   buildTrackedLink,
   handleCommentChange,
   upsertLeadFromComment,
+  recordSentDm,
+  buildThreadId,
   processEvent,
   processDueEvents,
   HOURLY_SEND_LIMIT,

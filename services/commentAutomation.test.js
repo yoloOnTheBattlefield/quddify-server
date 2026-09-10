@@ -46,6 +46,9 @@ afterEach(async () => {
   await CommentEvent.deleteMany({});
   await Lead.deleteMany({});
   await OutboundLead.deleteMany({});
+  // processEvent now also writes a conversation, so clear it between tests
+  await require("../models/IgConversation").deleteMany({});
+  await require("../models/IgMessage").deleteMany({});
   jest.restoreAllMocks();
   findIgOwner.mockReset();
 });
@@ -359,5 +362,119 @@ describe("processDueEvents", () => {
 
     expect(await processDueEvents()).toBe(0);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordSentDm", () => {
+  const IgConversation = require("../models/IgConversation");
+  const IgMessage = require("../models/IgMessage");
+
+  beforeEach(() => {
+    findIgOwner.mockResolvedValue({
+      account_id: accountId,
+      outbound_account_id: null,
+      pageAccessToken: "tok",
+      provider: "meta",
+      zernio: null,
+    });
+  });
+
+  afterEach(async () => {
+    await IgConversation.deleteMany({});
+    await IgMessage.deleteMany({});
+  });
+
+  it("writes the sent DM into the lead's conversation thread", async () => {
+    await makeRule();
+    await handleCommentChange(commentValue(), IG_USER_ID);
+    global.fetch = jest.fn(async (url) =>
+      String(url).includes("fields=permalink")
+        ? { json: async () => ({ permalink: "https://instagram.com/p/abc" }) }
+        : { json: async () => ({ message_id: "mid_sent_1" }) },
+    );
+
+    await processDueEvents();
+
+    const lead = await Lead.findOne({ ig_username: "someone" });
+    const conversation = await IgConversation.findOne({});
+
+    expect(conversation).toBeTruthy();
+    expect(conversation.account_id.toString()).toBe(accountId.toString());
+    expect(conversation.owner_ig_user_id).toBe(IG_USER_ID);
+    expect(conversation.participant_ids.sort()).toEqual([IG_USER_ID, "commenter_1"].sort());
+    expect(conversation.lead_id.toString()).toBe(lead._id.toString());
+    // Seeded so no Graph API lookup is needed to name the participant
+    expect(conversation.participant_usernames.get("commenter_1")).toBe("someone");
+
+    const message = await IgMessage.findOne({});
+    expect(message.direction).toBe("outbound");
+    expect(message.sender_id).toBe(IG_USER_ID);
+    expect(message.recipient_id).toBe("commenter_1");
+    expect(message.message_text).toContain("Hey someone");
+    expect(message.message_id).toBe("mid_sent_1");
+
+    // by-lead can resolve the thread through the lead too
+    expect(lead.ig_thread_id).toBe(conversation.instagram_thread_id);
+  });
+
+  it("uses a deterministic message id when the provider returns none", async () => {
+    await makeRule();
+    await handleCommentChange(commentValue(), IG_USER_ID);
+    global.fetch = jest.fn(async () => ({ json: async () => ({}) }));
+
+    await processDueEvents();
+
+    const message = await IgMessage.findOne({});
+    expect(message.message_id).toBe("comment-automation:comment_1");
+  });
+
+  it("does not duplicate the message when the same comment is processed twice", async () => {
+    await makeRule();
+    const event = await handleCommentChange(commentValue(), IG_USER_ID);
+    global.fetch = jest.fn(async () => ({ json: async () => ({}) }));
+
+    await processDueEvents();
+    // Force a second pass over the same event
+    await CommentEvent.updateOne(
+      { _id: event._id },
+      { $set: { status: "queued", next_attempt_at: new Date() } },
+    );
+    await processDueEvents();
+
+    expect(await IgMessage.countDocuments()).toBe(1);
+    expect(await IgConversation.countDocuments()).toBe(1);
+  });
+
+  it("skips recording when the commenter's IG id is unknown", async () => {
+    await makeRule();
+    await handleCommentChange(
+      commentValue({ from: { username: "someone" } }),
+      IG_USER_ID,
+    );
+    global.fetch = jest.fn(async () => ({ json: async () => ({}) }));
+
+    await processDueEvents();
+
+    expect(await IgConversation.countDocuments()).toBe(0);
+  });
+
+  it("stamps link_sent_at only when the rule carries a link", async () => {
+    await makeRule({ link_url: null, dm_text: "no link here" });
+    await handleCommentChange(commentValue(), IG_USER_ID);
+    global.fetch = jest.fn(async () => ({ json: async () => ({}) }));
+
+    await processDueEvents();
+
+    expect((await Lead.findOne({ ig_username: "someone" })).link_sent_at).toBeNull();
+  });
+
+  it("stamps link_sent_at when a link was delivered", async () => {
+    await makeRule();
+    await handleCommentChange(commentValue(), IG_USER_ID);
+    global.fetch = jest.fn(async () => ({ json: async () => ({}) }));
+
+    await processDueEvents();
+
+    expect((await Lead.findOne({ ig_username: "someone" })).link_sent_at).toBeTruthy();
   });
 });
