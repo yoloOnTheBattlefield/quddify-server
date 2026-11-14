@@ -229,16 +229,19 @@ This returns `{"released":true}`. The lock also expires on its own after `ttl_se
 
 ## Offering a call (Cal.com)
 
-Never send the bare booking link. Ask the CRM for this lead's personal link and send that:
+Send the plain booking link: `https://cal.com/cristian-florea-ohbmwt/ig`
+(`GET /booking-link/:ref` returns it as `url`, with the contact's `next_booking`).
+Don't add parameters to it.
 
 ```bash
 curl -s "${H[@]}" $API/booking-link/$CONV
-# → {"url":"https://cal.com/…/ig?metadata[ig_user_id]=…&metadata[ig]=…&name=…&email=…",
-#    "booking_url":"https://cal.com/…/ig","contact_id":"…","next_booking":null}
+# → {"url":"https://cal.com/cristian-florea-ohbmwt/ig","booking_url":"…","contact_id":"…","next_booking":null}
 ```
 
-The lead's IG id rides along in the link, so when they book, Cal.com tells the CRM and
-the CRM matches the booking to this contact by itself (email is the fallback). Then:
+The booking form asks for their **Instagram handle** (required). The CRM matches the booking
+on that answer (`@`, capitals and profile URLs are fine), then on email. So when you send
+the link, it helps to say "pop your IG handle in so I know it's you". If neither matches,
+the CRM creates a separate contact, so no booking is lost. Then:
 
 - the contact moves to `stage: "booked"` and `booked_at` is set. **Don't PATCH
   `booked` yourself.**

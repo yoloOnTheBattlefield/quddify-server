@@ -132,6 +132,18 @@ describe("BOOKING_CREATED", () => {
     expect(notifyNewLead).toHaveBeenCalledTimes(1);
   });
 
+  it("matches on the Instagram handle answered in the booking form", async () => {
+    const lead = await makeLead({ ig_user_id: "555", ig_username: "Real_Handle", email: null });
+    const res = await post("BOOKING_CREATED", payload({ metadata: {}, responses: { instagram: { value: " @real_handle " }, email: "x@y.co" } }));
+    expect(res.body).toMatchObject({ action: "booked", lead_id: String(lead._id) });
+  });
+
+  it("accepts a full profile URL as the handle answer", async () => {
+    const lead = await makeLead({ ig_user_id: "556", ig_username: "url_person", email: null });
+    const res = await post("BOOKING_CREATED", payload({ metadata: {}, responses: { instagram: "https://www.instagram.com/URL_Person/?hl=en" } }));
+    expect(res.body).toMatchObject({ action: "booked", lead_id: String(lead._id) });
+  });
+
   it("falls back to the attendee email", async () => {
     const lead = await makeLead({ ig_user_id: "555", ig_username: "someone_else", email: "amine@example.com" });
     const res = await post("BOOKING_CREATED", payload({ metadata: {} }));

@@ -380,17 +380,12 @@ describe("GET /booking-link/:ref and next_booking", () => {
     expect(res.status).toBe(409);
   });
 
-  it("builds a personal link with the IG id as booking metadata", async () => {
+  it("returns the plain booking link", async () => {
     await Account.updateOne({ _id: accountId }, { $set: { calcom: { enabled: true, booking_url: "https://cal.com/me/ig", event_type_ids: [1] } } });
     await makeLead({ first_name: "Amine", last_name: "Biz", email: "a@b.co" });
     const res = await request(app).get(`/api/agent/booking-link/@amine_biz`);
     expect(res.status).toBe(200);
-    const url = new URL(res.body.url);
-    expect(url.origin + url.pathname).toBe("https://cal.com/me/ig");
-    expect(url.searchParams.get("metadata[ig_user_id]")).toBe(CONTACT_IG);
-    expect(url.searchParams.get("metadata[ig]")).toBe("Amine_Biz");
-    expect(url.searchParams.get("name")).toBe("Amine Biz");
-    expect(url.searchParams.get("email")).toBe("a@b.co");
+    expect(res.body.url).toBe("https://cal.com/me/ig");
     expect(res.body.booking_url).toBe("https://cal.com/me/ig");
     expect(res.body.next_booking).toBeNull();
   });

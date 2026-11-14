@@ -509,15 +509,10 @@ router.get("/booking-link/:ref", async (req, res) => {
     const base = account?.calcom?.enabled && account.calcom.booking_url;
     if (!base) return res.status(409).json({ error: "Cal.com is not connected" });
 
-    const url = new URL(base);
-    if (lead.ig_user_id) url.searchParams.set("metadata[ig_user_id]", lead.ig_user_id);
-    if (lead.ig_username) url.searchParams.set("metadata[ig]", lead.ig_username);
-    const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
-    if (name) url.searchParams.set("name", name);
-    if (lead.email) url.searchParams.set("email", lead.email);
-
     res.json({
-      url: url.toString(),
+      // Plain link on purpose (Cristian, 2026-11-14): the booking form asks for the
+      // Instagram handle, and the webhook matches on that answer, then on email.
+      url: base,
       booking_url: base,
       contact_id: String(lead._id),
       next_booking: await nextBookingFor(req.account._id, lead._id),

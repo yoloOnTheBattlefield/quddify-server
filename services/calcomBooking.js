@@ -56,7 +56,7 @@ function normalizeBooking(p) {
     name: (attendee.name || respValue("name") || "").trim() || null,
     meeting_url: meeting,
     ig_user_id: metadata.ig_user_id ? String(metadata.ig_user_id) : null,
-    ig: metadata.ig ? String(metadata.ig).replace(/^@/, "") : null,
+    ig: normalizeHandle(metadata.ig || respValue("instagram")),
     old_uid: oldUid && oldUid !== uid ? oldUid : null,
     status: p.status ? String(p.status).toLowerCase() : null,
     no_show: Array.isArray(p.attendees) ? p.attendees.some((a) => a.noShow || a.absent) : false,
@@ -64,6 +64,16 @@ function normalizeBooking(p) {
 }
 
 // ─── lead matching ──────────────────────────────────────────────────────────
+
+// "@Name", "name ", "instagram.com/name/?hl=en" -> "name"
+function normalizeHandle(v) {
+  if (!v || typeof v !== "string") return null;
+  let h = v.trim();
+  const m = h.match(/instagram\.com\/([A-Za-z0-9._]+)/i);
+  if (m) h = m[1];
+  h = h.replace(/^@+/, "").replace(/[/?#].*$/, "").trim().toLowerCase();
+  return /^[a-z0-9._]{1,30}$/.test(h) ? h : null;
+}
 
 async function findLead(accountId, b, resolveContact) {
   if (b.ig_user_id) {
@@ -254,6 +264,7 @@ function triggerForApiBooking(apiBooking) {
 }
 
 module.exports = {
+  normalizeHandle,
   TRIGGERS,
   verifyCalcomSignature,
   normalizeBooking,
