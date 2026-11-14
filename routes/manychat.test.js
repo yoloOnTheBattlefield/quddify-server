@@ -4,13 +4,11 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 const request = require("supertest");
 
 const Lead = require("../models/Lead");
-const OutboundLead = require("../models/OutboundLead");
 const manychatRouter = require("./manychat");
 
 let mongoServer;
 let app;
 const accountId = new mongoose.Types.ObjectId();
-const ghl = "ghl_test_location";
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
@@ -19,7 +17,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.account = { _id: accountId, ghl };
+    req.account = { _id: accountId };
     next();
   });
   app.use("/api/manychat", manychatRouter);
@@ -32,7 +30,6 @@ afterAll(async () => {
 
 afterEach(async () => {
   await Lead.deleteMany({});
-  await OutboundLead.deleteMany({});
 });
 
 describe("POST /api/manychat/webhook", () => {
@@ -44,7 +41,6 @@ describe("POST /api/manychat/webhook", () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.ig_username).toBe("testuser");
-    expect(res.body.cross_channel).toBe(false);
 
     const lead = await Lead.findOne({ ig_username: "testuser" });
     expect(lead).toBeTruthy();
@@ -61,24 +57,6 @@ describe("POST /api/manychat/webhook", () => {
 
     const lead = await Lead.findOne({ ig_username: "visibleuser" });
     expect(lead.account_id).toBe(accountId.toString());
-    expect(lead.account_id).not.toBe(ghl);
-  });
-
-  it("heals a lead already stored under the GHL location id instead of duplicating it", async () => {
-    const stale = await Lead.create({
-      ig_username: "staleuser",
-      account_id: ghl,
-      source: "manychat:comment",
-    });
-
-    await request(app)
-      .post("/api/manychat/webhook")
-      .send({ ig_username: "staleuser", trigger_type: "comment" });
-
-    const leads = await Lead.find({ ig_username: "staleuser" });
-    expect(leads).toHaveLength(1);
-    expect(leads[0]._id.toString()).toBe(stale._id.toString());
-    expect(leads[0].account_id).toBe(accountId.toString());
   });
 
   it("strips @ from ig_username", async () => {
@@ -140,23 +118,6 @@ describe("POST /api/manychat/webhook", () => {
 
     const lead = await Lead.findOne({ ig_username: "postuser" });
     expect(lead.post_url).toBe("https://instagram.com/p/abc123");
-  });
-
-  it("cross-links to existing OutboundLead", async () => {
-    const obLead = await OutboundLead.create({
-      account_id: accountId,
-      username: "crossuser",
-      followingKey: "crossuser",
-    });
-
-    const res = await request(app)
-      .post("/api/manychat/webhook")
-      .send({ ig_username: "crossuser" });
-
-    expect(res.body.cross_channel).toBe(true);
-
-    const lead = await Lead.findOne({ ig_username: "crossuser" });
-    expect(lead.outbound_lead_id.toString()).toBe(obLead._id.toString());
   });
 
   it("defaults trigger_type to 'unknown'", async () => {

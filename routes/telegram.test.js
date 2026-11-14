@@ -66,7 +66,7 @@ describe("POST /api/telegram/connect", () => {
       .post("/api/telegram/connect")
       .send({ bot_token: "bad:token", chat_id: "-999" });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/failed to send test message/i);
+    expect(res.body.error).toMatch(/telegram api error/i);
   });
 
   it("saves config and returns success when Telegram test message succeeds", async () => {

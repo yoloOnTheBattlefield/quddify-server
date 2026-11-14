@@ -1,7 +1,6 @@
 const logger = require("../utils/logger").child({ module: "manychat" });
 const express = require("express");
 const Lead = require("../models/Lead");
-const OutboundLead = require("../models/OutboundLead");
 const { notifyNewLead } = require("../services/telegramNotifier");
 
 const validate = require("../middleware/validate");
@@ -30,10 +29,8 @@ router.post("/webhook", validate(webhookSchema), async (req, res) => {
       return res.status(400).json({ error: "Invalid ig_username" });
     }
 
-    const ghl = req.account.ghl;
     // Lead.account_id must be the CRM ObjectId as a string — every read path
-    // filters on that. Writing the raw GHL location id here made ManyChat leads
-    // invisible in the UI. Same rule and fix as routes/ghl-webhook.js.
+    // filters on that.
     const accountId = req.account._id.toString();
 
     const firstName =
@@ -44,12 +41,8 @@ router.post("/webhook", validate(webhookSchema), async (req, res) => {
         ? full_name.split(" ").slice(1).join(" ")
         : null);
 
-    // Match leads stored either correctly or under the legacy GHL id, so an
-    // existing row is healed in place instead of duplicated.
-    const accountIds = [accountId, ...(ghl && ghl !== accountId ? [ghl] : [])];
-
     const lead = await Lead.findOneAndUpdate(
-      { ig_username: username, account_id: { $in: accountIds } },
+      { ig_username: username, account_id: accountId },
       {
         $set: {
           account_id: accountId,
@@ -65,35 +58,12 @@ router.post("/webhook", validate(webhookSchema), async (req, res) => {
       { upsert: true, new: true },
     );
 
-    // Cross-reference: link to OutboundLead if this user was previously scraped/messaged
-    let crossChannel = false;
-    if (!lead.outbound_lead_id) {
-      const obLead = await OutboundLead.findOne({
-        username,
-        account_id: req.account._id,
-      }).lean();
-      if (obLead) {
-        lead.outbound_lead_id = obLead._id;
-        await Lead.updateOne(
-          { _id: lead._id },
-          { $set: { outbound_lead_id: obLead._id } },
-        );
-        crossChannel = true;
-        logger.info(`[manychat] Cross-channel link: ${username} → OutboundLead ${obLead._id}`);
-      }
-    } else {
-      crossChannel = true;
-    }
-
     logger.info(
-      `[manychat] Lead upserted: ${username} (trigger: ${trigger_type || "unknown"}, cross: ${crossChannel})`,
+      `[manychat] Lead upserted: ${username} (trigger: ${trigger_type || "unknown"})`,
     );
 
     // Telegram notification (fire-and-forget)
-    const obLeadForNotify = lead.outbound_lead_id
-      ? await OutboundLead.findById(lead.outbound_lead_id).lean()
-      : null;
-    notifyNewLead(req.account, lead, obLeadForNotify).catch((err) =>
+    notifyNewLead(req.account, lead).catch((err) =>
       logger.error({ err }, "Telegram notify error"),
     );
 
@@ -101,7 +71,6 @@ router.post("/webhook", validate(webhookSchema), async (req, res) => {
       success: true,
       lead_id: lead._id,
       ig_username: lead.ig_username,
-      cross_channel: crossChannel,
     });
   } catch (err) {
     logger.error("[manychat] Webhook error:", err);

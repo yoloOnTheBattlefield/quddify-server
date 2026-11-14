@@ -6,7 +6,6 @@ const jwt = require("jsonwebtoken");
 
 const Account = require("../models/Account");
 const AccountUser = require("../models/AccountUser");
-const OutboundAccount = require("../models/OutboundAccount");
 const { auth, generateToken, generateSelectionToken, JWT_SECRET } = require("./auth");
 
 let mongoServer;
@@ -32,7 +31,6 @@ afterAll(async () => {
 afterEach(async () => {
   await Account.deleteMany({});
   await AccountUser.deleteMany({});
-  await OutboundAccount.deleteMany({});
 });
 
 describe("auth middleware", () => {
@@ -133,22 +131,7 @@ describe("auth middleware", () => {
     expect(res.body.error).toMatch(/deleted/i);
   });
 
-  it("authenticates with browser token (oat_ prefix)", async () => {
-    const account = await Account.create({ name: "Browser Account" });
-    await OutboundAccount.create({
-      account_id: account._id,
-      username: "test_ig",
-      browser_token: "oat_testbrowser",
-    });
-
-    const res = await request(app)
-      .get("/test")
-      .set("x-api-key", "oat_testbrowser");
-    expect(res.status).toBe(200);
-    expect(res.body.account).toBe(account._id.toString());
-  });
-
-  it("returns 401 for invalid browser token", async () => {
+  it("rejects old extension browser tokens (oat_ prefix)", async () => {
     const res = await request(app)
       .get("/test")
       .set("x-api-key", "oat_nonexistent");
@@ -189,7 +172,7 @@ describe("generateToken", () => {
 
     expect(decoded.userId).toBe("user123");
     expect(decoded.accountId).toBe("acc456");
-    expect(decoded.ghl).toBe("ghl789");
+    expect(decoded.ghl).toBeUndefined();
     expect(decoded.role).toBe(1);
     expect(decoded.has_outbound).toBe(true);
     expect(decoded.has_research).toBe(false); // account.has_research is false

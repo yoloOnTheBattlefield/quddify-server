@@ -33,22 +33,12 @@ router.get("/", async (req, res) => {
 // GET /api/ig-conversations/by-lead/:leadId — find conversation for a lead using all available identifiers
 router.get("/by-lead/:leadId", async (req, res) => {
   try {
-    const OutboundLead = require("../models/OutboundLead");
-
-    // Try both inbound Lead and OutboundLead — the ID could be either
-    const [lead, outboundLead] = await Promise.all([
-      Lead.findById(req.params.leadId).lean().catch(() => null),
-      OutboundLead.findById(req.params.leadId).lean().catch(() => null),
-    ]);
+    const lead = await Lead.findById(req.params.leadId).lean().catch(() => null);
 
     // Build $or query covering every way a conversation can be linked
-    const orClauses = [
-      { lead_id: req.params.leadId },
-      { outbound_lead_id: req.params.leadId },
-    ];
+    const orClauses = [{ lead_id: req.params.leadId }];
     if (lead?.ig_thread_id) orClauses.push({ instagram_thread_id: lead.ig_thread_id });
     if (lead?.outbound_lead_id) orClauses.push({ outbound_lead_id: lead.outbound_lead_id });
-    if (outboundLead?.ig_thread_id) orClauses.push({ instagram_thread_id: outboundLead.ig_thread_id });
 
     let conversation = await IgConversation.findOne({ $or: orClauses }).lean();
 
@@ -63,7 +53,7 @@ router.get("/by-lead/:leadId", async (req, res) => {
     }
 
     // Fallback: match by ig_username in participant_usernames map
-    const igUsername = lead?.ig_username || outboundLead?.username;
+    const igUsername = lead?.ig_username;
     if (!conversation && igUsername) {
       const username = igUsername.replace(/^@/, "").toLowerCase();
       const [match] = await IgConversation.aggregate([
@@ -99,44 +89,6 @@ router.get("/by-lead/:leadId", async (req, res) => {
     res.json({ conversation, messages, total, page, limit });
   } catch (err) {
     logger.error("[ig-conversations] By-lead error:", err);
-    res.status(500).json({ error: "Failed to fetch conversation" });
-  }
-});
-
-// GET /api/ig-conversations/by-outbound-lead/:outboundLeadId — find conversation + messages for an outbound lead
-router.get("/by-outbound-lead/:outboundLeadId", async (req, res) => {
-  try {
-    const OutboundLead = require("../models/OutboundLead");
-    const outboundLead = await OutboundLead.findById(req.params.outboundLeadId).lean();
-
-    // Search by outbound_lead_id first, then by ig_thread_id
-    const orClauses = [{ outbound_lead_id: req.params.outboundLeadId }];
-    if (outboundLead?.ig_thread_id) {
-      orClauses.push({ instagram_thread_id: outboundLead.ig_thread_id });
-    }
-
-    const conversation = await IgConversation.findOne({ $or: orClauses }).lean();
-
-    if (!conversation) {
-      return res.status(404).json({ error: "No conversation found for this outbound lead" });
-    }
-
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 100;
-    const skip = (page - 1) * limit;
-
-    const [messages, total] = await Promise.all([
-      IgMessage.find({ conversation_id: conversation._id })
-        .sort({ timestamp: 1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      IgMessage.countDocuments({ conversation_id: conversation._id }),
-    ]);
-
-    res.json({ conversation, messages, total, page, limit });
-  } catch (err) {
-    logger.error("[ig-conversations] By-outbound-lead error:", err);
     res.status(500).json({ error: "Failed to fetch conversation" });
   }
 });

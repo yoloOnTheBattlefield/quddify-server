@@ -1,7 +1,6 @@
 const logger = require("../utils/logger").child({ module: "auth" });
 const jwt = require("jsonwebtoken");
 const Account = require("../models/Account");
-const OutboundAccount = require("../models/OutboundAccount");
 const AccountUser = require("../models/AccountUser");
 
 const JWT_SECRET = process.env.JWT_SECRET || "quddify-jwt-secret-change-in-production";
@@ -11,7 +10,6 @@ function generateToken(user, account, accountUser) {
     {
       userId: user._id,
       accountId: account._id,
-      ghl: account.ghl,
       role: accountUser.role,
       has_outbound: account.has_outbound && accountUser.has_outbound,
       has_research: account.has_research && accountUser.has_research,
@@ -56,19 +54,6 @@ async function auth(req, res, next) {
       if (account.disabled) return res.status(403).json({ error: "Account is disabled" });
       if (account.deleted) return res.status(403).json({ error: "Account has been deleted" });
       req.account = account;
-      return next();
-    }
-
-    // Browser token auth (new extension) — tokens start with "oat_"
-    if (token.startsWith("oat_")) {
-      const outboundAccount = await OutboundAccount.findOne({ browser_token: token }).lean();
-      if (!outboundAccount) return res.status(401).json({ error: "Invalid browser token" });
-      const account = await Account.findById(outboundAccount.account_id).lean();
-      if (!account) return res.status(401).json({ error: "Account not found" });
-      if (account.disabled) return res.status(403).json({ error: "Account is disabled" });
-      if (account.deleted) return res.status(403).json({ error: "Account has been deleted" });
-      req.account = account;
-      req.outboundAccount = outboundAccount;
       return next();
     }
 

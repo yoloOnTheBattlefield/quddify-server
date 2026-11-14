@@ -9,7 +9,6 @@ const IgAttachment = require("../models/IgAttachment");
 const Account = require("../models/Account");
 const { findIgOwner } = require("../utils/igOwner");
 const Lead = require("../models/Lead");
-const OutboundLead = require("../models/OutboundLead");
 const Notification = require("../models/Notification");
 const socketManager = require("../services/socketManager");
 const { sendPushToAccount } = require("../services/pushNotifications");
@@ -150,7 +149,7 @@ async function resolveUsername(igScopedId, pageAccessToken) {
   }
 }
 
-// ─── Find the owning account/outbound for an IG user ID ─────────────────────
+// ─── Find the owning account for an IG user ID ─────────────────────
 // Shared with services/commentAutomation.js so both paths resolve ownership
 // (and decrypt the page token) identically.
 const findOwner = findIgOwner;
@@ -181,9 +180,6 @@ async function handleMessage(event, senderId, recipientId) {
   if (owner) {
     conversationUpdate.$set.account_id = owner.account_id;
     conversationUpdate.$set.owner_ig_user_id = ownerIgUserId;
-    if (owner.outbound_account_id) {
-      conversationUpdate.$set.outbound_account_id = owner.outbound_account_id;
-    }
   }
 
   const conversation = await IgConversation.findOneAndUpdate(
@@ -214,33 +210,13 @@ async function handleMessage(event, senderId, recipientId) {
   }
 
   // Link conversation to leads (match the non-owner participant's username)
-  if (owner && !conversation.lead_id && !conversation.outbound_lead_id) {
+  if (owner && !conversation.lead_id) {
     const contactIgId = ownerIgUserId === senderId ? recipientId : senderId;
     const updatedConv = await IgConversation.findById(conversation._id);
     const contactUsername = updatedConv?.participant_usernames?.get(contactIgId) || knownUsernames.get(contactIgId);
 
     if (contactUsername) {
       const leadUpdates = {};
-
-      // Check OutboundLead first (more specific)
-      const outboundLead = await OutboundLead.findOne({
-        username: { $regex: new RegExp(`^${contactUsername}$`, "i") },
-        account_id: owner.account_id,
-      });
-      if (outboundLead) {
-        leadUpdates.outbound_lead_id = outboundLead._id;
-        await OutboundLead.findByIdAndUpdate(outboundLead._id, {
-          $set: { ig_thread_id: threadId },
-        });
-        // Mark replied if this is an inbound message (lead responded)
-        if (direction === "inbound" && !outboundLead.replied) {
-          await OutboundLead.findByIdAndUpdate(outboundLead._id, {
-            $set: { replied: true, replied_at: messageTimestamp },
-          });
-          logger.info(`[ig-webhook] OutboundLead @${contactUsername} marked as replied`);
-          await fireLeadNotification(owner.account_id, "lead_replied", contactUsername);
-        }
-      }
 
       // Check Lead
       const lead = await Lead.findOne({
@@ -258,8 +234,8 @@ async function handleMessage(event, senderId, recipientId) {
         await IgConversation.findByIdAndUpdate(conversation._id, { $set: leadUpdates });
         logger.info(`[ig-webhook] Linked conversation to leads:`, leadUpdates);
 
-        // Fire new_lead notification when an inbound Lead (not outbound) first contacts us
-        if (direction === "inbound" && leadUpdates.lead_id && !leadUpdates.outbound_lead_id) {
+        // Fire new_lead notification when an inbound Lead first contacts us
+        if (direction === "inbound" && leadUpdates.lead_id) {
           await fireLeadNotification(owner.account_id, "new_lead", contactUsername);
         }
       }
@@ -277,7 +253,6 @@ async function handleMessage(event, senderId, recipientId) {
   await IgMessage.create({
     conversation_id: conversation._id,
     account_id: owner?.account_id || null,
-    outbound_account_id: owner?.outbound_account_id || null,
     direction,
     sender_id: senderId,
     recipient_id: recipientId,

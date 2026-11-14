@@ -163,9 +163,6 @@ router.post("/event", async (req, res) => {
       user_agent: req.headers["user-agent"] || null,
     });
 
-    // Resolve account's ghl to scope lead queries
-    const account = await Account.findById(account_id).lean();
-    const ghl = account?.ghl;
 
     // lead_id (from utm_medium) can be the lead's _id or contact_id
     const idQuery = mongoose.Types.ObjectId.isValid(lead_id)
@@ -173,7 +170,8 @@ router.post("/event", async (req, res) => {
       : { contact_id: lead_id };
 
     // Scope to account so we don't accidentally update another account's lead
-    const scopedQuery = ghl ? { ...idQuery, account_id: ghl } : idQuery;
+    // (Lead.account_id holds the Account ObjectId as a string.)
+    const scopedQuery = { ...idQuery, account_id: String(account_id) };
 
     // On first_visit, set link_clicked_at on the lead
     if (event_type === "first_visit") {

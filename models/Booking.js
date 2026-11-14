@@ -5,7 +5,7 @@ const BookingSchema = new mongoose.Schema(
     account_id: { type: mongoose.Schema.Types.ObjectId, ref: "Account", required: true },
     lead_id: { type: mongoose.Schema.Types.ObjectId, ref: "Lead", default: null },
     outbound_lead_id: { type: mongoose.Schema.Types.ObjectId, ref: "OutboundLead", default: null },
-    source: { type: String, enum: ["inbound", "outbound"], default: "outbound" },
+    source: { type: String, enum: ["inbound", "outbound"], default: "inbound" },
     contact_name: { type: String, default: "" },
     ig_username: { type: String, default: null },
     email: { type: String, default: null },

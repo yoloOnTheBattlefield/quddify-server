@@ -1,11 +1,12 @@
 const logger = require("../utils/logger").child({ module: "calendly" });
 const express = require("express");
 const Lead = require("../models/Lead");
-const OutboundLead = require("../models/OutboundLead");
 const Booking = require("../models/Booking");
 const Account = require("../models/Account");
 const { encrypt, decrypt } = require("../utils/crypto");
 const { notifyNewLead } = require("../services/telegramNotifier");
+const { auth } = require("../middleware/auth");
+const { findAccountByRef } = require("../utils/findAccountByRef");
 
 const router = express.Router();
 
@@ -22,14 +23,17 @@ const router = express.Router();
  * Priority:
  *   1. ?account= query param on the webhook URL (most reliable, baked in)
  *   2. Calendly API fallback — match event membership to stored user URI
- *   3. utm_source as account GHL (backward compat)
+ *   3. utm_source as an account reference (backward compat)
+ *
+ * An account reference is the Account _id, or the legacy `ghl` id that
+ * webhook URLs registered before Go High Level was removed still carry.
  */
 async function resolveAccountAndEvent(utmSource, queryAccount, scheduledEventUri) {
   let eventData = null;
 
   // Priority 1 — ?account= query param (most reliable, baked into webhook URL)
   if (queryAccount) {
-    const account = await Account.findOne({ ghl: queryAccount });
+    const account = await findAccountByRef(queryAccount);
     if (account) {
       // Fetch event data if we have a token and event URI
       if (scheduledEventUri && account.calendly_token) {
@@ -67,9 +71,9 @@ async function resolveAccountAndEvent(utmSource, queryAccount, scheduledEventUri
     }
   }
 
-  // Priority 3 — utm_source as account GHL (backward compatibility)
+  // Priority 3 — utm_source as an account reference (backward compatibility)
   if (utmSource) {
-    const account = await Account.findOne({ ghl: utmSource });
+    const account = await findAccountByRef(utmSource);
     if (account) return { account, eventData };
   }
 
@@ -95,92 +99,6 @@ async function fetchCalendlyEvent(account, scheduledEventUri) {
 }
 
 /**
- * Fire the account's GHL webhook (if configured) after a booking.
- */
-async function callGhlWebhook(account, lead) {
-  const webhookUrl = account?.ghl_lead_booked_webhook;
-  if (!webhookUrl) return;
-
-  try {
-    await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contact_id: lead.contact_id || null,
-        email: lead.email || null,
-        first_name: lead.first_name || null,
-        last_name: lead.last_name || null,
-      }),
-    });
-    logger.info({ webhookUrl, leadId: lead._id }, "GHL webhook called");
-  } catch (err) {
-    logger.error({ err }, "GHL webhook error");
-  }
-}
-
-/**
- * Sync booked status to a linked OutboundLead (if any).
- */
-async function syncOutboundLead(lead) {
-  if (!lead.outbound_lead_id) return;
-  await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, {
-    booked: true,
-    booked_at: lead.booked_at,
-  }).catch((err) =>
-    logger.error({ err }, "Failed to sync booked to outbound lead"),
-  );
-}
-
-/**
- * Try to match a newly created lead to an existing OutboundLead by email or
- * IG username (extracted from Calendly Q&A).
- */
-async function tryLinkOutboundLead(lead, accountObjectId, questionsAndAnswers) {
-  if (lead.outbound_lead_id) return lead;
-
-  const orConditions = [];
-  if (lead.email) {
-    orConditions.push({ email: { $regex: new RegExp(`^${lead.email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") } });
-  }
-
-  // Extract IG username from Q&A answers (common field names)
-  const igAnswer = (questionsAndAnswers || []).find((qa) =>
-    /instagram|ig\s|ig_|handle/i.test(qa.question),
-  );
-  if (igAnswer?.answer) {
-    const username = igAnswer.answer.replace(/^@/, "").trim().toLowerCase();
-    if (username) {
-      orConditions.push({ username: { $regex: new RegExp(`^${username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") } });
-    }
-  }
-
-  if (orConditions.length === 0) return lead;
-
-  const outbound = await OutboundLead.findOne({
-    account_id: accountObjectId,
-    $or: orConditions,
-  });
-
-  if (outbound) {
-    lead = await Lead.findByIdAndUpdate(
-      lead._id,
-      { outbound_lead_id: outbound._id },
-      { new: true },
-    );
-    await OutboundLead.findByIdAndUpdate(outbound._id, {
-      booked: true,
-      booked_at: new Date(),
-    });
-    logger.info(
-      { leadId: lead._id, outboundLeadId: outbound._id },
-      "Auto-linked inbound lead to outbound lead",
-    );
-  }
-
-  return lead;
-}
-
-/**
  * Create or update a Booking record from a Calendly event.
  */
 async function upsertBooking(account, lead, { scheduledEventUri, inviteeUri, eventData, email, name, utmSource, utmMedium, utmCampaign }) {
@@ -196,8 +114,7 @@ async function upsertBooking(account, lead, { scheduledEventUri, inviteeUri, eve
       {
         $set: {
           lead_id: lead._id,
-          outbound_lead_id: lead.outbound_lead_id || null,
-          source: lead.outbound_lead_id ? "outbound" : "inbound",
+          source: "inbound",
           contact_name: name || "",
           email: email || null,
           booking_date: bookingDate,
@@ -223,18 +140,15 @@ async function upsertBooking(account, lead, { scheduledEventUri, inviteeUri, eve
 // ---------------------------------------------------------------------------
 // POST /calendly/add — Register Calendly webhook subscription
 // ---------------------------------------------------------------------------
-router.post("/add", async (req, res) => {
+// Mounted before the global auth middleware (the webhook below is public), so
+// this route authenticates itself and keys everything on the caller's account.
+router.post("/add", auth, async (req, res) => {
   try {
-    const {
-      token,
-      user: { ghl: accountId },
-    } = req.body;
+    const { token } = req.body;
+    const accountId = req.account._id.toString();
 
     if (!token) {
       return res.status(400).json({ error: "Missing token" });
-    }
-    if (!accountId) {
-      return res.status(400).json({ error: "Missing accountId" });
     }
 
     // Step 1: Get user info from Calendly
@@ -269,7 +183,10 @@ router.post("/add", async (req, res) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          url: `https://quddify-server.vercel.app/api/calendly?account=${accountId}`,
+          url: new URL(
+            `/api/calendly?account=${accountId}`,
+            process.env.PUBLIC_SERVER_URL || process.env.SERVER_URL || `https://${req.get("host")}`,
+          ).toString(),
           events: ["invitee.created", "invitee.canceled"],
           organization: organization,
           scope: "user",
@@ -291,10 +208,10 @@ router.post("/add", async (req, res) => {
     logger.info("Webhook subscription created:", webhookData);
 
     // Step 3: Save token + user URI to the account
-    await Account.findOneAndUpdate(
-      { ghl: accountId },
-      { calendly_token: encrypt(token), calendly_user_uri: userUri },
-    );
+    await Account.findByIdAndUpdate(accountId, {
+      calendly_token: encrypt(token),
+      calendly_user_uri: userUri,
+    });
 
     res.json({ success: true, webhook: webhookData });
   } catch (error) {
@@ -379,7 +296,7 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Could not resolve account" });
     }
 
-    const accountId = account.ghl;
+    const accountId = account._id.toString();
 
     // ---- Scenario 1: Existing lead matched by contact_id ----
     if (contactId) {
@@ -398,11 +315,7 @@ router.post("/", async (req, res) => {
       if (existingLead) {
         logger.info({ leadId: existingLead._id }, "Existing lead updated");
 
-        // Auto-link outbound if not already linked
-        const linkedLead = await tryLinkOutboundLead(existingLead, account._id, questionsAndAnswers);
-
-        await syncOutboundLead(linkedLead);
-        await callGhlWebhook(account, linkedLead);
+        const linkedLead = existingLead;
 
         // Auto-create Booking
         await upsertBooking(account, linkedLead, {
@@ -411,10 +324,7 @@ router.post("/", async (req, res) => {
         });
 
         // Telegram notification (fire-and-forget)
-        const outbound = linkedLead.outbound_lead_id
-          ? await OutboundLead.findById(linkedLead.outbound_lead_id).lean()
-          : null;
-        notifyNewLead(account, linkedLead, outbound).catch((err) =>
+        notifyNewLead(account, linkedLead).catch((err) =>
           logger.error({ err }, "Telegram notify error"),
         );
         return res.json({ success: true, lead: linkedLead });
@@ -470,12 +380,6 @@ router.post("/", async (req, res) => {
 
     logger.info({ leadId: lead._id, source: "calendly" }, "Lead created/updated from Calendly");
 
-    // Auto-link outbound lead
-    lead = await tryLinkOutboundLead(lead, account._id, questionsAndAnswers);
-
-    await syncOutboundLead(lead);
-    await callGhlWebhook(account, lead);
-
     // Auto-create Booking
     await upsertBooking(account, lead, {
       scheduledEventUri, inviteeUri, eventData, email, name,
@@ -483,10 +387,7 @@ router.post("/", async (req, res) => {
     });
 
     // Telegram notification (fire-and-forget)
-    const outbound = lead.outbound_lead_id
-      ? await OutboundLead.findById(lead.outbound_lead_id).lean()
-      : null;
-    notifyNewLead(account, lead, outbound).catch((err) =>
+    notifyNewLead(account, lead).catch((err) =>
       logger.error({ err }, "Telegram notify error"),
     );
 

@@ -15,7 +15,6 @@ const registerSchema = z.object({
     password: z.string().min(6, "Password must be at least 6 characters"),
     first_name: z.string().optional(),
     last_name: z.string().optional(),
-    ghl: z.string().optional().nullable(),
   }),
   query: z.object({}).strip(),
   params: z.object({}).strip(),

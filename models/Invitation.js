@@ -8,7 +8,6 @@ const InvitationSchema = new mongoose.Schema(
     token: { type: String, required: true, unique: true, index: true },
     type: { type: String, enum: ["client", "team_member"], required: true },
     // For client invites
-    ghl: { type: String, default: null },
     // For team member invites
     account_id: { type: mongoose.Schema.Types.ObjectId, ref: "Account", default: null },
     role: { type: Number, default: 2 },

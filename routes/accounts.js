@@ -32,10 +32,8 @@ function buildLoginResponse(user, account, accountUser) {
       dms: account.lead_visibility?.dms ?? true,
       outbound: account.lead_visibility?.outbound ?? true,
     },
-    ghl: account.ghl,
     calendly: account.calendly,
     default_platform: account.default_platform || "instagram",
-    ghl_lead_booked_webhook: account.ghl_lead_booked_webhook,
     openai_token: account.openai_token,
     api_key: account.api_key,
     ig_session_set: !!(account.ig_session?.session_id) || (account.ig_sessions && account.ig_sessions.length > 0),
@@ -111,12 +109,11 @@ router.get("/analytics", async (req, res) => {
 
     const results = await Promise.all(
       accounts.map(async (account) => {
-        const filter = { account_id: account.ghl, ...dateFilter };
+        const filter = { account_id: account._id.toString(), ...dateFilter };
         const leads = await Lead.find(filter).lean();
 
         return {
           account_id: account._id,
-          ghl: account.ghl,
           name: accountName(account),
           deleted: !!account.deleted,
           totalLeads: leads.length,
@@ -139,7 +136,7 @@ router.get("/analytics", async (req, res) => {
 // ---------- register ----------
 
 router.post("/register", validate(registerSchema), async (req, res) => {
-  const { email, password, first_name, last_name, ghl } = req.body;
+  const { email, password, first_name, last_name } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: "Missing credentials" });
@@ -155,7 +152,6 @@ router.post("/register", validate(registerSchema), async (req, res) => {
 
   const account = await Account.create({
     name: displayName,
-    ghl: ghl || null,
   });
 
   let user;
@@ -218,7 +214,7 @@ router.post("/login", validate(loginSchema), async (req, res) => {
       }
       return res.json({
         ...buildLoginResponse(user, account, m),
-        accounts: [{ account_id: m.account_id, name: accountName(account), ghl: account.ghl, role: m.role, has_outbound: (account.has_outbound ?? false) && m.has_outbound, has_research: (account.has_research ?? false) && m.has_research, is_default: m.is_default }],
+        accounts: [{ account_id: m.account_id, name: accountName(account), role: m.role, has_outbound: (account.has_outbound ?? false) && m.has_outbound, has_research: (account.has_research ?? false) && m.has_research, is_default: m.is_default }],
       });
     }
 
@@ -244,7 +240,6 @@ router.post("/login", validate(loginSchema), async (req, res) => {
         return {
           account_id: m.account_id,
           name: acc ? accountName(acc) : "Unknown",
-          ghl: acc?.ghl || null,
           role: m.role,
           has_outbound: (acc?.has_outbound ?? false) && m.has_outbound,
           has_research: (acc?.has_research ?? false) && m.has_research,
@@ -308,7 +303,7 @@ router.post("/select-account", async (req, res) => {
       ...buildLoginResponse(user, account, accountUser),
       accounts: allMemberships.map((m) => {
         const acc = accMap[m.account_id.toString()];
-        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: (acc?.has_research ?? false) && m.has_research, is_default: m.is_default };
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: (acc?.has_research ?? false) && m.has_research, is_default: m.is_default };
       }),
     });
   } catch (error) {
@@ -352,7 +347,7 @@ router.post("/switch-account", async (req, res) => {
       ...buildLoginResponse(user, account, accountUser),
       accounts: allMemberships.map((m) => {
         const acc = accMap[m.account_id.toString()];
-        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", ghl: acc?.ghl || null, role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: (acc?.has_research ?? false) && m.has_research, is_default: m.is_default };
+        return { account_id: m.account_id, name: acc ? accountName(acc) : "Unknown", role: m.role, has_outbound: (acc?.has_outbound ?? false) && m.has_outbound, has_research: (acc?.has_research ?? false) && m.has_research, is_default: m.is_default };
       }),
     });
   } catch (error) {
@@ -377,7 +372,6 @@ router.get("/my-accounts", async (req, res) => {
         return {
           account_id: m.account_id,
           name: acc ? accountName(acc) : "Unknown",
-          ghl: acc?.ghl || null,
           role: m.role,
           has_outbound: (acc?.has_outbound ?? false) && m.has_outbound,
           has_research: (acc?.has_research ?? false) && m.has_research,
@@ -676,7 +670,7 @@ router.delete("/ig-sessions/:username", async (req, res) => {
 
 router.patch("/:id", async (req, res) => {
   try {
-    const { first_name, last_name, email, has_outbound, has_research, role, ghl, calendly, openai_token, claude_token, gemini_token, apify_token, ig_session, ig_username, ig_proxy, lead_visibility, account_id, default_platform } = req.body;
+    const { first_name, last_name, email, has_outbound, has_research, role, calendly, openai_token, claude_token, gemini_token, apify_token, ig_session, ig_username, ig_proxy, lead_visibility, account_id, default_platform } = req.body;
 
     const userUpdates = {};
     if (first_name !== undefined) userUpdates.first_name = first_name;
@@ -684,7 +678,6 @@ router.patch("/:id", async (req, res) => {
     if (email !== undefined) userUpdates.email = email;
 
     const accountUpdates = {};
-    if (ghl !== undefined) accountUpdates.ghl = ghl;
     if (calendly !== undefined) accountUpdates.calendly = calendly;
     if (openai_token !== undefined) accountUpdates.openai_token = openai_token ? encrypt(openai_token) : openai_token;
     if (claude_token !== undefined) accountUpdates.claude_token = claude_token ? encrypt(claude_token) : claude_token;
@@ -797,9 +790,7 @@ router.patch("/:id", async (req, res) => {
         dms: updatedAccount.lead_visibility?.dms ?? true,
         outbound: updatedAccount.lead_visibility?.outbound ?? true,
       },
-      ghl: updatedAccount.ghl,
       calendly: updatedAccount.calendly,
-      ghl_lead_booked_webhook: updatedAccount.ghl_lead_booked_webhook,
       openai_token: decrypt(updatedAccount.openai_token),
       claude_token: decrypt(updatedAccount.claude_token),
       gemini_token: decrypt(updatedAccount.gemini_token),
@@ -854,55 +845,6 @@ router.post("/:id/password", async (req, res) => {
   } catch (error) {
     logger.error("Password update error:", error);
     res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// ---------- GHL webhook endpoints (public, unchanged) ----------
-
-router.get("/ghl-webhook", async (req, res) => {
-  try {
-    const { _id } = req.query;
-    if (!_id) return res.status(400).json({ message: "Missing _id" });
-
-    const account = await Account.findById(_id).lean();
-    if (!account) return res.status(404).json({ message: "Account not found" });
-
-    res.json({
-      account_id: account._id,
-      ghl: account.ghl,
-      name: accountName(account),
-      has_outbound: !!account.has_outbound,
-      has_research: !!account.has_research,
-      ghl_lead_booked_webhook: account.ghl_lead_booked_webhook || undefined,
-    });
-  } catch (error) {
-    logger.error("GHL webhook fetch error:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-router.post("/ghl-webhook", async (req, res) => {
-  try {
-    const { ghl_lead_booked_webhook, _id } = req.body;
-
-    if (!ghl_lead_booked_webhook) {
-      return res.status(400).json({ message: "Missing ghl_lead_booked_webhook" });
-    }
-    if (!ghl_lead_booked_webhook.startsWith("http")) {
-      return res.status(400).json({ message: "Invalid URL, must start with http" });
-    }
-
-    const account = await Account.findByIdAndUpdate(
-      _id,
-      { ghl_lead_booked_webhook },
-      { new: true },
-    );
-    if (!account) return res.status(404).json({ message: "Account not found" });
-
-    res.json({ message: "Webhook saved successfully" });
-  } catch (error) {
-    logger.error("GHL webhook update error:", error);
-    res.status(500).json({ message: "Internal server error" });
   }
 });
 

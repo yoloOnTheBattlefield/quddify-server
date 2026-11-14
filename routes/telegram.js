@@ -57,13 +57,10 @@ router.post("/test-report", async (req, res) => {
     }
 
     const { sendReportForAccount } = require("../services/midnightReportScheduler");
-    const Campaign = require("../models/Campaign");
-    const CampaignLead = require("../models/CampaignLead");
-    const OutboundLead = require("../models/OutboundLead");
     const Lead = require("../models/Lead");
     const Booking = require("../models/Booking");
 
-    await sendReportForAccount(account, { Campaign, CampaignLead, OutboundLead, Lead, Booking });
+    await sendReportForAccount(account, { Lead, Booking });
 
     res.json({ success: true });
   } catch (error) {

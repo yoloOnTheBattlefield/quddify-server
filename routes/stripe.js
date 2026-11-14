@@ -6,6 +6,7 @@ const Account = require("../models/Account");
 const Payment = require("../models/Payment");
 const Lead = require("../models/Lead");
 const { encrypt, decrypt } = require("../utils/crypto");
+const { findAccountByRef } = require("../utils/findAccountByRef");
 
 // ---------------------------------------------------------------------------
 // Helper: match a payment to a lead by email
@@ -86,16 +87,17 @@ async function autoCloseLead(lead, amountCents, paymentDate) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/stripe/webhook?account=GHL_ID — Public Stripe webhook
+// POST /api/stripe/webhook?account=<account _id> — Public Stripe webhook
+// (URLs registered earlier carry the legacy GHL id; findAccountByRef accepts both.)
 // ---------------------------------------------------------------------------
 router.post("/webhook", async (req, res) => {
   try {
-    const accountGhl = req.query.account;
-    if (!accountGhl) {
+    const accountRef = req.query.account;
+    if (!accountRef) {
       return res.status(400).json({ error: "Missing account param" });
     }
 
-    const account = await Account.findOne({ ghl: accountGhl });
+    const account = await findAccountByRef(accountRef);
     if (!account || !account.stripe_webhook_secret) {
       return res.status(400).json({ error: "Stripe not configured for this account" });
     }
@@ -129,7 +131,7 @@ router.post("/webhook", async (req, res) => {
     }
 
     // Match to lead
-    const lead = await matchLeadByEmail(account.ghl, paymentData.customer_email);
+    const lead = await matchLeadByEmail(account._id.toString(), paymentData.customer_email);
 
     // Create payment record (unique stripe_event_id prevents duplicates)
     try {
@@ -228,7 +230,6 @@ router.get("/payments/:leadId", async (req, res) => {
 router.post("/import", async (req, res) => {
   try {
     const accountId = req.account._id;
-    const accountGhl = req.account.ghl;
     const { rows } = req.body;
 
     if (!Array.isArray(rows) || rows.length === 0) {
@@ -273,7 +274,7 @@ router.post("/import", async (req, res) => {
       }
 
       const email = row.customer_email || null;
-      const lead = email ? await matchLeadByEmail(accountGhl, email) : null;
+      const lead = email ? await matchLeadByEmail(accountId.toString(), email) : null;
 
       const eventId = row.stripe_event_id || row.id || `import-${accountId}-${i}-${Date.now()}`;
 

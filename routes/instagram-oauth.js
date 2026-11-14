@@ -2,7 +2,6 @@ const logger = require("../utils/logger").child({ module: "instagram-oauth" });
 const express = require("express");
 const router = express.Router();
 const Account = require("../models/Account");
-const OutboundAccount = require("../models/OutboundAccount");
 const { encrypt, decrypt } = require("../utils/crypto");
 const { loadOwnedClient } = require("../utils/clientUserScope");
 
@@ -105,15 +104,13 @@ async function exchangeCodeForToken(code, targetUsername = null) {
 }
 
 // ─── GET /api/instagram/auth-url ─────────────────────────────────────────────
-// Query params: ?outbound_account_id=xxx (optional, for outbound account OAuth)
 router.get("/auth-url", (req, res) => {
   if (!IG_APP_ID || !IG_REDIRECT_URI) {
     return res.status(500).json({ error: "Instagram OAuth not configured" });
   }
 
   const scopes = "instagram_basic,instagram_manage_messages,instagram_manage_insights,instagram_manage_comments,pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata";
-  const outboundId = req.query.outbound_account_id;
-  const state = outboundId ? `oa:${outboundId}` : `acct:${req.account._id}`;
+  const state = `acct:${req.account._id}`;
 
   const url =
     `https://www.facebook.com/v21.0/dialog/oauth` +
@@ -252,73 +249,6 @@ router.delete("/client/:clientId/disconnect", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     logger.error("[ig-oauth] Client disconnect error:", err);
-    res.status(500).json({ error: "Failed to disconnect Instagram" });
-  }
-});
-
-// ─── POST /api/instagram/outbound/:id/callback — save to outbound account ───
-router.post("/outbound/:id/callback", async (req, res) => {
-  const { code } = req.body;
-  if (!code) {
-    return res.status(400).json({ error: "Missing authorization code" });
-  }
-
-  try {
-    const outboundAccount = await OutboundAccount.findOne({
-      _id: req.params.id,
-      account_id: req.account._id,
-    });
-
-    if (!outboundAccount) {
-      return res.status(404).json({ error: "Outbound account not found" });
-    }
-
-    const { accessToken, igUserId, igUsername, pageId, pageAccessToken } = await exchangeCodeForToken(code, outboundAccount.username);
-
-    await OutboundAccount.findByIdAndUpdate(outboundAccount._id, {
-      $set: {
-        "ig_oauth.access_token": encrypt(accessToken),
-        "ig_oauth.page_access_token": encrypt(pageAccessToken),
-        "ig_oauth.page_id": pageId,
-        "ig_oauth.ig_user_id": igUserId,
-        "ig_oauth.ig_username": igUsername,
-        "ig_oauth.connected_at": new Date(),
-      },
-    });
-
-    logger.info(
-      `[ig-oauth] Connected @${igUsername} to outbound account ${outboundAccount._id} (${outboundAccount.username})`,
-    );
-    res.json({ success: true, ig_username: igUsername, ig_user_id: igUserId });
-  } catch (err) {
-    logger.error("[ig-oauth] Outbound callback error:", err);
-    res.status(400).json({ error: err.message || "Failed to complete Instagram authorization" });
-  }
-});
-
-// ─── DELETE /api/instagram/outbound/:id/disconnect — remove outbound OAuth ───
-router.delete("/outbound/:id/disconnect", async (req, res) => {
-  try {
-    const result = await OutboundAccount.findOneAndUpdate(
-      { _id: req.params.id, account_id: req.account._id },
-      {
-        $set: {
-          "ig_oauth.access_token": null,
-          "ig_oauth.ig_user_id": null,
-          "ig_oauth.ig_username": null,
-          "ig_oauth.connected_at": null,
-        },
-      },
-    );
-
-    if (!result) {
-      return res.status(404).json({ error: "Outbound account not found" });
-    }
-
-    logger.info(`[ig-oauth] Disconnected Instagram from outbound account ${req.params.id}`);
-    res.json({ success: true });
-  } catch (err) {
-    logger.error("[ig-oauth] Outbound disconnect error:", err);
     res.status(500).json({ error: "Failed to disconnect Instagram" });
   }
 });

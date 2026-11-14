@@ -4,8 +4,6 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 jest.mock("../utils/igOwner", () => ({ findIgOwner: jest.fn() }));
 jest.mock("./telegramNotifier", () => ({
   notifyNewLead: jest.fn().mockResolvedValue(undefined),
-  notifyCampaignCompleted: jest.fn(),
-  notifyAiFollowUp: jest.fn(),
 }));
 
 const { findIgOwner } = require("../utils/igOwner");
@@ -273,22 +271,6 @@ describe("processDueEvents", () => {
     expect(dmCall.body.recipient.comment_id).toBe("comment_1");
     expect(dmCall.body.message.text).toContain("Hey someone");
     expect(dmCall.body.message.text).toContain(`utm_medium=${lead._id}`);
-  });
-
-  it("cross-links an existing outbound lead", async () => {
-    await makeRule();
-    const obLead = await OutboundLead.create({
-      account_id: accountId,
-      username: "SomeOne",
-      followingKey: "seed",
-    });
-    await handleCommentChange(commentValue(), IG_USER_ID);
-    mockFetch(async () => ({ json: async () => ({ id: "mid_1" }) }));
-
-    await processDueEvents();
-
-    const lead = await Lead.findOne({ ig_username: "someone" });
-    expect(lead.outbound_lead_id.toString()).toBe(obLead._id.toString());
   });
 
   it("retries with backoff when the send fails", async () => {

@@ -13,21 +13,8 @@ jest.mock("../utils/crypto", () => ({
   decrypt: jest.fn(() => "fake-bot-token"),
 }));
 
-function makeCampaignFind(campaignIds = ["camp1"]) {
-  return {
-    find: jest.fn().mockReturnValue({
-      select: jest.fn().mockReturnValue({
-        lean: jest.fn().mockResolvedValue(campaignIds.map((id) => ({ _id: id }))),
-      }),
-    }),
-  };
-}
-
 function makeModels(overrides = {}) {
   const defaults = {
-    Campaign: makeCampaignFind(),
-    CampaignLead: { countDocuments: jest.fn().mockResolvedValue(0) },
-    OutboundLead: { countDocuments: jest.fn().mockResolvedValue(0) },
     Lead: { countDocuments: jest.fn().mockResolvedValue(0) },
     Booking: {
       countDocuments: jest.fn().mockResolvedValue(0),
@@ -51,8 +38,7 @@ beforeEach(() => {
 describe("sendReportForAccount", () => {
   it("sends a Telegram message with stats", async () => {
     const models = makeModels({
-      CampaignLead: { countDocuments: jest.fn().mockResolvedValue(42) },
-      OutboundLead: { countDocuments: jest.fn().mockResolvedValue(5) },
+      Lead: { countDocuments: jest.fn().mockResolvedValue(7) },
     });
 
     await sendReportForAccount(fakeAccount, models);
@@ -63,8 +49,8 @@ describe("sendReportForAccount", () => {
     const body = JSON.parse(opts.body);
     expect(body.chat_id).toBe("12345");
     expect(body.text).toContain("Daily Report");
-    expect(body.text).toContain("DMs Sent: *42*");
-    expect(body.text).toContain("Replies: *5*");
+    expect(body.text).toContain("New Leads: *7*");
+    expect(body.text).not.toContain("Outbound");
   });
 
   it("includes revenue when present", async () => {

@@ -4,7 +4,6 @@ const Account = require("../models/Account");
 const CommentRule = require("../models/CommentRule");
 const CommentEvent = require("../models/CommentEvent");
 const Lead = require("../models/Lead");
-const OutboundLead = require("../models/OutboundLead");
 const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const { findIgOwner } = require("../utils/igOwner");
@@ -241,8 +240,7 @@ async function fetchPermalink(mediaId, pageAccessToken) {
 // ─── Lead upsert ─────────────────────────────────────────────────────────────
 
 /**
- * Upsert the commenter as an inbound Lead and cross-link an existing
- * OutboundLead when we have already scraped or messaged them.
+ * Upsert the commenter as an inbound Lead.
  *
  * account_id is Account._id.toString() — never a GHL location string.
  * See the 2026-04-02 data-integrity fix; every read path filters on the ObjectId.
@@ -265,17 +263,6 @@ async function upsertLeadFromComment(event, rule, permalink) {
     },
     { upsert: true, new: true },
   );
-
-  if (!lead.outbound_lead_id) {
-    const obLead = await OutboundLead.findOne({
-      username: { $regex: new RegExp(`^${escapeRegex(username)}$`, "i") },
-      account_id: event.account_id,
-    }).lean();
-    if (obLead) {
-      await Lead.updateOne({ _id: lead._id }, { $set: { outbound_lead_id: obLead._id } });
-      lead.outbound_lead_id = obLead._id;
-    }
-  }
 
   return lead;
 }
@@ -482,10 +469,7 @@ async function processEvent(event) {
 
   if (lead) {
     const account = await Account.findById(event.account_id).lean();
-    const obLead = lead.outbound_lead_id
-      ? await OutboundLead.findById(lead.outbound_lead_id).lean()
-      : null;
-    notifyNewLead(account, lead, obLead).catch((err) =>
+    notifyNewLead(account, lead).catch((err) =>
       logger.error({ err }, "[comment-automation] Telegram notify error"),
     );
   }

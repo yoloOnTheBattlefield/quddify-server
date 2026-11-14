@@ -4,14 +4,12 @@ const { encrypt, decrypt } = require("../utils/crypto");
 const AccountSchema = new mongoose.Schema(
   {
     name: { type: String, default: null },
+    // Legacy Go High Level location id. GHL is gone; this stays only so webhook
+    // URLs registered with ?account=<ghl id> still resolve (utils/findAccountByRef).
     ghl: { type: String, default: null },
-    ghl_pit_token: { type: String, default: null },
-    ghl_ig_username_field_id: { type: String, default: null },
-    ghl_ig_bio_field_id: { type: String, default: null },
     calendly: { type: String, default: null },
     calendly_token: { type: String, default: null },
     calendly_user_uri: { type: String, default: null },
-    ghl_lead_booked_webhook: { type: String, default: null },
     stripe_webhook_secret: { type: String, default: null },
     openai_token: { type: String, default: null },
     claude_token: { type: String, default: null },
@@ -90,7 +88,6 @@ const ENCRYPTED_FIELDS = [
   "zernio.webhook_secret",
   "stripe_webhook_secret",
   "telegram_bot_token",
-  "ghl_pit_token",
 ];
 
 /**

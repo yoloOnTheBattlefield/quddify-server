@@ -19,25 +19,13 @@ const accountRoutes = require("./routes/accounts");
 const leadRoutes = require("./routes/leads");
 const analyticsRoutes = require("./routes/analytics");
 const calendlyRoutes = require("./routes/calendly");
-const uploadRoutes = require("./routes/upload");
-const outboundLeadRoutes = require("./routes/outbound-leads");
-const promptRoutes = require("./routes/prompts");
-const jobRoutes = require("./routes/jobs");
-const taskRoutes = require("./routes/tasks");
 const logRoutes = require("./routes/logs");
 const healthRoutes = require("./routes/health");
-const senderAccountRoutes = require("./routes/sender-accounts");
-const campaignRoutes = require("./routes/campaigns");
-const manualCampaignRoutes = require("./routes/manual-campaigns");
-const outboundAccountRoutes = require("./routes/outbound-accounts");
-const warmupRoutes = require("./routes/warmup");
 const trackingPublicRoutes = require("./routes/tracking-public");
 const trackingRoutes = require("./routes/tracking");
-const deepScrapeRoutes = require("./routes/deep-scrape");
 const apifyTokenRoutes = require("./routes/apify-tokens");
 const aiUsageRoutes = require("./routes/ai-usage");
 const adminRoutes = require("./routes/admin");
-const replyCheckRoutes = require("./routes/reply-checks");
 const aiPromptRoutes = require("./routes/ai-prompts");
 const researchRoutes = require("./routes/research");
 const manychatRoutes = require("./routes/manychat");
@@ -47,9 +35,7 @@ const contentAnalyticsRoutes = require("./routes/content-analytics");
 const zernioWebhookRoutes = require("./routes/zernio-webhook");
 const igWebhookRoutes = require("./routes/instagram-webhook");
 const igConversationRoutes = require("./routes/ig-conversations");
-const dmAssistantRoutes = require("./routes/dm-assistant");
 const igOAuthRoutes = require("./routes/instagram-oauth");
-const followUpRoutes = require("./routes/follow-ups");
 const eodReportRoutes = require("./routes/eod-reports");
 const bookingRoutes = require("./routes/bookings");
 const clientRoutes = require("./routes/clients");
@@ -84,10 +70,8 @@ const invitationRoutes = require("./routes/invitations");
 const pushSubscriptionRoutes = require("./routes/push-subscriptions");
 const stripeRoutes = require("./routes/stripe");
 const telegramRoutes = require("./routes/telegram");
-const ghlWebhookRoutes = require("./routes/ghl-webhook");
 
 const { auth } = require("./middleware/auth");
-const requireOutbound = require("./middleware/requireOutbound");
 const {
   authLimiter,
   apiLimiter,
@@ -95,11 +79,6 @@ const {
 } = require("./middleware/rateLimiter");
 const requestId = require("./middleware/requestId");
 const socketManager = require("./services/socketManager");
-const jobQueue = require("./services/jobQueue");
-const jobWorker = require("./services/jobWorker");
-const { recoverStuckJobs } = require("./services/jobRecovery");
-const campaignScheduler = require("./services/campaignScheduler");
-const deepScrapeScheduler = require("./services/deepScrapeScheduler");
 const youtubeScheduler = require("./services/youtubeScheduler");
 const midnightReportScheduler = require("./services/midnightReportScheduler");
 const commentAutomationScheduler = require("./services/commentAutomationScheduler");
@@ -203,10 +182,6 @@ app.options(/.*/, cors());
 const io = socketManager.init(server, allowedOrigins);
 app.set("io", io);
 
-// Initialize job worker with Socket.IO, then init queue
-jobWorker.init(io);
-jobQueue.init(jobWorker.processJob);
-
 const MONGO_URI = process.env.MONGO_URI;
 
 // Enable command buffering globally
@@ -234,9 +209,6 @@ const connectDB = async () => {
     indexesFixed = true;
     const models = [
       require("./models/Account"),
-      require("./models/OutboundLead"),
-      require("./models/SenderAccount"),
-      require("./models/OutboundAccount"),
       require("./models/IgConversation"),
       require("./models/IgMessage"),
       require("./models/Lead"),
@@ -279,7 +251,6 @@ app.post("/accounts/login", authLimiter, accountRoutes);
 app.post("/accounts/register", authLimiter, accountRoutes);
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/calendly", webhookLimiter, calendlyRoutes);
-app.use("/api/ghl", webhookLimiter, ghlWebhookRoutes);
 app.get("/api/health", healthRoutes);
 app.get("/api/debug", healthRoutes);
 app.use("/api/invitations", invitationRoutes);
@@ -294,23 +265,11 @@ app.use("/leads", leadRoutes);
 app.use("/api/lead-notes", leadNoteRoutes);
 app.use("/api/lead-tasks", leadTaskRoutes);
 app.use("/analytics", analyticsRoutes);
-app.use("/api", uploadRoutes);
-app.use("/outbound-leads", requireOutbound, outboundLeadRoutes);
-app.use("/prompts", promptRoutes);
-app.use("/jobs", jobRoutes);
-app.use("/api/tasks", taskRoutes);
 app.use("/api/logs", logRoutes);
 app.use("/api", healthRoutes);
-app.use("/api/sender-accounts", requireOutbound, senderAccountRoutes);
-app.use("/api/manual-campaigns", requireOutbound, manualCampaignRoutes);
-app.use("/api/campaigns", requireOutbound, campaignRoutes);
-app.use("/api/outbound-accounts", requireOutbound, outboundAccountRoutes);
-app.use("/api/warmup", requireOutbound, warmupRoutes);
-app.use("/api/deep-scrape", deepScrapeRoutes);
 app.use("/api/apify-tokens", apifyTokenRoutes);
 app.use("/api/ai-usage", aiUsageRoutes);
 app.use("/api/admin", adminRoutes);
-app.use("/api/reply-checks", requireOutbound, replyCheckRoutes);
 app.use("/api/ai-prompts", aiPromptRoutes);
 app.use("/api/research", researchRoutes);
 app.use("/api/manychat", webhookLimiter, manychatRoutes);
@@ -318,9 +277,7 @@ app.use("/api/comment-rules", commentRuleRoutes);
 app.use("/api/zernio", zernioRoutes);
 app.use("/api/content-analytics", contentAnalyticsRoutes);
 app.use("/api/ig-conversations", igConversationRoutes);
-app.use("/api/dm-assistant", dmAssistantRoutes);
 app.use("/api/instagram", igOAuthRoutes);
-app.use("/api/follow-ups", requireOutbound, followUpRoutes);
 app.use("/api/eod-reports", eodReportRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/stripe", stripeRoutes);
@@ -373,8 +330,6 @@ server.listen(PORT, "0.0.0.0", () => {
 // (The DB middleware on each request will also call connectDB, so requests wait for it)
 connectDB()
   .then(async () => {
-    await recoverStuckJobs();
-
     // Recover stuck prospect scrape jobs (server restart mid-scrape)
     try {
       const { ProspectProfile } = require("./services/carouselDb");
@@ -393,39 +348,7 @@ connectDB()
       logger.error("Prospect recovery failed (non-fatal):", err.message);
     }
 
-    // Reset abandoned in_progress tasks back to pending
-    const Task = require("./models/Task");
-    const stuckResult = await Task.updateMany(
-      { status: "in_progress" },
-      { $set: { status: "pending", startedAt: null } },
-    );
-    if (stuckResult.modifiedCount > 0) {
-      logger.info(
-        `[taskRecovery] Reset ${stuckResult.modifiedCount} stuck task(s) to pending`,
-      );
-    }
-
-    // Clear any senders stuck in "restricted" status (restriction mechanism removed)
-    const SenderAccount = require("./models/SenderAccount");
-    const restrictedResult = await SenderAccount.updateMany(
-      { status: "restricted" },
-      {
-        $set: {
-          status: "offline",
-          restricted_until: null,
-          restriction_reason: null,
-        },
-      },
-    );
-    if (restrictedResult.modifiedCount > 0) {
-      logger.info(
-        `[startup] Unrestricted ${restrictedResult.modifiedCount} sender(s)`,
-      );
-    }
-
     // Start schedulers
-    campaignScheduler.start();
-    deepScrapeScheduler.start();
     youtubeScheduler.start();
     midnightReportScheduler.start();
     commentAutomationScheduler.start();

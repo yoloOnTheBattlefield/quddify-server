@@ -218,7 +218,7 @@ describe("POST /api/invitations/:token/accept", () => {
     expect(res.status).toBe(200);
     expect(res.body.token).toBeDefined();
     expect(res.body.user.email).toBe("newclient@test.com");
-    expect(res.body.account.ghl).toBe("ghl-abc");
+    expect(res.body.account.ghl).toBeUndefined();
 
     // Verify DB records
     const user = await User.findOne({ email: "newclient@test.com" });

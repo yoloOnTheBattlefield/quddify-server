@@ -12,9 +12,6 @@ let scheduledTask = null;
  */
 async function sendReports() {
   const Account = require("../models/Account");
-  const Campaign = require("../models/Campaign");
-  const CampaignLead = require("../models/CampaignLead");
-  const OutboundLead = require("../models/OutboundLead");
   const Lead = require("../models/Lead");
   const Booking = require("../models/Booking");
 
@@ -27,62 +24,26 @@ async function sendReports() {
 
   for (const account of accounts) {
     try {
-      await sendReportForAccount(account, {
-        Campaign,
-        CampaignLead,
-        OutboundLead,
-        Lead,
-        Booking,
-      });
+      await sendReportForAccount(account, { Lead, Booking });
     } catch (err) {
       logger.error({ err, accountId: account._id }, "Report failed");
     }
   }
 }
 
-async function sendReportForAccount(
-  account,
-  { Campaign: CampaignOverride, CampaignLead, OutboundLead, Lead, Booking },
-) {
-  const Campaign = CampaignOverride || require("../models/Campaign");
-
+async function sendReportForAccount(account, { Lead, Booking }) {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayEnd = new Date();
   todayEnd.setHours(23, 59, 59, 999);
 
-  // Outbound models use ObjectId, inbound Lead uses GHL string
-  const outboundFilter = { account_id: account._id };
-  const inboundFilter = { account_id: account.ghl || account._id.toString() };
+  // Booking stores the account ObjectId; Lead stores it as a string
+  const bookingFilter = { account_id: account._id };
+  const inboundFilter = { account_id: account._id.toString() };
 
   // date_created on Lead is a string (ISO), so compare as strings
   const todayIsoStart = todayStart.toISOString();
   const todayIsoEnd = todayEnd.toISOString();
-
-  // CampaignLead has no account_id — look up via Campaign
-  const accountCampaigns = await Campaign.find({ account_id: account._id }).select("_id").lean();
-  const campaignIds = accountCampaigns.map((c) => c._id);
-
-  // Outbound: DMs sent today
-  const dmsSent = await CampaignLead.countDocuments({
-    campaign_id: { $in: campaignIds },
-    status: { $in: ["sent", "delivered", "replied"] },
-    sent_at: { $gte: todayStart, $lte: todayEnd },
-  });
-
-  // Outbound: replies today
-  const outboundReplied = await OutboundLead.countDocuments({
-    ...outboundFilter,
-    replied: true,
-    replied_at: { $gte: todayStart, $lte: todayEnd },
-  });
-
-  // Outbound: booked today
-  const outboundBooked = await OutboundLead.countDocuments({
-    ...outboundFilter,
-    booked: true,
-    booked_at: { $gte: todayStart, $lte: todayEnd },
-  });
 
   // Inbound: new leads today (date_created is an ISO string)
   const inboundLeads = await Lead.countDocuments({
@@ -104,7 +65,7 @@ async function sendReportForAccount(
 
   // Bookings created today
   const bookingsToday = await Booking.countDocuments({
-    ...outboundFilter,
+    ...bookingFilter,
     createdAt: { $gte: todayStart, $lte: todayEnd },
   });
 
@@ -112,7 +73,7 @@ async function sendReportForAccount(
   const revenueAgg = await Booking.aggregate([
     {
       $match: {
-        ...outboundFilter,
+        ...bookingFilter,
         createdAt: { $gte: todayStart, $lte: todayEnd },
         cash_collected: { $gt: 0 },
       },
@@ -121,16 +82,8 @@ async function sendReportForAccount(
   ]);
   const revenue = revenueAgg[0]?.total || 0;
 
-  const replyRate =
-    dmsSent > 0 ? ((outboundReplied / dmsSent) * 100).toFixed(1) : "0.0";
-
   const lines = [];
   lines.push("📊 *Daily Report*");
-  lines.push("");
-  lines.push("*Outbound*");
-  lines.push(`  DMs Sent: *${dmsSent}*`);
-  lines.push(`  Replies: *${outboundReplied}* \\(${replyRate}%\\)`);
-  lines.push(`  Booked: *${outboundBooked}*`);
   lines.push("");
   lines.push("*Inbound*");
   lines.push(`  New Leads: *${inboundLeads}*`);

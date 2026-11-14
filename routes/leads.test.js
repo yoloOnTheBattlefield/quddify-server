@@ -4,14 +4,12 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 const request = require("supertest");
 
 const Lead = require("../models/Lead");
-const OutboundLead = require("../models/OutboundLead");
 const Account = require("../models/Account");
 const leadsRouter = require("./leads");
 
 let mongoServer;
 let app;
 const accountId = new mongoose.Types.ObjectId();
-const ghl = "ghl_test_location";
 let currentRole = 1;
 
 beforeAll(async () => {
@@ -21,7 +19,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.account = { _id: accountId, ghl };
+    req.account = { _id: accountId };
     req.user = { role: currentRole, userId: new mongoose.Types.ObjectId() };
     next();
   });
@@ -35,7 +33,6 @@ afterAll(async () => {
 
 afterEach(async () => {
   await Lead.deleteMany({});
-  await OutboundLead.deleteMany({});
   await Account.deleteMany({});
   currentRole = 1;
 });
@@ -405,210 +402,31 @@ describe("DELETE /api/leads/:id", () => {
   });
 });
 
-describe("GET /api/leads/:id/ghl-conversation", () => {
-  it("returns empty messages when no chat_memory", async () => {
-    const lead = await createLead();
-    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
-    expect(res.status).toBe(200);
-    expect(res.body.messages).toHaveLength(0);
-    expect(res.body.total).toBe(0);
-  });
-
-  it("parses chat_memory into User/Bot messages", async () => {
-    const lead = await createLead({
-      chat_memory: "\nUser: Hello I need help\nBot: Hi! How can I assist you?\nUser: I want to book a call\nBot: Great, here is the link",
-    });
-
-    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
-    expect(res.status).toBe(200);
-    expect(res.body.messages).toHaveLength(4);
-    expect(res.body.total).toBe(4);
-
-    expect(res.body.messages[0]).toMatchObject({ role: "user", direction: "inbound", text: "Hello I need help" });
-    expect(res.body.messages[1]).toMatchObject({ role: "bot", direction: "outbound", text: "Hi! How can I assist you?" });
-    expect(res.body.messages[2]).toMatchObject({ role: "user", direction: "inbound", text: "I want to book a call" });
-    expect(res.body.messages[3]).toMatchObject({ role: "bot", direction: "outbound", text: "Great, here is the link" });
-  });
-
-  it("recognizes Contact/Assistant labels (tolerant parser)", async () => {
-    const lead = await createLead({
-      chat_memory: "Contact: hey there\nAssistant: hi, how can I help?",
-    });
-    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
-    expect(res.body.messages).toHaveLength(2);
-    expect(res.body.messages[0]).toMatchObject({ role: "user", direction: "inbound", text: "hey there" });
-    expect(res.body.messages[1]).toMatchObject({ role: "bot", direction: "outbound", text: "hi, how can I help?" });
-  });
-
-  it("folds unlabeled lines into the previous message", async () => {
-    const lead = await createLead({
-      chat_memory: "User: line one\ncontinued line two\nBot: reply",
-    });
-    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
-    expect(res.body.messages).toHaveLength(2);
-    expect(res.body.messages[0].text).toBe("line one\ncontinued line two");
-    expect(res.body.messages[1].text).toBe("reply");
-  });
-
-  it("keeps unstructured text as a single inbound message (no content dropped)", async () => {
-    const lead = await createLead({ chat_memory: "just some freeform text" });
-    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
-    expect(res.body.messages).toHaveLength(1);
-    expect(res.body.messages[0]).toMatchObject({ role: "user", text: "just some freeform text" });
-  });
-
-  it("returns 404 for nonexistent lead", async () => {
-    const res = await request(app).get(`/api/leads/${new mongoose.Types.ObjectId()}/ghl-conversation`);
-    expect(res.status).toBe(404);
-  });
-
-  it("returns 404 for lead from another account", async () => {
-    const lead = await Lead.create({
-      account_id: "other_account",
-      first_name: "Foreign",
-      date_created: new Date().toISOString(),
-      chat_memory: "\nUser: hello\nBot: hi",
-    });
-
-    const res = await request(app).get(`/api/leads/${lead._id}/ghl-conversation`);
-    expect(res.status).toBe(404);
-  });
-});
-
-describe("GET /api/leads/:id — outbound lead population", () => {
-  it("populates outbound lead into separate outbound_lead field", async () => {
-    const ob = await OutboundLead.create({
-      account_id: accountId,
-      username: "outbound_user",
-      fullName: "Outbound User",
-      followingKey: "outbound_user::scrape",
-      followersCount: 5000,
-      bio: "Coach & Consultant",
-      profileLink: "https://www.instagram.com/outbound_user/",
-      isMessaged: true,
-      dmDate: new Date("2026-03-15"),
-      replied: true,
-      replied_at: new Date("2026-03-16"),
-      booked: false,
-      source: "jeremyleeminer",
-    });
-
-    const lead = await createLead({
-      first_name: "Linked",
-      outbound_lead_id: ob._id,
-    });
-
-    const res = await request(app).get(`/api/leads/${lead._id}`);
-    expect(res.status).toBe(200);
-
-    // outbound_lead_id stays as a raw ID string (not an object)
-    expect(typeof res.body.outbound_lead_id).toBe("string");
-    expect(res.body.outbound_lead_id).toBe(ob._id.toString());
-
-    // outbound_lead has the populated data
-    expect(res.body.outbound_lead).toBeTruthy();
-    expect(res.body.outbound_lead.username).toBe("outbound_user");
-    expect(res.body.outbound_lead.fullName).toBe("Outbound User");
-    expect(res.body.outbound_lead.followersCount).toBe(5000);
-    expect(res.body.outbound_lead.isMessaged).toBe(true);
-    expect(res.body.outbound_lead.dmDate).toBeTruthy();
-    expect(res.body.outbound_lead.replied).toBe(true);
-    expect(res.body.outbound_lead.replied_at).toBeTruthy();
-    expect(res.body.outbound_lead.source).toBe("jeremyleeminer");
-  });
-
-  it("returns null outbound_lead_id and no outbound_lead when not linked", async () => {
-    const lead = await createLead({ first_name: "NoLink" });
-
-    const res = await request(app).get(`/api/leads/${lead._id}`);
-    expect(res.status).toBe(200);
-    expect(res.body.outbound_lead_id).toBeNull();
-    expect(res.body.outbound_lead).toBeUndefined();
-  });
-
-  it("does not leak sensitive outbound fields", async () => {
-    const ob = await OutboundLead.create({
-      account_id: accountId,
-      username: "secret_user",
-      fullName: "Secret",
-      followingKey: "secret_user::scrape",
-      message: "Hey, this is the DM I sent you",
-      qualified: true,
-      unqualified_reason: null,
-    });
-
-    const lead = await createLead({ outbound_lead_id: ob._id });
-    const res = await request(app).get(`/api/leads/${lead._id}`);
-
-    expect(res.body.outbound_lead.username).toBe("secret_user");
-    expect(res.body.outbound_lead.message).toBeUndefined();
-    expect(res.body.outbound_lead.qualified).toBeUndefined();
-    expect(res.body.outbound_lead.unqualified_reason).toBeUndefined();
-  });
-
-  it("handles deleted outbound lead gracefully", async () => {
-    const deletedId = new mongoose.Types.ObjectId();
-    const lead = await createLead({ outbound_lead_id: deletedId });
-
-    const res = await request(app).get(`/api/leads/${lead._id}`);
-    expect(res.status).toBe(200);
-    expect(res.body.outbound_lead_id).toBe(deletedId.toString());
-    expect(res.body.outbound_lead).toBeUndefined();
-  });
-});
-
 describe("POST /api/leads/generate", () => {
   it("returns 403 for non-admin", async () => {
     currentRole = 1;
-    const res = await request(app)
-      .post("/api/leads/generate")
-      .send({ ghl: "anything", total: 5 });
+    const res = await request(app).post("/api/leads/generate").send({ total: 5 });
 
     expect(res.status).toBe(403);
   });
 
-  it("returns 404 when no Account matches body.ghl", async () => {
+  it("returns 404 when no Account matches body.account_id", async () => {
     currentRole = 0;
     const res = await request(app)
       .post("/api/leads/generate")
-      .send({ ghl: "ghl_does_not_exist", total: 5 });
+      .send({ account_id: new mongoose.Types.ObjectId().toString(), total: 5 });
 
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/no account found/i);
   });
 
-  it("stores account_id as the target account's ObjectId, not the raw GHL string", async () => {
-    // Regression: the route originally inserted leads with account_id = ghl
-    // (the raw GHL location string from the dropdown), so they never matched
-    // the dashboard's filter, which queries by Account._id.toString().
+  it("targets the body.account_id account, not the admin's own account", async () => {
     currentRole = 0;
-    const targetAccount = await Account.create({ ghl: "pkXiD3IjJQZccab8ABZ6" });
+    const otherAccount = await Account.create({ name: "Client" });
 
     const res = await request(app)
       .post("/api/leads/generate")
-      .send({ ghl: "pkXiD3IjJQZccab8ABZ6", total: 3 });
-
-    expect(res.status).toBe(200);
-    expect(res.body.created).toBe(3);
-
-    const leads = await Lead.find({});
-    expect(leads).toHaveLength(3);
-    for (const lead of leads) {
-      expect(lead.account_id).toBe(targetAccount._id.toString());
-      expect(lead.account_id).not.toBe("pkXiD3IjJQZccab8ABZ6");
-    }
-  });
-
-  it("targets the body.ghl account, not the authenticated admin's own account", async () => {
-    // Regression: the route originally used req.account.ghl (the admin's own
-    // account) and ignored body.ghl, so an admin generating leads for a
-    // client account ended up populating their own account instead.
-    currentRole = 0;
-    const otherAccount = await Account.create({ ghl: "client_ghl_xyz" });
-
-    const res = await request(app)
-      .post("/api/leads/generate")
-      .send({ ghl: "client_ghl_xyz", total: 2 });
+      .send({ account_id: otherAccount._id.toString(), total: 2 });
 
     expect(res.status).toBe(200);
 
@@ -616,17 +434,28 @@ describe("POST /api/leads/generate", () => {
     expect(leads).toHaveLength(2);
     for (const lead of leads) {
       expect(lead.account_id).toBe(otherAccount._id.toString());
-      expect(lead.account_id).not.toBe(accountId.toString());
     }
+  });
+
+  it("defaults to the admin's own account", async () => {
+    currentRole = 0;
+    await Account.create({ _id: accountId, name: "Mine" });
+
+    const res = await request(app).post("/api/leads/generate").send({ total: 3 });
+
+    expect(res.status).toBe(200);
+    const leads = await Lead.find({});
+    expect(leads).toHaveLength(3);
+    expect(leads[0].account_id).toBe(accountId.toString());
   });
 
   it("rejects when booked exceeds link_sent", async () => {
     currentRole = 0;
-    await Account.create({ ghl });
+    await Account.create({ _id: accountId, name: "Mine" });
 
     const res = await request(app)
       .post("/api/leads/generate")
-      .send({ ghl, total: 10, link_sent: 2, booked: 5 });
+      .send({ total: 10, link_sent: 2, booked: 5 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/booked cannot exceed link_sent/i);
@@ -634,11 +463,11 @@ describe("POST /api/leads/generate", () => {
 
   it("populates funnel timestamps according to the requested distribution", async () => {
     currentRole = 0;
-    await Account.create({ ghl });
+    await Account.create({ _id: accountId, name: "Mine" });
 
     const res = await request(app)
       .post("/api/leads/generate")
-      .send({ ghl, total: 10, link_sent: 5, booked: 2, ghosted: 3 });
+      .send({ total: 10, link_sent: 5, booked: 2, ghosted: 3 });
 
     expect(res.status).toBe(200);
     expect(res.body.created).toBe(10);

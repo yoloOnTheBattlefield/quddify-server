@@ -1,10 +1,10 @@
 /**
  * Startup resilience tests
  *
- * Verifies that a failing syncIndexes() call does not prevent the campaign
- * scheduler (or any other scheduler) from starting.  This was the root cause
- * of a multi-day outage: a unique-index conflict in the Account model caused
- * connectDB() to reject, which skipped campaignScheduler.start().
+ * Verifies that a failing syncIndexes() call does not prevent the schedulers
+ * from starting.  This was the root cause of a multi-day outage: a
+ * unique-index conflict in the Account model caused connectDB() to reject,
+ * which skipped every scheduler's start().
  */
 
 jest.mock("./utils/logger", () => {
@@ -105,21 +105,9 @@ describe("scheduler start independence from syncIndexes", () => {
     // guarded by a syncIndexes success.  We import the real scheduler
     // (it doesn't need a DB connection to call start/stop).
     jest.isolateModules(() => {
-      // Mock all DB-dependent modules the scheduler imports
-      jest.mock("./models/Campaign", () => ({}));
-      jest.mock("./models/CampaignLead", () => ({}));
-      jest.mock("./models/OutboundLead", () => ({}));
-      jest.mock("./models/SenderAccount", () => ({}));
-      jest.mock("./models/OutboundAccount", () => ({}));
-      jest.mock("./models/Account", () => ({}));
-      jest.mock("./models/WarmupLog", () => ({}));
-      jest.mock("./models/Task", () => ({}));
-      jest.mock("./services/socketManager", () => ({
-        emitToAccount: jest.fn(),
-        emitToSender: jest.fn(),
-      }));
+      jest.mock("./services/commentAutomation", () => ({ processDueEvents: jest.fn() }));
 
-      const scheduler = require("./services/campaignScheduler");
+      const scheduler = require("./services/commentAutomationScheduler");
 
       // start() should not throw
       expect(() => scheduler.start()).not.toThrow();

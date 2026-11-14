@@ -13,7 +13,7 @@ const LeadSchema = new mongoose.Schema(
     outbound_lead_id: { type: mongoose.Schema.Types.ObjectId, ref: "OutboundLead", default: null },
     ig_thread_id: { type: String, default: null },
 
-    // ghl tags
+    // legacy tags
     date_created: { type: String, default: null }, // when the lead entered the system
     messaged_at: { type: Date, default: null }, // setter sent the first message
     replied_at: { type: Date, default: null }, // lead replied
@@ -31,7 +31,7 @@ const LeadSchema = new mongoose.Schema(
     closed_at: { type: Date, default: null }, // payment made
     // ai tags
     summary: { type: String, default: null },
-    // ghl conversation
+    // legacy conversation transcript
     chat_memory: { type: String, default: null },
     //calendly
     email: { type: String, default: null },

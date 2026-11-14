@@ -4,14 +4,17 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 const request = require("supertest");
 
 const Lead = require("../models/Lead");
-const OutboundLead = require("../models/OutboundLead");
 const Booking = require("../models/Booking");
 const Account = require("../models/Account");
 const calendlyRouter = require("./calendly");
 
 let mongoServer;
 let app;
-const accountGhl = "test-ghl-id";
+const accountObjectId = new mongoose.Types.ObjectId();
+// New webhook URLs and utm_source carry the Account _id.
+const accountRef = accountObjectId.toString();
+// URLs registered before GHL was removed carry the legacy ghl id.
+const legacyGhl = "test-ghl-id";
 
 // Capture fetch calls
 const fetchCalls = [];
@@ -42,15 +45,15 @@ beforeEach(() => {
 
 afterEach(async () => {
   await Lead.deleteMany({});
-  await OutboundLead.deleteMany({});
   await Booking.deleteMany({});
   await Account.deleteMany({});
 });
 
 async function createAccount(overrides = {}) {
   return Account.create({
+    _id: accountObjectId,
     name: "Test Account",
-    ghl: accountGhl,
+    ghl: legacyGhl,
     ...overrides,
   });
 }
@@ -65,7 +68,7 @@ function calendlyPayload(overrides = {}) {
         { question: "What is your budget?", answer: "$5000" },
       ],
       tracking: {
-        utm_source: accountGhl,
+        utm_source: accountRef,
         utm_medium: null,
         utm_campaign: null,
         ...overrides.tracking,
@@ -108,7 +111,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
       const lead = await Lead.create({
         first_name: "Jane",
         contact_id: "ghl-contact-123",
-        account_id: accountGhl,
+        account_id: accountRef,
         date_created: new Date().toISOString(),
       });
 
@@ -117,7 +120,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
         .send(
           calendlyPayload({
             tracking: {
-              utm_source: accountGhl,
+              utm_source: accountRef,
               utm_medium: "ghl-contact-123",
             },
           }),
@@ -132,38 +135,6 @@ describe("POST /api/calendly — Calendly webhook", () => {
       expect(updated.questions_and_answers).toHaveLength(1);
     });
 
-    it("syncs booked status to linked outbound lead", async () => {
-      await createAccount();
-
-      const obLead = await OutboundLead.create({
-        account_id: new mongoose.Types.ObjectId(),
-        followingKey: "janedoe",
-        username: "janedoe",
-      });
-
-      await Lead.create({
-        first_name: "Jane",
-        contact_id: "ghl-contact-456",
-        account_id: accountGhl,
-        outbound_lead_id: obLead._id,
-        date_created: new Date().toISOString(),
-      });
-
-      await request(app)
-        .post("/api/calendly")
-        .send(
-          calendlyPayload({
-            tracking: {
-              utm_source: accountGhl,
-              utm_medium: "ghl-contact-456",
-            },
-          }),
-        );
-
-      const updatedOb = await OutboundLead.findById(obLead._id);
-      expect(updatedOb.booked).toBe(true);
-      expect(updatedOb.booked_at).toBeTruthy();
-    });
   });
 
   describe("Scenario 2: contact_id present but no matching lead", () => {
@@ -175,7 +146,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
         .send(
           calendlyPayload({
             tracking: {
-              utm_source: accountGhl,
+              utm_source: accountRef,
               utm_medium: "unknown-contact-id",
             },
           }),
@@ -191,7 +162,21 @@ describe("POST /api/calendly — Calendly webhook", () => {
       expect(lead.last_name).toBe("Doe");
       expect(lead.email).toBe("john@example.com");
       expect(lead.booked_at).toBeTruthy();
-      expect(lead.account_id).toBe(accountGhl);
+      expect(lead.account_id).toBe(accountRef);
+    });
+
+    it("still resolves a legacy ?account=<ghl id> URL, storing the lead under the Account _id", async () => {
+      await createAccount();
+
+      const res = await request(app)
+        .post(`/api/calendly?account=${legacyGhl}`)
+        .send(calendlyPayload({ tracking: { utm_source: null, utm_medium: null } }));
+
+      expect(res.status).toBe(200);
+      const lead = await Lead.findOne({ email: "john@example.com" });
+      expect(lead.account_id).toBe(accountRef);
+      const booking = await Booking.findOne({});
+      expect(booking.account_id.toString()).toBe(accountRef);
     });
   });
 
@@ -203,7 +188,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
         .post("/api/calendly")
         .send(
           calendlyPayload({
-            tracking: { utm_source: accountGhl, utm_medium: null },
+            tracking: { utm_source: accountRef, utm_medium: null },
           }),
         );
 
@@ -217,7 +202,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
       expect(lead.last_name).toBe("Doe");
       expect(lead.booked_at).toBeTruthy();
       expect(lead.date_created).toBeTruthy();
-      expect(lead.account_id).toBe(accountGhl);
+      expect(lead.account_id).toBe(accountRef);
     });
 
     it("deduplicates by email on re-booking", async () => {
@@ -228,7 +213,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
         .post("/api/calendly")
         .send(
           calendlyPayload({
-            tracking: { utm_source: accountGhl, utm_medium: null },
+            tracking: { utm_source: accountRef, utm_medium: null },
           }),
         );
 
@@ -237,7 +222,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
         .post("/api/calendly")
         .send(
           calendlyPayload({
-            tracking: { utm_source: accountGhl, utm_medium: null },
+            tracking: { utm_source: accountRef, utm_medium: null },
           }),
         );
 
@@ -251,7 +236,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
       await createAccount();
 
       await request(app)
-        .post(`/api/calendly?account=${accountGhl}`)
+        .post(`/api/calendly?account=${accountRef}`)
         .send(
           calendlyPayload({
             tracking: { utm_source: "ig", utm_medium: null, utm_campaign: "spring" },
@@ -270,36 +255,12 @@ describe("POST /api/calendly — Calendly webhook", () => {
       expect(bookings[0].source).toBe("inbound");
     });
 
-    it("creates Booking with source outbound when outbound lead is linked", async () => {
-      const account = await createAccount();
-
-      const obLead = await OutboundLead.create({
-        account_id: account._id,
-        followingKey: "johndoe",
-        username: "johndoe",
-        email: "john@example.com",
-      });
-
-      await request(app)
-        .post(`/api/calendly?account=${accountGhl}`)
-        .send(
-          calendlyPayload({
-            tracking: { utm_source: null, utm_medium: null },
-          }),
-        );
-
-      const bookings = await Booking.find({});
-      expect(bookings).toHaveLength(1);
-      expect(bookings[0].source).toBe("outbound");
-      expect(bookings[0].outbound_lead_id.toString()).toBe(obLead._id.toString());
-    });
-
     it("deduplicates Booking by calendly_event_uri", async () => {
       await createAccount();
 
       // Send same event twice
       const payload = calendlyPayload({
-        tracking: { utm_source: accountGhl, utm_medium: null },
+        tracking: { utm_source: accountRef, utm_medium: null },
       });
 
       await request(app).post("/api/calendly").send(payload);
@@ -323,7 +284,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
       });
 
       const res = await request(app)
-        .post(`/api/calendly?account=${accountGhl}`)
+        .post(`/api/calendly?account=${accountRef}`)
         .send({
           event: "invitee.canceled",
           payload: {
@@ -344,7 +305,7 @@ describe("POST /api/calendly — Calendly webhook", () => {
       await createAccount();
 
       const res = await request(app)
-        .post(`/api/calendly?account=${accountGhl}`)
+        .post(`/api/calendly?account=${accountRef}`)
         .send({
           event: "invitee.canceled",
           payload: {
@@ -358,64 +319,12 @@ describe("POST /api/calendly — Calendly webhook", () => {
     });
   });
 
-  describe("Outbound lead auto-linking", () => {
-    it("auto-links lead to outbound by email match", async () => {
-      const account = await createAccount();
-
-      const obLead = await OutboundLead.create({
-        account_id: account._id,
-        followingKey: "johndoe",
-        username: "johndoe",
-        email: "john@example.com",
-      });
-
-      await request(app)
-        .post(`/api/calendly?account=${accountGhl}`)
-        .send(
-          calendlyPayload({
-            tracking: { utm_source: null, utm_medium: null },
-          }),
-        );
-
-      const lead = await Lead.findOne({ email: "john@example.com" });
-      expect(lead.outbound_lead_id.toString()).toBe(obLead._id.toString());
-
-      const updatedOb = await OutboundLead.findById(obLead._id);
-      expect(updatedOb.booked).toBe(true);
-    });
-
-    it("auto-links lead to outbound by IG username from Q&A", async () => {
-      const account = await createAccount();
-
-      const obLead = await OutboundLead.create({
-        account_id: account._id,
-        followingKey: "cooluser",
-        username: "cooluser",
-      });
-
-      await request(app)
-        .post(`/api/calendly?account=${accountGhl}`)
-        .send(
-          calendlyPayload({
-            email: "unknown@test.com",
-            questions_and_answers: [
-              { question: "What is your Instagram handle?", answer: "@cooluser" },
-            ],
-            tracking: { utm_source: null, utm_medium: null },
-          }),
-        );
-
-      const lead = await Lead.findOne({ email: "unknown@test.com" });
-      expect(lead.outbound_lead_id.toString()).toBe(obLead._id.toString());
-    });
-  });
-
   describe("Account resolution", () => {
     it("resolves account via ?account= query param", async () => {
       await createAccount();
 
       const res = await request(app)
-        .post(`/api/calendly?account=${accountGhl}`)
+        .post(`/api/calendly?account=${accountRef}`)
         .send(
           calendlyPayload({
             tracking: { utm_source: null, utm_medium: null },
@@ -425,51 +334,19 @@ describe("POST /api/calendly — Calendly webhook", () => {
       expect(res.status).toBe(200);
       const lead = await Lead.findOne({ email: "john@example.com" });
       expect(lead).toBeTruthy();
-      expect(lead.account_id).toBe(accountGhl);
+      expect(lead.account_id).toBe(accountRef);
     });
   });
 
-  describe("GHL webhook", () => {
-    it("calls GHL webhook when configured", async () => {
-      await createAccount({
-        ghl_lead_booked_webhook: "https://ghl.example.com/hook",
-      });
-
-      await request(app)
-        .post("/api/calendly")
-        .send(
-          calendlyPayload({
-            tracking: { utm_source: accountGhl, utm_medium: null },
-          }),
-        );
-
-      const ghlCall = fetchCalls.find(
-        (c) => c.url === "https://ghl.example.com/hook",
-      );
-      expect(ghlCall).toBeTruthy();
-      expect(ghlCall.opts.method).toBe("POST");
-
-      const body = JSON.parse(ghlCall.opts.body);
-      expect(body.email).toBe("john@example.com");
-      expect(body.first_name).toBe("John");
-      expect(body.last_name).toBe("Doe");
-    });
-
-    it("does not call GHL webhook when not configured", async () => {
+  describe("GHL removal", () => {
+    it("never calls an external GHL webhook", async () => {
       await createAccount();
 
       await request(app)
         .post("/api/calendly")
-        .send(
-          calendlyPayload({
-            tracking: { utm_source: accountGhl, utm_medium: null },
-          }),
-        );
+        .send(calendlyPayload({ tracking: { utm_source: accountRef, utm_medium: null } }));
 
-      const ghlCall = fetchCalls.find(
-        (c) => c.url && c.url.includes("ghl"),
-      );
-      expect(ghlCall).toBeUndefined();
+      expect(fetchCalls.find((c) => c.url && String(c.url).includes("ghl"))).toBeUndefined();
     });
   });
 });

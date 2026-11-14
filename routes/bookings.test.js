@@ -4,7 +4,7 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 const request = require("supertest");
 
 const Booking = require("../models/Booking");
-const OutboundLead = require("../models/OutboundLead");
+const Lead = require("../models/Lead");
 
 const bookingsRouter = require("./bookings");
 
@@ -33,7 +33,7 @@ afterAll(async () => {
 
 afterEach(async () => {
   await Booking.deleteMany({});
-  await OutboundLead.deleteMany({});
+  await Lead.deleteMany({});
 });
 
 describe("POST /api/bookings", () => {
@@ -220,18 +220,19 @@ describe("GET /api/bookings/analytics", () => {
 });
 
 describe("POST /api/bookings/sync", () => {
-  it("creates bookings for booked outbound leads", async () => {
-    await OutboundLead.create({
+  it("creates bookings for booked inbound leads, once", async () => {
+    await Lead.create({
       account_id: accountId,
-      followingKey: "test::source",
-      username: "testlead",
-      booked: true,
+      first_name: "Booked",
       booked_at: new Date(),
     });
 
     const res = await request(app).post("/api/bookings/sync");
     expect(res.status).toBe(200);
     expect(res.body.synced).toBe(1);
+
+    const booking = await Booking.findOne({});
+    expect(booking.source).toBe("inbound");
 
     // Running again should not duplicate
     const res2 = await request(app).post("/api/bookings/sync");

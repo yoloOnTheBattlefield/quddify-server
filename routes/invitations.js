@@ -22,7 +22,7 @@ router.post("/", auth, async (req, res) => {
       return res.status(403).json({ error: "Admin access required" });
     }
 
-    const { email, first_name, last_name, type, ghl, account_id, role, has_outbound, has_research } = req.body;
+    const { email, first_name, last_name, type, account_id, role, has_outbound, has_research } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: "email is required" });
@@ -62,7 +62,6 @@ router.post("/", auth, async (req, res) => {
       last_name: last_name || null,
       token,
       type,
-      ghl: ghl || null,
       account_id: account_id || null,
       role: role != null ? role : 2,
       has_outbound: has_outbound || false,
@@ -191,7 +190,6 @@ router.post("/:token/accept", async (req, res) => {
 
       account = await Account.create({
         name: displayName,
-        ghl: invitation.ghl || null,
       });
 
       user = await User.create({
@@ -272,7 +270,6 @@ router.post("/:token/accept", async (req, res) => {
       account: {
         _id: account._id,
         name: account.name,
-        ghl: account.ghl,
       },
     });
   } catch (err) {

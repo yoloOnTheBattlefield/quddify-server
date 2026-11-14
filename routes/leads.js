@@ -4,23 +4,20 @@ const logger = require("../utils/logger").child({ module: "leads" });
 const express = require("express");
 const Lead = require("../models/Lead");
 const Account = require("../models/Account");
-const OutboundLead = require("../models/OutboundLead");
 const LeadNote = require("../models/LeadNote");
 const LeadTask = require("../models/LeadTask");
 const validate = require("../middleware/validate");
 const { leadCreateSchema, leadUpdateSchema } = require("../schemas/leads");
 const { notifyNewLead } = require("../services/telegramNotifier");
 
-// Translate an admin-supplied account_id query param (which may be a GHL
-// location string from legacy frontend code, or an Account ObjectId) to the
-// ObjectId-as-string that Lead.account_id was migrated to on 2026-04-02.
+// An admin-supplied account_id query param must be an Account ObjectId, the
+// form Lead.account_id was migrated to on 2026-04-02.
 async function resolveAdminAccountId(rawValue) {
   if (!rawValue) return null;
   if (mongoose.isValidObjectId(rawValue) && String(new mongoose.Types.ObjectId(rawValue)) === rawValue) {
     return rawValue;
   }
-  const acc = await Account.findOne({ ghl: rawValue }).lean();
-  return acc ? acc._id.toString() : null;
+  return null;
 }
 
 const router = express.Router();
@@ -77,7 +74,7 @@ async function buildLeadFilter(req, params = {}) {
   return filter;
 }
 
-// get all leads (optionally filter by account_id/ghl, status, date range, search, and paginate)
+// get all leads (optionally filter by account_id, status, date range, search, and paginate)
 router.get("/", async (req, res) => {
   try {
     const { page, limit, sort_by, sort_order } = req.query;
@@ -124,86 +121,9 @@ router.get("/:id", async (req, res) => {
     const lead = await Lead.findOne(filter).lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
 
-    // Ensure outbound_lead_id is a plain string (not an ObjectId instance)
-    if (lead.outbound_lead_id) {
-      lead.outbound_lead_id = lead.outbound_lead_id.toString();
-      const OutboundLead = require("../models/OutboundLead");
-      const ob = await OutboundLead.findById(lead.outbound_lead_id)
-        .select("username fullName bio followersCount profileLink isMessaged dmDate replied replied_at booked booked_at ig_thread_id source")
-        .lean();
-      if (ob) lead.outbound_lead = ob;
-    }
-
     res.json(lead);
   } catch (error) {
     logger.error("Get lead error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// get parsed GHL conversation for a lead
-// Speaker labels we recognize when parsing a GHL chat_memory transcript.
-// Matched case-insensitively against the first word of a "Label: text" line.
-const INBOUND_SPEAKERS = new Set(["user", "contact", "lead", "customer", "prospect", "client", "them", "visitor", "guest"]);
-const OUTBOUND_SPEAKERS = new Set(["bot", "assistant", "ai", "agent", "system", "setter", "rep", "support", "me", "you"]);
-
-// Tolerant parser for GHL DM transcripts. The canonical format is
-// "User: ...\nBot: ...", but GHL / AI bots emit other labels ("Contact:",
-// "Assistant:") and multi-line messages. Recognized labels set the direction;
-// any other line is folded into the previous message (or, if it's the very
-// first line, kept as an inbound message) so no content is ever dropped.
-function parseChatMemory(raw) {
-  const messages = [];
-  const lines = String(raw)
-    .split(/(?:\\n|\r\n|\n|\r)+/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  for (const line of lines) {
-    const m = line.match(/^([A-Za-z][A-Za-z0-9 ._'-]{0,30}?)\s*[:>\-]\s*(.*)$/);
-    if (m) {
-      const label = m[1].toLowerCase().replace(/[._-]+/g, " ").trim();
-      const first = label.split(" ")[0];
-      let role = null;
-      if (INBOUND_SPEAKERS.has(label) || INBOUND_SPEAKERS.has(first)) role = "user";
-      else if (OUTBOUND_SPEAKERS.has(label) || OUTBOUND_SPEAKERS.has(first)) role = "bot";
-      if (role) {
-        messages.push({
-          _id: `ghl-${messages.length}`,
-          role,
-          direction: role === "user" ? "inbound" : "outbound",
-          text: m[2].trim(),
-        });
-        continue;
-      }
-    }
-    // Unrecognized label / no label — continuation of the previous message,
-    // or a standalone inbound message if it's the first line.
-    if (messages.length) {
-      const prev = messages[messages.length - 1];
-      prev.text = prev.text ? `${prev.text}\n${line}` : line;
-    } else {
-      messages.push({ _id: "ghl-0", role: "user", direction: "inbound", text: line });
-    }
-  }
-
-  return messages;
-}
-
-router.get("/:id/ghl-conversation", async (req, res) => {
-  try {
-    const filter = { _id: req.params.id };
-    if (req.user?.role !== 0) {
-      filter.account_id = req.account._id.toString();
-    }
-    const lead = await Lead.findOne(filter).select("chat_memory").lean();
-    if (!lead) return res.status(404).json({ error: "Not found" });
-    if (!lead.chat_memory) return res.json({ messages: [], total: 0 });
-
-    const messages = parseChatMemory(lead.chat_memory);
-    return res.json({ messages, total: messages.length });
-  } catch (error) {
-    logger.error("Get GHL conversation error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -213,8 +133,7 @@ router.post("/", validate(leadCreateSchema), async (req, res) => {
   try {
     // Always force account_id from the authenticated session. Trusting
     // req.body.account_id allowed cross-account writes and also caused new
-    // leads to silently disappear when the frontend sent the wrong value
-    // (e.g. user.ghl, which is undefined for accounts that don't use GHL).
+    // leads to silently disappear when the frontend sent the wrong value.
     //
     // Default date_created to now — the contacts list filters by date range
     // and a null date_created makes the lead invisible. Better to record
@@ -246,10 +165,7 @@ router.post("/", validate(leadCreateSchema), async (req, res) => {
     });
 
     // Telegram notification (fire-and-forget)
-    const outbound = lead.outbound_lead_id
-      ? await OutboundLead.findById(lead.outbound_lead_id).lean()
-      : null;
-    notifyNewLead(req.account, lead, outbound).catch((err) =>
+    notifyNewLead(req.account, lead).catch((err) =>
       logger.error({ err }, "Telegram notify error"),
     );
 
@@ -274,22 +190,6 @@ router.patch("/:id", validate(leadUpdateSchema), async (req, res) => {
     ).lean();
 
     if (!lead) return res.status(404).json({ error: "Not found" });
-
-    // Sync funnel status to outbound lead when linked
-    if (lead.outbound_lead_id) {
-      const outboundUpdate = {};
-      if (lead.link_sent_at) {
-        outboundUpdate.link_sent = true;
-        outboundUpdate.link_sent_at = lead.link_sent_at;
-      }
-      if (lead.booked_at) {
-        outboundUpdate.booked = true;
-        outboundUpdate.booked_at = lead.booked_at;
-      }
-      if (Object.keys(outboundUpdate).length > 0) {
-        await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, outboundUpdate);
-      }
-    }
 
     res.json(lead);
   } catch (error) {
@@ -398,37 +298,6 @@ router.post("/import", async (req, res) => {
     res.json(results);
   } catch (err) {
     logger.error({ err }, "Failed to import leads");
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// POST /leads/sync-outbound — backfill outbound leads with inbound funnel status
-router.post("/sync-outbound", async (req, res) => {
-  try {
-    const linked = await Lead.find({
-      outbound_lead_id: { $ne: null },
-      $or: [{ link_sent_at: { $ne: null } }, { booked_at: { $ne: null } }],
-    }).lean();
-
-    let updated = 0;
-    for (const lead of linked) {
-      const update = {};
-      if (lead.link_sent_at) {
-        update.link_sent = true;
-        update.link_sent_at = lead.link_sent_at;
-      }
-      if (lead.booked_at) {
-        update.booked = true;
-        update.booked_at = lead.booked_at;
-      }
-      const result = await OutboundLead.findByIdAndUpdate(lead.outbound_lead_id, update);
-      if (result) updated++;
-    }
-
-    logger.info(`[sync-outbound] Synced ${updated}/${linked.length} outbound leads`);
-    res.json({ total: linked.length, updated });
-  } catch (error) {
-    logger.error("Sync outbound error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -585,7 +454,7 @@ router.post("/generate", async (req, res) => {
       days_back = 30,
       mode = "raw",
       randomize = false,
-      ghl: bodyGhl,
+      account_id: bodyAccountId,
     } = req.body;
 
     let {
@@ -600,14 +469,13 @@ router.post("/generate", async (req, res) => {
       score_max = null,
     } = req.body;
 
-    // Admin can target any account via body.ghl; fallback to their own account
-    const ghl = bodyGhl || req.account.ghl;
-    if (!ghl) {
-      return res.status(400).json({ error: "Missing ghl location ID" });
-    }
-    const targetAccount = await Account.findOne({ ghl }).lean();
+    // Admin can target any account via body.account_id; fallback to their own account
+    const targetId = bodyAccountId || req.account._id;
+    const targetAccount = mongoose.isValidObjectId(targetId)
+      ? await Account.findById(targetId).lean()
+      : null;
     if (!targetAccount) {
-      return res.status(404).json({ error: `No account found for ghl=${ghl}` });
+      return res.status(404).json({ error: `No account found for account_id=${targetId}` });
     }
     const accountId = targetAccount._id.toString();
 

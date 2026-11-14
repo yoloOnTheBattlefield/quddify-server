@@ -3,7 +3,6 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const Booking = require("../models/Booking");
-const OutboundLead = require("../models/OutboundLead");
 const Lead = require("../models/Lead");
 
 /**
@@ -281,7 +280,7 @@ router.post("/", async (req, res) => {
   try {
     const accountId = req.account._id;
     const {
-      lead_id, outbound_lead_id, source, contact_name, ig_username,
+      lead_id, source, contact_name, ig_username,
       email, booking_date, status, cash_collected, contract_value, notes, score,
       utm_source, utm_medium,
     } = req.body;
@@ -293,8 +292,7 @@ router.post("/", async (req, res) => {
     const booking = await Booking.create({
       account_id: accountId,
       lead_id: lead_id ? new mongoose.Types.ObjectId(lead_id) : null,
-      outbound_lead_id: outbound_lead_id ? new mongoose.Types.ObjectId(outbound_lead_id) : null,
-      source: source || "outbound",
+      source: source || "inbound",
       contact_name: contact_name || "",
       ig_username: ig_username || null,
       email: email || null,
@@ -307,11 +305,6 @@ router.post("/", async (req, res) => {
       utm_source: utm_source || null,
       utm_medium: utm_medium || null,
     });
-
-    // Backfill outbound_lead_id onto the Lead so conversation lookup works
-    if (booking.lead_id && booking.outbound_lead_id) {
-      await Lead.findByIdAndUpdate(booking.lead_id, { $set: { outbound_lead_id: booking.outbound_lead_id } });
-    }
 
     logger.info({ bookingId: booking._id }, "Booking created");
     res.status(201).json(booking);
@@ -464,34 +457,6 @@ router.post("/sync", async (req, res) => {
   try {
     const accountId = req.account._id;
 
-    // Find all outbound leads with booked=true that don't have a Booking yet
-    const bookedOutbound = await OutboundLead.find({
-      account_id: accountId,
-      booked: true,
-    }).lean();
-
-    // Find existing booking outbound_lead_ids
-    const existingOutbound = await Booking.find(
-      { account_id: accountId, outbound_lead_id: { $ne: null } },
-      { outbound_lead_id: 1 },
-    ).lean();
-    const existingOutboundSet = new Set(existingOutbound.map((b) => b.outbound_lead_id.toString()));
-
-    const newOutboundBookings = bookedOutbound
-      .filter((lead) => !existingOutboundSet.has(lead._id.toString()))
-      .map((lead) => ({
-        account_id: accountId,
-        outbound_lead_id: lead._id,
-        source: "outbound",
-        contact_name: lead.fullName || lead.username || "",
-        ig_username: lead.username || null,
-        email: lead.email || null,
-        booking_date: lead.booked_at || lead.updatedAt || new Date(),
-        status: "scheduled",
-        contract_value: lead.contract_value || null,
-        utm_source: "ig",
-      }));
-
     // Find all inbound leads with booked_at that don't have a Booking yet
     const bookedInbound = await Lead.find({
       account_id: accountId,
@@ -503,19 +468,6 @@ router.post("/sync", async (req, res) => {
       { lead_id: 1 },
     ).lean();
     const existingInboundSet = new Set(existingInbound.map((b) => b.lead_id.toString()));
-
-    // Collect outbound_lead_ids that are linked to inbound leads with bookings,
-    // so we don't create duplicate outbound bookings for the same person
-    const linkedOutboundIds = new Set(
-      bookedInbound
-        .filter((lead) => lead.outbound_lead_id)
-        .map((lead) => lead.outbound_lead_id.toString()),
-    );
-
-    // Filter out outbound bookings where the outbound lead is already linked to an inbound lead
-    const dedupedOutboundBookings = newOutboundBookings.filter(
-      (b) => !linkedOutboundIds.has(b.outbound_lead_id.toString()),
-    );
 
     const newInboundBookings = bookedInbound
       .filter((lead) => !existingInboundSet.has(lead._id.toString()))
@@ -532,7 +484,7 @@ router.post("/sync", async (req, res) => {
         utm_medium: lead.utm_medium || null,
       }));
 
-    const allNew = [...dedupedOutboundBookings, ...newInboundBookings];
+    const allNew = newInboundBookings;
 
     if (allNew.length > 0) {
       await Booking.insertMany(allNew, { ordered: false });
