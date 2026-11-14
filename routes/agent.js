@@ -175,6 +175,43 @@ async function linkConversations(accountId, lead) {
       lead.ig_thread_id = c.instagram_thread_id;
     }
   }
+  if (convs.length) await syncTimesFromMessages(lead, convs.map((c) => c._id));
+}
+
+// Pull first/last inbound times off the stored thread, and date the contact from its
+// first real message rather than from when it was written into the CRM.
+async function syncTimesFromMessages(lead, conversationIds) {
+  const [row] = await IgMessage.aggregate([
+    { $match: { conversation_id: { $in: conversationIds }, direction: "inbound" } },
+    { $group: { _id: null, first: { $min: "$timestamp" }, last: { $max: "$timestamp" }, n: { $sum: 1 } } },
+  ]);
+  if (!row) return;
+  const set = {};
+  if (!lead.first_conversation_at || row.first < lead.first_conversation_at) set.first_conversation_at = row.first;
+  const created = lead.date_created ? new Date(lead.date_created) : null;
+  if (!created || isNaN(created) || row.first < created) set.date_created = row.first.toISOString();
+  await Lead.updateOne(
+    { _id: lead._id },
+    { $max: { last_inbound_at: row.last, last_conversation_at: row.last }, ...(Object.keys(set).length ? { $set: set } : {}) },
+  );
+  Object.assign(lead, set);
+  if (!lead.last_inbound_at || row.last > lead.last_inbound_at) lead.last_inbound_at = row.last;
+}
+
+// Stages past "new" imply the funnel steps before them, so the dashboard funnel
+// (built from timestamp fields) matches the pipeline (built from stage).
+function applyStageDates(lead, stage, at) {
+  const i = STAGES.indexOf(stage);
+  if (stage === "lost" || i <= 0) {
+    if (stage === "lost" && !lead.disqualified_at) lead.disqualified_at = at;
+    return;
+  }
+  const reply = lead.last_inbound_at || at;
+  if (!lead.messaged_at) lead.messaged_at = lead.first_conversation_at || reply;
+  if (!lead.replied_at) lead.replied_at = reply;
+  if (i >= STAGES.indexOf("pitched") && !lead.link_sent_at) lead.link_sent_at = at;
+  if (i >= STAGES.indexOf("booked") && !lead.booked_at) lead.booked_at = at;
+  if (stage === "won" && !lead.closed_at) lead.closed_at = at;
 }
 
 // Apply a validated body to a lead document (not saved). `by` = who changed it.
@@ -205,11 +242,7 @@ function applyContactPatch(lead, body, by = "agent") {
     const now = new Date();
     lead.stage_history = [...(lead.stage_history || []), { from: lead.stage || "new", to: body.stage, at: now, by }];
     lead.stage = body.stage;
-    // keep the dashboard funnel (timestamp fields) in step with the stage
-    if (body.stage === "pitched" && !lead.link_sent_at) lead.link_sent_at = now;
-    if (body.stage === "booked" && !lead.booked_at) lead.booked_at = now;
-    if (body.stage === "won" && !lead.closed_at) lead.closed_at = now;
-    if (body.stage === "lost" && !lead.disqualified_at) lead.disqualified_at = now;
+    applyStageDates(lead, body.stage, now);
     if (body.stage === "pitched" && !lead.pitch?.at) lead.set("pitch.at", now);
   }
 }
@@ -620,4 +653,6 @@ router.get("/stats", async (req, res) => {
 });
 
 module.exports = router;
+module.exports.linkConversations = linkConversations;
+module.exports.applyStageDates = applyStageDates;
 module.exports.resolveContact = resolveContact;

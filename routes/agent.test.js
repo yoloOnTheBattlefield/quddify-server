@@ -320,3 +320,49 @@ describe("lead source", () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe("dashboard funnel stays in step with stage and thread", () => {
+  it("a stage past new sets messaged_at and replied_at; pitched also sets link_sent_at", async () => {
+    await makeLead();
+    const q = await request(app).patch(`/api/agent/contacts/${CONTACT_IG}`).send({ stage: "qualifying" });
+    expect(q.status).toBe(200);
+    let lead = await Lead.findOne({ ig_user_id: CONTACT_IG }).lean();
+    expect(lead.messaged_at).toBeTruthy();
+    expect(lead.replied_at).toBeTruthy();
+    expect(lead.link_sent_at).toBeFalsy();
+    await request(app).patch(`/api/agent/contacts/${CONTACT_IG}`).send({ stage: "pitched" });
+    lead = await Lead.findOne({ ig_user_id: CONTACT_IG }).lean();
+    expect(lead.link_sent_at).toBeTruthy();
+    expect(lead.booked_at).toBeFalsy();
+  });
+
+  it("new and lost do not invent replies", async () => {
+    await makeLead({ stage: "qualifying" });
+    await request(app).patch(`/api/agent/contacts/${CONTACT_IG}`).send({ stage: "lost" });
+    const lead = await Lead.findOne({ ig_user_id: CONTACT_IG }).lean();
+    expect(lead.disqualified_at).toBeTruthy();
+    expect(lead.replied_at).toBeFalsy();
+  });
+
+  it("linking a migrated contact dates it from its first inbound message", async () => {
+    const conv = await IgConversation.create({
+      instagram_thread_id: `${CONTACT_IG}_${OWNER_IG}`, account_id: accountId, participant_ids: [CONTACT_IG, OWNER_IG],
+    });
+    const first = new Date("2026-11-02T10:00:00Z");
+    const last = new Date("2026-11-10T09:00:00Z");
+    for (const [i, t] of [first, last].entries()) {
+      await IgMessage.create({
+        conversation_id: conv._id, account_id: accountId, direction: "inbound", sender_id: CONTACT_IG,
+        recipient_id: OWNER_IG, message_text: "hi", message_id: `m${i}`, timestamp: t,
+      });
+    }
+    const res = await request(app).put(`/api/agent/contacts/${CONTACT_IG}`).send({ ig_username: "amine_biz" });
+    expect([200, 201]).toContain(res.status);
+    const lead = await Lead.findOne({ ig_user_id: CONTACT_IG }).lean();
+    expect(new Date(lead.first_conversation_at).toISOString()).toBe(first.toISOString());
+    expect(new Date(lead.last_inbound_at).toISOString()).toBe(last.toISOString());
+    expect(lead.date_created).toBe(first.toISOString());
+    const linked = await IgConversation.findById(conv._id).lean();
+    expect(String(linked.lead_id)).toBe(String(lead._id));
+  });
+});

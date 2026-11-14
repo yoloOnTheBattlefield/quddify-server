@@ -349,6 +349,7 @@ async function ensureInboundContact({
     if (!lead.ig_thread_id) set.ig_thread_id = threadId;
     if (zernioConversationId && !lead.zernio_conversation_id) set.zernio_conversation_id = zernioConversationId;
     if (!lead.first_conversation_at) set.first_conversation_at = messageTimestamp;
+    if (lead.messaged_at && !lead.replied_at && messageTimestamp > lead.messaged_at) set.replied_at = messageTimestamp;
     await Lead.updateOne(
       { _id: lead._id },
       { $max: { last_inbound_at: messageTimestamp, last_conversation_at: messageTimestamp }, ...(Object.keys(set).length ? { $set: set } : {}) },
