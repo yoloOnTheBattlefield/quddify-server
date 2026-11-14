@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const STAGES = ["new", "qualifying", "pain", "teaser", "pitched", "negotiating", "booked", "won", "lost"];
 const PITCH_OFFERS = ["sprint_5k", "consult_500"];
 const LEAD_MAGNET_STATUSES = ["none", "posted", "building", "built", "sent"];
+const SOURCE_TYPES = ["story", "reel", "post", "comment", "organic", "other"];
 
 const LeadSchema = new mongoose.Schema(
   {
@@ -91,6 +92,11 @@ const LeadSchema = new mongoose.Schema(
       slack_posted_at: { type: Date, default: null },
       sent_at: { type: Date, default: null },
     },
+    // Where the lead came from (first touch). source_media_id joins to MediaInsight.media_id.
+    source_type: { type: String, enum: [...SOURCE_TYPES, null], default: null },
+    source_label: { type: String, default: null },
+    source_media_id: { type: String, default: null },
+    source_url: { type: String, default: null },
     live_until: { type: Date, default: null }, // Cristian is replying live until
     last_inbound_at: { type: Date, default: null },
     last_outbound_at: { type: Date, default: null },
@@ -110,6 +116,7 @@ LeadSchema.index({ ig_username: 1, account_id: 1 });
 LeadSchema.index({ contact_id: 1 });
 LeadSchema.index({ account_id: 1, email: 1 });
 LeadSchema.index({ outbound_lead_id: 1 });
+LeadSchema.index({ account_id: 1, source_media_id: 1 });
 LeadSchema.index({ account_id: 1, ig_user_id: 1 });
 LeadSchema.index({ account_id: 1, zernio_conversation_id: 1 });
 LeadSchema.index({ account_id: 1, stage: 1, last_inbound_at: 1 });
@@ -120,3 +127,4 @@ module.exports = mongoose.model("Lead", LeadSchema);
 module.exports.STAGES = STAGES;
 module.exports.PITCH_OFFERS = PITCH_OFFERS;
 module.exports.LEAD_MAGNET_STATUSES = LEAD_MAGNET_STATUSES;
+module.exports.SOURCE_TYPES = SOURCE_TYPES;

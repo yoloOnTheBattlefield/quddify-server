@@ -12,6 +12,7 @@ const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const AgentLock = require("../models/AgentLock");
 const Account = require("../models/Account");
+const MediaInsight = require("../models/MediaInsight");
 const escapeRegex = require("../utils/escapeRegex");
 const { contactBody, messageBody, lockBody, skipsBody, ALLOWED_CONTACT_FIELDS } = require("../schemas/agent");
 
@@ -93,6 +94,10 @@ function serializeContact(lead) {
     last_name: l.last_name || null,
     email: l.email || null,
     source: l.source || null,
+    source_type: l.source_type || null,
+    source_label: l.source_label || null,
+    source_media_id: l.source_media_id || null,
+    source_url: l.source_url || null,
     stage: l.stage || "new",
     stage_history: l.stage_history || [],
     skip: !!l.skip,
@@ -209,6 +214,27 @@ function applyContactPatch(lead, body, by = "agent") {
   }
 }
 
+// Instagram shortcode from a post/reel URL: /reel/X/, /reels/X/, /p/X/, /tv/X/.
+function igShortcode(url) {
+  if (!url || typeof url !== "string") return null;
+  const m = url.match(/instagram\.com\/(?:[^/?#]+\/)?(?:reels?|p|tv)\/([A-Za-z0-9_-]+)/i);
+  return m ? m[1] : null;
+}
+
+// When the agent gives a source_url but no source_media_id, find the post it points at.
+async function resolveSourceMedia(lead, accountId) {
+  if (!lead.source_url || lead.source_media_id) return;
+  const code = igShortcode(lead.source_url);
+  if (!code) return;
+  const media = await MediaInsight.findOne({
+    account_id: accountId,
+    permalink: { $regex: new RegExp(`/(?:reels?|p|tv)/${escapeRegex(code)}(?:/|$|\\?)`, "i") },
+  })
+    .select("media_id")
+    .lean();
+  if (media) lead.source_media_id = media.media_id;
+}
+
 function newLeadFromRef(accountId, rawRef) {
   const { kind, value } = classifyRef(rawRef);
   const lead = new Lead({
@@ -260,6 +286,7 @@ router.put("/contacts/:ref", async (req, res) => {
     const created = !lead;
     if (!lead) lead = newLeadFromRef(accountId, req.params.ref);
     applyContactPatch(lead, parsed.data, "agent");
+    await resolveSourceMedia(lead, req.account._id);
     await lead.save();
     await linkConversations(accountId, lead);
     res.status(created ? 201 : 200).json({ created, contact: serializeContact(lead) });
@@ -277,6 +304,7 @@ router.patch("/contacts/:ref", async (req, res) => {
     const lead = await resolveContact(accountId, req.params.ref);
     if (!lead) return notFound(res, req.params.ref);
     applyContactPatch(lead, parsed.data, "agent");
+    await resolveSourceMedia(lead, req.account._id);
     await lead.save();
     if (parsed.data.ig_user_id) await linkConversations(accountId, lead);
     res.json({ contact: serializeContact(lead) });

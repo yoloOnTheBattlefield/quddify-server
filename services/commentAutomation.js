@@ -264,6 +264,16 @@ async function upsertLeadFromComment(event, rule, permalink) {
     { upsert: true, new: true },
   );
 
+  // First touch wins: only claim the lead for this post if nothing else has.
+  if (lead && !lead.source_type && event.media_id) {
+    const claimed = await Lead.findOneAndUpdate(
+      { _id: lead._id, $or: [{ source_type: null }, { source_type: { $exists: false } }] },
+      { $set: { source_type: "comment", source_media_id: String(event.media_id), source_label: rule?.name || null } },
+      { new: true },
+    );
+    return claimed || lead;
+  }
+
   return lead;
 }
 

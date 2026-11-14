@@ -8,6 +8,7 @@ const Lead = require("../models/Lead");
 const IgConversation = require("../models/IgConversation");
 const IgMessage = require("../models/IgMessage");
 const AgentLock = require("../models/AgentLock");
+const MediaInsight = require("../models/MediaInsight");
 const agentRouter = require("./agent");
 
 let mongoServer;
@@ -45,7 +46,9 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
-  await Promise.all([Lead.deleteMany({}), IgConversation.deleteMany({}), IgMessage.deleteMany({}), AgentLock.deleteMany({})]);
+  await Promise.all([
+    Lead.deleteMany({}), IgConversation.deleteMany({}), IgMessage.deleteMany({}), AgentLock.deleteMany({}), MediaInsight.deleteMany({}),
+  ]);
 });
 
 async function makeLead(extra = {}) {
@@ -274,5 +277,46 @@ describe("follow-ups, skips, lead magnets, stats", () => {
     expect(s.body.total).toBe(4);
     expect(s.body.skipped).toBe(1);
     expect(s.body.lead_magnets).toEqual({ posted: 1, building: 0, built: 0, sent: 1 });
+  });
+});
+
+describe("lead source", () => {
+  it("accepts the source fields and resolves a reel URL to its media id", async () => {
+    await MediaInsight.create({
+      account_id: accountId, ig_user_id: OWNER_IG, media_id: "18136828201622965",
+      permalink: "https://www.instagram.com/reel/DdHIlYTANWd/", posted_at: new Date(),
+    });
+    await MediaInsight.create({
+      account_id: otherAccountId, ig_user_id: "x", media_id: "other_media",
+      permalink: "https://www.instagram.com/reel/OTHER1/", posted_at: new Date(),
+    });
+    await makeLead();
+
+    const res = await request(app)
+      .patch(`/api/agent/contacts/${CONTACT_IG}`)
+      .send({ source_type: "reel", source_label: "System reel", source_url: "https://instagram.com/cristiandealflow/reel/DdHIlYTANWd/?igsh=abc" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.contact).toMatchObject({
+      source_type: "reel",
+      source_label: "System reel",
+      source_media_id: "18136828201622965",
+      source_url: "https://instagram.com/cristiandealflow/reel/DdHIlYTANWd/?igsh=abc",
+    });
+
+    // another account's post is never matched
+    const other = await request(app).put("/api/agent/contacts/@someone").send({ source_url: "https://www.instagram.com/reel/OTHER1/" });
+    expect(other.body.contact.source_media_id).toBeNull();
+  });
+
+  it("keeps an explicit source_media_id and rejects an unknown source_type", async () => {
+    await makeLead();
+    const ok = await request(app)
+      .put(`/api/agent/contacts/${CONTACT_IG}`)
+      .send({ source_type: "story", source_label: "Bonnie story", source_media_id: "story_1" });
+    expect(ok.body.contact).toMatchObject({ source_type: "story", source_media_id: "story_1" });
+
+    const bad = await request(app).patch(`/api/agent/contacts/${CONTACT_IG}`).send({ source_type: "billboard" });
+    expect(bad.status).toBe(400);
   });
 });

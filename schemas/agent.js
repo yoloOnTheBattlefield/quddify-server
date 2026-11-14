@@ -1,5 +1,5 @@
 const { z } = require("zod");
-const { STAGES, PITCH_OFFERS, LEAD_MAGNET_STATUSES } = require("../models/Lead");
+const { STAGES, PITCH_OFFERS, LEAD_MAGNET_STATUSES, SOURCE_TYPES } = require("../models/Lead");
 
 const isoDate = z.string().datetime({ offset: true });
 const text = z.string().trim().max(5000);
@@ -13,6 +13,10 @@ const contactFields = {
   last_name: text.nullable().optional(),
   email: z.string().trim().max(320).nullable().optional(),
   source: z.string().trim().max(100).nullable().optional(),
+  source_type: z.enum(SOURCE_TYPES).nullable().optional(),
+  source_label: z.string().trim().max(200).nullable().optional(),
+  source_media_id: z.string().trim().max(64).nullable().optional(),
+  source_url: z.string().trim().max(2000).nullable().optional(),
   stage: z.enum(STAGES).optional(),
   skip: z.boolean().optional(),
   skip_reason: text.nullable().optional(),

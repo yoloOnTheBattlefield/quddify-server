@@ -460,3 +460,33 @@ describe("recordSentDm", () => {
     expect((await Lead.findOne({ ig_username: "someone" })).link_sent_at).toBeTruthy();
   });
 });
+
+describe("upsertLeadFromComment source", () => {
+  const event = (extra = {}) => ({
+    account_id: accountId,
+    commenter_username: "florin_x",
+    media_id: "media_9",
+    ...extra,
+  });
+
+  it("marks a new commenter as a comment lead on that post", async () => {
+    const lead = await commentAutomation.upsertLeadFromComment(event(), { name: "System" }, null);
+
+    expect(lead).toMatchObject({ source_type: "comment", source_media_id: "media_9", source_label: "System" });
+    expect(lead.source).toBe("comment:System");
+  });
+
+  it("keeps the first touch when the lead already has a source", async () => {
+    await Lead.create({
+      account_id: String(accountId),
+      ig_username: "florin_x",
+      source_type: "story",
+      source_label: "Bonnie story",
+    });
+
+    const lead = await commentAutomation.upsertLeadFromComment(event(), { name: "System" }, null);
+
+    expect(lead).toMatchObject({ source_type: "story", source_label: "Bonnie story", source_media_id: null });
+    expect(lead.source).toBe("comment:System");
+  });
+});
