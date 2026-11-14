@@ -104,7 +104,9 @@ own lock.
 curl -s "${H[@]}" $API/contacts/$CONV
 ```
 
-This returns `{"contact": <contact>, "messages": [...], "lock": {...} | null}`. It
+This returns `{"contact": <contact>, "next_booking": {...} | null, "messages": [...], "lock": {...} | null}`.
+`next_booking` is the soonest scheduled future call:
+`{"id","uid","start","end","status":"scheduled","meeting_url","provider","updated_at"}`. It
 includes the last 30 messages, oldest first:
 `{"id","direction":"inbound|outbound","sent_by":"lead|bot|cristian|unknown","text","at","zernio_message_id"}`.
 
@@ -167,8 +169,8 @@ curl -s "${H[@]}" -X PATCH $API/contacts/$CONV -d '{"stage":"pitched","pitch":{"
 # negotiation (hand to Cristian)
 curl -s "${H[@]}" -X PATCH $API/contacts/$CONV -d '{"stage":"negotiating","pitch":{"counter":"1k a month"}}'
 
-# booked, won, lost
-curl -s "${H[@]}" -X PATCH $API/contacts/$CONV -d '{"stage":"booked"}'
+# won, lost (booked is set by Cal.com, see "Offering a call")
+curl -s "${H[@]}" -X PATCH $API/contacts/$CONV -d '{"stage":"won"}'
 ```
 
 Rules for writing:
@@ -224,6 +226,28 @@ curl -s "${H[@]}" -X DELETE "$API/locks/$CONV?run_id=run-2026-11-14T15:24:03Z-ab
 ```
 
 This returns `{"released":true}`. The lock also expires on its own after `ttl_seconds`.
+
+## Offering a call (Cal.com)
+
+Never send the bare booking link. Ask the CRM for this lead's personal link and send that:
+
+```bash
+curl -s "${H[@]}" $API/booking-link/$CONV
+# → {"url":"https://cal.com/…/ig?metadata[ig_user_id]=…&metadata[ig]=…&name=…&email=…",
+#    "booking_url":"https://cal.com/…/ig","contact_id":"…","next_booking":null}
+```
+
+The lead's IG id rides along in the link, so when they book, Cal.com tells the CRM and
+the CRM matches the booking to this contact by itself (email is the fallback). Then:
+
+- the contact moves to `stage: "booked"` and `booked_at` is set. **Don't PATCH
+  `booked` yourself.**
+- a reschedule keeps it booked with the new time
+- a cancellation moves it back to the stage it had before booking
+- `next_booking` on the contact shows the call time and Meet link, and
+  `GET /events` returns `bookings` changed since `since`
+
+A `409` means Cal.com isn't connected yet; tell Cristian.
 
 ## Follow-ups
 
