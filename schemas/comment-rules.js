@@ -55,4 +55,14 @@ const listEventsSchema = z.object({
   params: z.object({}).strip(),
 });
 
-module.exports = { createRuleSchema, updateRuleSchema, idParamSchema, listEventsSchema };
+const statsSchema = z.object({
+  body: z.object({}).strip().optional(),
+  query: z
+    .object({
+      days: z.coerce.number().int().min(1).max(365).optional(),
+    })
+    .strip(),
+  params: z.object({}).strip(),
+});
+
+module.exports = { createRuleSchema, updateRuleSchema, idParamSchema, listEventsSchema, statsSchema };

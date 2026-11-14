@@ -4,13 +4,14 @@ const express = require("express");
 const CommentRule = require("../models/CommentRule");
 const CommentEvent = require("../models/CommentEvent");
 const Account = require("../models/Account");
-const OutboundAccount = require("../models/OutboundAccount");
+const Lead = require("../models/Lead");
 const validate = require("../middleware/validate");
 const {
   createRuleSchema,
   updateRuleSchema,
   idParamSchema,
   listEventsSchema,
+  statsSchema,
 } = require("../schemas/comment-rules");
 
 const router = express.Router();
@@ -35,17 +36,12 @@ function pickWritable(body) {
 }
 
 // Confirm the IG account is actually connected to the caller's account, so a
-// rule can't be pointed at somebody else's Instagram.
+// rule can't be pointed at somebody else's Instagram. Either connection path
+// counts: our own Meta app (ig_oauth) or Zernio.
 async function ownsIgAccount(accountId, igUserId) {
-  const onAccount = await Account.exists({
+  return !!(await Account.exists({
     _id: accountId,
-    "ig_oauth.ig_user_id": igUserId,
-  });
-  if (onAccount) return true;
-
-  return !!(await OutboundAccount.exists({
-    account_id: accountId,
-    "ig_oauth.ig_user_id": igUserId,
+    $or: [{ "ig_oauth.ig_user_id": igUserId }, { "zernio.ig_user_id": igUserId }],
   }));
 }
 
@@ -53,14 +49,7 @@ async function ownsIgAccount(accountId, igUserId) {
 router.get("/ig-accounts", async (req, res) => {
   try {
     const account = await Account.findById(req.account._id)
-      .select("ig_oauth.ig_user_id ig_oauth.ig_username")
-      .lean();
-
-    const outbound = await OutboundAccount.find({
-      account_id: req.account._id,
-      "ig_oauth.ig_user_id": { $ne: null },
-    })
-      .select("ig_oauth.ig_user_id ig_oauth.ig_username")
+      .select("ig_oauth.ig_user_id ig_oauth.ig_username zernio.ig_user_id zernio.ig_username")
       .lean();
 
     const accounts = [];
@@ -71,17 +60,87 @@ router.get("/ig-accounts", async (req, res) => {
         kind: "account",
       });
     }
-    for (const ob of outbound) {
-      accounts.push({
-        ig_user_id: ob.ig_oauth.ig_user_id,
-        ig_username: ob.ig_oauth.ig_username,
-        kind: "outbound",
-      });
+    const z = account?.zernio;
+    if (z?.ig_user_id && z.ig_user_id !== account?.ig_oauth?.ig_user_id) {
+      accounts.push({ ig_user_id: z.ig_user_id, ig_username: z.ig_username, kind: "zernio" });
     }
 
     res.json({ accounts });
   } catch (err) {
     logger.error("[comment-rules] ig-accounts error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─── GET /api/comment-rules/stats — which lead magnet gets requested most ────
+// A rule is a lead magnet (name + link_url). "requests" = comments that matched
+// the rule inside the window; active rules with no requests are listed last.
+router.get("/stats", validate(statsSchema), async (req, res) => {
+  try {
+    const days = Number(req.query.days) || 30;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const accountId = req.account._id;
+
+    const [groups, rules] = await Promise.all([
+      CommentEvent.aggregate([
+        { $match: { account_id: accountId, rule_id: { $ne: null }, createdAt: { $gte: since } } },
+        {
+          $group: {
+            _id: "$rule_id",
+            requests: { $sum: 1 },
+            sent: { $sum: { $cond: [{ $eq: ["$status", "sent"] }, 1, 0] } },
+            lead_ids: { $addToSet: "$lead_id" },
+          },
+        },
+      ]),
+      CommentRule.find({ account_id: accountId })
+        .select("name keywords link_url active")
+        .lean(),
+    ]);
+
+    const leadIds = groups.flatMap((g) => g.lead_ids.filter(Boolean));
+    const bookedIds = new Set(
+      leadIds.length
+        ? (await Lead.find({ _id: { $in: leadIds }, booked_at: { $ne: null } }).select("_id").lean())
+            .map((l) => String(l._id))
+        : [],
+    );
+
+    const ruleById = new Map(rules.map((r) => [String(r._id), r]));
+    const rows = groups.map((g) => {
+      const rule = ruleById.get(String(g._id));
+      const leads = g.lead_ids.filter(Boolean).map(String);
+      return {
+        rule_id: g._id,
+        name: rule?.name || "(deleted rule)",
+        keywords: rule?.keywords || [],
+        link_url: rule?.link_url || null,
+        requests: g.requests,
+        sent: g.sent,
+        leads: leads.length,
+        booked: leads.filter((id) => bookedIds.has(id)).length,
+      };
+    });
+    rows.sort((a, b) => b.requests - a.requests || b.sent - a.sent);
+
+    const seen = new Set(rows.map((r) => String(r.rule_id)));
+    for (const r of rules) {
+      if (!r.active || seen.has(String(r._id))) continue;
+      rows.push({
+        rule_id: r._id,
+        name: r.name,
+        keywords: r.keywords || [],
+        link_url: r.link_url || null,
+        requests: 0,
+        sent: 0,
+        leads: 0,
+        booked: 0,
+      });
+    }
+
+    res.json({ days, rules: rows });
+  } catch (err) {
+    logger.error("[comment-rules] stats error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

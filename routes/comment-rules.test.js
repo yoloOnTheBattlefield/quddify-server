@@ -4,7 +4,7 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 const request = require("supertest");
 
 const Account = require("../models/Account");
-const OutboundAccount = require("../models/OutboundAccount");
+const Lead = require("../models/Lead");
 const CommentRule = require("../models/CommentRule");
 const CommentEvent = require("../models/CommentEvent");
 const commentRulesRouter = require("./comment-rules");
@@ -14,7 +14,7 @@ let app;
 const accountId = new mongoose.Types.ObjectId();
 const otherAccountId = new mongoose.Types.ObjectId();
 const IG_USER_ID = "17841400000000000";
-const OUTBOUND_IG_USER_ID = "17841499999999999";
+const ZERNIO_IG_USER_ID = "17841499999999999";
 
 const validRule = {
   ig_user_id: IG_USER_ID,
@@ -33,13 +33,9 @@ beforeAll(async () => {
     ghl: "loc_test",
     name: "Test",
     ig_oauth: { ig_user_id: IG_USER_ID, ig_username: "ourbrand" },
+    zernio: { ig_user_id: ZERNIO_IG_USER_ID, ig_username: "viazernio" },
   });
   await Account.create({ _id: otherAccountId, ghl: "loc_other", name: "Other" });
-  await OutboundAccount.create({
-    account_id: accountId,
-    username: "sender1",
-    ig_oauth: { ig_user_id: OUTBOUND_IG_USER_ID, ig_username: "sender1" },
-  });
 
   app = express();
   app.use(express.json());
@@ -58,6 +54,7 @@ afterAll(async () => {
 afterEach(async () => {
   await CommentRule.deleteMany({});
   await CommentEvent.deleteMany({});
+  await Lead.deleteMany({});
 });
 
 describe("POST /api/comment-rules", () => {
@@ -71,10 +68,10 @@ describe("POST /api/comment-rules", () => {
     expect(res.body.rule.account_id).toBe(accountId.toString());
   });
 
-  it("creates a rule for a connected outbound IG account", async () => {
+  it("creates a rule for an IG account connected through Zernio", async () => {
     const res = await request(app)
       .post("/api/comment-rules")
-      .send({ ...validRule, ig_user_id: OUTBOUND_IG_USER_ID });
+      .send({ ...validRule, ig_user_id: ZERNIO_IG_USER_ID });
 
     expect(res.status).toBe(201);
   });
@@ -250,15 +247,68 @@ describe("GET /api/comment-rules/events", () => {
 });
 
 describe("GET /api/comment-rules/ig-accounts", () => {
-  it("lists the account's and outbound IG accounts", async () => {
+  it("lists the Meta and Zernio IG accounts", async () => {
     const res = await request(app).get("/api/comment-rules/ig-accounts");
 
     expect(res.status).toBe(200);
     expect(res.body.accounts).toEqual(
       expect.arrayContaining([
         { ig_user_id: IG_USER_ID, ig_username: "ourbrand", kind: "account" },
-        { ig_user_id: OUTBOUND_IG_USER_ID, ig_username: "sender1", kind: "outbound" },
+        { ig_user_id: ZERNIO_IG_USER_ID, ig_username: "viazernio", kind: "zernio" },
       ]),
     );
+  });
+});
+
+describe("GET /api/comment-rules/stats", () => {
+  function event(rule, n, extra = {}) {
+    return CommentEvent.create({
+      account_id: accountId,
+      rule_id: rule._id,
+      ig_user_id: IG_USER_ID,
+      comment_id: `c_${rule.name}_${n}`,
+      media_id: "m1",
+      comment_text: "guide",
+      commenter_ig_id: `u${n}`,
+      commenter_username: `user${n}`,
+      ...extra,
+    });
+  }
+
+  it("ranks lead magnets by requests and lists idle active rules last", async () => {
+    const base = { account_id: accountId, ig_user_id: IG_USER_ID, dm_text: "x" };
+    const guide = await CommentRule.create({ ...base, name: "Guide", keywords: ["guide"], link_url: "https://g" });
+    const audit = await CommentRule.create({ ...base, name: "Audit", keywords: ["audit"] });
+    await CommentRule.create({ ...base, name: "Idle", keywords: ["idle"] });
+    await CommentRule.create({ ...base, name: "Off", keywords: ["off"], active: false });
+
+    const booked = await Lead.create({ account_id: String(accountId), ig_username: "user1", booked_at: new Date() });
+    const plain = await Lead.create({ account_id: String(accountId), ig_username: "user2" });
+
+    await event(guide, 1, { status: "sent", lead_id: booked._id });
+    await event(guide, 2, { status: "sent", lead_id: plain._id });
+    await event(guide, 3, { status: "failed" });
+    await event(audit, 4, { status: "sent", lead_id: plain._id });
+    const old = await event(audit, 5, { status: "sent" });
+    await CommentEvent.collection.updateOne(
+      { _id: old._id },
+      { $set: { createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000) } },
+    );
+
+    const res = await request(app).get("/api/comment-rules/stats?days=30");
+
+    expect(res.status).toBe(200);
+    expect(res.body.days).toBe(30);
+    expect(res.body.rules.map((r) => r.name)).toEqual(["Guide", "Audit", "Idle"]);
+    expect(res.body.rules[0]).toMatchObject({
+      keywords: ["guide"], link_url: "https://g", requests: 3, sent: 2, leads: 2, booked: 1,
+    });
+    expect(res.body.rules[1]).toMatchObject({ requests: 1, sent: 1, leads: 1, booked: 0 });
+    expect(res.body.rules[2]).toMatchObject({ requests: 0, sent: 0, leads: 0, booked: 0 });
+  });
+
+  it("rejects days outside 1-365", async () => {
+    const res = await request(app).get("/api/comment-rules/stats?days=0");
+    expect(res.status).toBe(400);
   });
 });
