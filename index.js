@@ -82,6 +82,7 @@ const socketManager = require("./services/socketManager");
 const youtubeScheduler = require("./services/youtubeScheduler");
 const midnightReportScheduler = require("./services/midnightReportScheduler");
 const commentAutomationScheduler = require("./services/commentAutomationScheduler");
+const contentInsightsScheduler = require("./services/contentInsightsScheduler");
 
 const app = express();
 // Railway terminates TLS at its proxy. Without this, req.protocol reports
@@ -352,6 +353,7 @@ connectDB()
     youtubeScheduler.start();
     midnightReportScheduler.start();
     commentAutomationScheduler.start();
+    contentInsightsScheduler.start();
 
     logger.info("Startup complete");
   })

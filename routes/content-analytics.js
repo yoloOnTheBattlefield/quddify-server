@@ -21,9 +21,10 @@ router.get("/", async (req, res) => {
       .sort({ posted_at: -1 })
       .lean();
 
-    // Leads attributed to a post come from the comment events fired on it.
+    // Leads attributed to a post come from the comment events fired on it,
+    // counted inside the same window as the posts.
     const byMedia = await CommentEvent.aggregate([
-      { $match: { account_id: req.account._id, media_id: { $ne: null } } },
+      { $match: { account_id: req.account._id, media_id: { $ne: null }, createdAt: { $gte: since } } },
       {
         $group: {
           _id: "$media_id",
@@ -79,13 +80,14 @@ router.get("/", async (req, res) => {
       (acc, r) => ({
         posts: acc.posts + 1,
         views: acc.views + (r.views || 0),
+        reach: acc.reach + (r.reach || 0),
         likes: acc.likes + (r.likes || 0),
         comments: acc.comments + (r.comments || 0),
         shares: acc.shares + (r.shares || 0),
         saved: acc.saved + (r.saved || 0),
         leads_generated: acc.leads_generated + r.leads_generated,
       }),
-      { posts: 0, views: 0, likes: 0, comments: 0, shares: 0, saved: 0, leads_generated: 0 },
+      { posts: 0, views: 0, reach: 0, likes: 0, comments: 0, shares: 0, saved: 0, leads_generated: 0 },
     );
 
     res.json({ posts: rows, totals, days });

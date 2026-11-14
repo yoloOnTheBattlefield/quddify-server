@@ -157,7 +157,10 @@ describe("GET /api/content-analytics", () => {
 
     const res = await request(app).get("/api/content-analytics");
 
-    expect(res.body.totals).toMatchObject({ posts: 2, views: 15000, likes: 130 });
+    expect(res.body.totals).toEqual({
+      posts: 2, views: 15000, reach: 16000, likes: 130, comments: 28,
+      shares: 60, saved: 90, leads_generated: 0,
+    });
   });
 });
 
