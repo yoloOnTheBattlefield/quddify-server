@@ -30,6 +30,7 @@ const aiPromptRoutes = require("./routes/ai-prompts");
 const researchRoutes = require("./routes/research");
 const manychatRoutes = require("./routes/manychat");
 const commentRuleRoutes = require("./routes/comment-rules");
+const agentRoutes = require("./routes/agent");
 const zernioRoutes = require("./routes/zernio");
 const contentAnalyticsRoutes = require("./routes/content-analytics");
 const zernioWebhookRoutes = require("./routes/zernio-webhook");
@@ -216,6 +217,7 @@ const connectDB = async () => {
       require("./models/Channel"),
       require("./models/User"),
       require("./models/Payment"),
+      require("./models/AgentLock"),
     ];
     for (const Model of models) {
       try {
@@ -275,6 +277,7 @@ app.use("/api/ai-prompts", aiPromptRoutes);
 app.use("/api/research", researchRoutes);
 app.use("/api/manychat", webhookLimiter, manychatRoutes);
 app.use("/api/comment-rules", commentRuleRoutes);
+app.use("/api/agent", agentRoutes);
 app.use("/api/zernio", zernioRoutes);
 app.use("/api/content-analytics", contentAnalyticsRoutes);
 app.use("/api/ig-conversations", igConversationRoutes);
