@@ -45,6 +45,8 @@ Every contact response returns this shape:
   "zernio_conversation_id": "6af8…0f",
   "first_name": null, "last_name": null, "email": null,
   "source": "bonnie_story",
+  "source_type": "story", "source_label": "Bonnie story",
+  "source_media_id": null, "source_url": null,
   "stage": "qualifying",
   "stage_history": [{ "from": "new", "to": "qualifying", "at": "…", "by": "agent" }],
   "skip": false, "skip_reason": null,
@@ -69,6 +71,7 @@ These are the allowed values:
 - `pitch.offer`: `sprint_5k` ($5,000 for 90 days) or `consult_500` ($500 for one hour)
 - `lead_magnet.status`: `none`, `posted` (brief posted to Slack), `building`, `built`, `sent`
 - `language`: `en`, `ro`
+- `source_type`: `story`, `reel`, `post`, `comment`, `organic`, `other`
 - `live`: true while Cristian is replying himself. It is set for 60 minutes from his last
   message that you posted with `sent_by: "cristian"`. **While `live` is true, do not
   reply.**
@@ -175,6 +178,44 @@ Rules for writing:
   `none`, the brief was already posted. Don't post it again.
 - The over-$10k-a-month rule reads `monthly_revenue_usd`, so always set it when you
   know the number.
+
+### 5b. Record where the lead came from (once)
+
+Set the source the first time you can tell. If `contact.source_type` is already set, leave
+it alone: the first touch wins.
+
+| What you see in the thread | Set |
+|---|---|
+| Reply to a story (theirs or someone else's, e.g. Bonnie's) | `source_type: "story"`, `source_label: "Bonnie story"` (who or what the story was) |
+| They shared or named one of Cristian's reels or posts | `source_type: "reel"` (or `"post"`), `source_label: "System reel"`, `source_url: "<the reel URL>"` |
+| They commented a keyword and the automation DMed them | nothing, the automation sets `source_type: "comment"` itself |
+| A plain DM with no story, reel or comment | `source_type: "organic"` |
+| Anything else | `source_type: "other"` plus a `source_label` |
+
+```bash
+curl -s "${H[@]}" -X PATCH $API/contacts/$CONV -d '{"source_type":"reel","source_label":"System reel","source_url":"https://www.instagram.com/reel/DdHIlYTANWd/"}'
+```
+
+When you send a `source_url` for one of Cristian's posts or reels, the CRM finds the post by
+its shortcode (`/reel/X/`, `/reels/X/`, `/p/X/`, `/tv/X/`) and fills `source_media_id`
+itself. That is what credits the lead to the post on the Content page. If the post isn't in
+the CRM's post list yet (it syncs daily), `source_media_id` stays null; the label still
+counts in the by-source totals. Send `source_media_id` directly only if you have the
+Instagram media id.
+
+### 5c. Keyword with no comment rule
+
+When a lead mentions a comment keyword (for example "SYSTEM") that has no active comment
+rule, the comment automation never fired for them. Check once per keyword:
+
+```bash
+curl -s "${H[@]}" https://server-production-38bfcd7a.up.railway.app/api/comment-rules
+# → {"rules":[{"name":"…","keywords":["…"],"active":true,…}]}
+```
+
+If no active rule has that keyword (case-insensitive), alert Cristian once:
+`No comment rule for keyword "SYSTEM" (seen from @handle).` Don't repeat the alert for the
+same keyword.
 
 ### 6. Release the lock
 
