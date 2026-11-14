@@ -9,6 +9,7 @@ jest.mock("../services/instagramInsights", () => ({
 
 const MediaInsight = require("../models/MediaInsight");
 const CommentEvent = require("../models/CommentEvent");
+const Lead = require("../models/Lead");
 const instagramInsights = require("../services/instagramInsights");
 const contentAnalyticsRouter = require("./content-analytics");
 
@@ -60,6 +61,7 @@ afterEach(async () => {
   jest.clearAllMocks();
   await MediaInsight.deleteMany({});
   await CommentEvent.deleteMany({});
+  await Lead.deleteMany({});
 });
 
 describe("GET /api/content-analytics", () => {
@@ -159,8 +161,52 @@ describe("GET /api/content-analytics", () => {
 
     expect(res.body.totals).toEqual({
       posts: 2, views: 15000, reach: 16000, likes: 130, comments: 28,
-      shares: 60, saved: 90, leads_generated: 0,
+      shares: 60, saved: 90, comment_leads: 0, dm_leads: 0, leads_generated: 0,
     });
+  });
+
+  it("adds DM leads tied to a post and counts a lead in both sets once", async () => {
+    await MediaInsight.create(post());
+    const both = await Lead.create({ account_id: String(accountId), ig_username: "both", source_type: "reel", source_media_id: "media_1" });
+    await Lead.create({ account_id: String(accountId), ig_username: "dm_only", source_type: "reel", source_media_id: "media_1" });
+    // a comment-sourced lead is counted through its comment event, not as a DM lead
+    await Lead.create({ account_id: String(accountId), ig_username: "commenter", source_type: "comment", source_media_id: "media_1" });
+    // another account's lead pointing at the same media id
+    await Lead.create({ account_id: String(otherAccountId), ig_username: "x", source_type: "reel", source_media_id: "media_1" });
+    await CommentEvent.create({
+      account_id: accountId, ig_user_id: IG_USER_ID, comment_id: "c1", media_id: "media_1", status: "sent", lead_id: both._id,
+    });
+
+    const res = await request(app).get("/api/content-analytics");
+    const row = res.body.posts[0];
+
+    expect(row.comment_leads).toBe(1);
+    expect(row.dm_leads).toBe(2);
+    expect(row.leads_generated).toBe(2);
+    expect(row.leads_per_1k_views).toBe(0.2);
+    expect(res.body.totals).toMatchObject({ comment_leads: 1, dm_leads: 2, leads_generated: 2 });
+  });
+
+  it("groups leads created in the window by source", async () => {
+    const old = mongoose.Types.ObjectId.createFromTime(Math.floor((Date.now() - 100 * 86400000) / 1000));
+    await Lead.create([
+      { account_id: String(accountId), ig_username: "a", source_type: "story", source_label: "Bonnie story", booked_at: new Date() },
+      { account_id: String(accountId), ig_username: "b", source_type: "story", source_label: "Bonnie story", closed_at: new Date() },
+      { account_id: String(accountId), ig_username: "c", source_type: "organic" },
+      { account_id: String(accountId), ig_username: "d" },
+      { _id: old, account_id: String(accountId), ig_username: "old", source_type: "organic" },
+      { account_id: String(otherAccountId), ig_username: "e", source_type: "organic" },
+    ]);
+
+    const res = await request(app).get("/api/content-analytics?days=30");
+
+    expect(res.body.by_source).toEqual([
+      { source_type: "story", source_label: "Bonnie story", leads: 2, booked: 1, won: 1 },
+      expect.objectContaining({ leads: 1 }),
+      expect.objectContaining({ leads: 1 }),
+    ]);
+    const rest = res.body.by_source.slice(1).map((r) => r.source_type).sort();
+    expect(rest).toEqual(["organic", "unknown"]);
   });
 });
 
