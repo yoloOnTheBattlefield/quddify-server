@@ -79,6 +79,11 @@ router.get("/me", async (req, res) => {
             connected_at: account.ig_oauth.connected_at,
           }
         : null,
+      calcom: {
+        enabled: !!account.calcom?.enabled,
+        booking_url: account.calcom?.booking_url || null,
+        event_type_ids: account.calcom?.event_type_ids || [],
+      },
       telegram_connected: !!(account.telegram_bot_token && account.telegram_chat_id),
       telegram_chat_id: account.telegram_chat_id || null,
       lead_visibility: {

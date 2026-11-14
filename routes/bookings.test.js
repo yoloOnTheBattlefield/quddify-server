@@ -239,3 +239,27 @@ describe("POST /api/bookings/sync", () => {
     expect(res2.body.synced).toBe(0);
   });
 });
+
+describe("GET /api/bookings filters for upcoming calls", () => {
+  it("filters by lead_id, upcoming, and sorts ascending", async () => {
+    const a = await Lead.create({ account_id: accountId.toString(), first_name: "A" });
+    const b = await Lead.create({ account_id: accountId.toString(), first_name: "B" });
+    const later = new Date(Date.now() + 7200000);
+    const sooner = new Date(Date.now() + 3600000);
+    await Booking.create({ account_id: accountId, lead_id: a._id, booking_date: later, status: "scheduled" });
+    await Booking.create({ account_id: accountId, lead_id: a._id, booking_date: sooner, status: "scheduled" });
+    await Booking.create({ account_id: accountId, lead_id: a._id, booking_date: new Date(Date.now() - 3600000), status: "scheduled" });
+    await Booking.create({ account_id: accountId, lead_id: b._id, booking_date: sooner, status: "scheduled" });
+    await Booking.create({ account_id: new mongoose.Types.ObjectId(), lead_id: a._id, booking_date: sooner, status: "scheduled" });
+
+    const byLead = await request(app).get(`/api/bookings?lead_id=${a._id}`);
+    expect(byLead.status).toBe(200);
+    expect(byLead.body.bookings).toHaveLength(3);
+
+    const upcoming = await request(app).get(`/api/bookings?lead_id=${a._id}&upcoming=true&status=scheduled&sort=booking_date_asc`);
+    expect(upcoming.body.bookings.map((x) => new Date(x.booking_date).toISOString())).toEqual([sooner.toISOString(), later.toISOString()]);
+
+    const bad = await request(app).get("/api/bookings?lead_id=nope");
+    expect(bad.status).toBe(400);
+  });
+});

@@ -201,3 +201,30 @@ describe("POST /api/accounts/:id/password", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("GET /accounts/me calcom status", () => {
+  it("exposes calcom enabled/booking_url/event_type_ids and never the secret or webhook id", async () => {
+    const meApp = express();
+    meApp.use(express.json());
+    meApp.use((req, _res, next) => {
+      req.account = {
+        _id: accountId,
+        calcom: { enabled: true, booking_url: "https://cal.com/me/ig", event_type_ids: [7876697], webhook_secret: "SECRET", webhook_id: "123" },
+      };
+      req.user = { userId: new mongoose.Types.ObjectId(), role: 1 };
+      next();
+    });
+    meApp.use("/api/accounts", accountsRouter);
+    const res = await request(meApp).get("/api/accounts/me");
+    expect(res.status).toBe(200);
+    expect(res.body.calcom).toEqual({ enabled: true, booking_url: "https://cal.com/me/ig", event_type_ids: [7876697] });
+    expect(JSON.stringify(res.body)).not.toContain("SECRET");
+    expect(JSON.stringify(res.body)).not.toContain("webhook_id");
+  });
+
+  it("reports calcom disabled when not connected", async () => {
+    const res = await request(app).get("/api/accounts/me");
+    expect(res.status).toBe(200);
+    expect(res.body.calcom).toEqual({ enabled: false, booking_url: null, event_type_ids: [] });
+  });
+});

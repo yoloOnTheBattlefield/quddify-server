@@ -366,3 +366,45 @@ describe("dashboard funnel stays in step with stage and thread", () => {
     expect(String(linked.lead_id)).toBe(String(lead._id));
   });
 });
+
+describe("GET /booking-link/:ref and next_booking", () => {
+  const Booking = require("../models/Booking");
+  afterEach(async () => {
+    await Booking.deleteMany({});
+    await Account.updateOne({ _id: accountId }, { $unset: { calcom: 1 } });
+  });
+
+  it("409s until Cal.com is connected", async () => {
+    await makeLead();
+    const res = await request(app).get(`/api/agent/booking-link/${CONTACT_IG}`);
+    expect(res.status).toBe(409);
+  });
+
+  it("builds a personal link with the IG id as booking metadata", async () => {
+    await Account.updateOne({ _id: accountId }, { $set: { calcom: { enabled: true, booking_url: "https://cal.com/me/ig", event_type_ids: [1] } } });
+    await makeLead({ first_name: "Amine", last_name: "Biz", email: "a@b.co" });
+    const res = await request(app).get(`/api/agent/booking-link/@amine_biz`);
+    expect(res.status).toBe(200);
+    const url = new URL(res.body.url);
+    expect(url.origin + url.pathname).toBe("https://cal.com/me/ig");
+    expect(url.searchParams.get("metadata[ig_user_id]")).toBe(CONTACT_IG);
+    expect(url.searchParams.get("metadata[ig]")).toBe("Amine_Biz");
+    expect(url.searchParams.get("name")).toBe("Amine Biz");
+    expect(url.searchParams.get("email")).toBe("a@b.co");
+    expect(res.body.booking_url).toBe("https://cal.com/me/ig");
+    expect(res.body.next_booking).toBeNull();
+  });
+
+  it("contact payload carries the next scheduled call", async () => {
+    const lead = await makeLead();
+    const soon = new Date(Date.now() + 86400000);
+    await Booking.create({ account_id: accountId, lead_id: lead._id, booking_date: new Date(Date.now() - 86400000), status: "scheduled" });
+    await Booking.create({ account_id: accountId, lead_id: lead._id, booking_date: soon, status: "scheduled", meeting_url: "https://meet.google.com/x", provider: "calcom", calcom_uid: "u1" });
+    const res = await request(app).get(`/api/agent/contacts/${CONTACT_IG}`);
+    expect(res.body.next_booking).toMatchObject({ status: "scheduled", meeting_url: "https://meet.google.com/x", uid: "u1" });
+    expect(new Date(res.body.next_booking.start).toISOString()).toBe(soon.toISOString());
+
+    const ev = await request(app).get(`/api/agent/events?ref=${CONTACT_IG}&since=${new Date(Date.now() - 60000).toISOString()}`);
+    expect(ev.body.bookings).toHaveLength(2);
+  });
+});

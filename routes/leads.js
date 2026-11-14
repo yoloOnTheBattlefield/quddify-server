@@ -3,6 +3,7 @@ const escapeRegex = require("../utils/escapeRegex");
 const logger = require("../utils/logger").child({ module: "leads" });
 const express = require("express");
 const Lead = require("../models/Lead");
+const Booking = require("../models/Booking");
 const Account = require("../models/Account");
 const LeadNote = require("../models/LeadNote");
 const LeadTask = require("../models/LeadTask");
@@ -121,7 +122,19 @@ router.get("/:id", async (req, res) => {
     const lead = await Lead.findOne(filter).lean();
     if (!lead) return res.status(404).json({ error: "Not found" });
 
-    res.json(lead);
+    const next = await Booking.findOne({
+      lead_id: lead._id,
+      status: "scheduled",
+      booking_date: { $gte: new Date() },
+    })
+      .sort({ booking_date: 1 })
+      .lean();
+    res.json({
+      ...lead,
+      next_booking: next
+        ? { start: next.booking_date, end: next.end_date || null, status: next.status, meeting_url: next.meeting_url || null }
+        : null,
+    });
   } catch (error) {
     logger.error("Get lead error:", error);
     res.status(500).json({ error: "Internal server error" });

@@ -682,3 +682,30 @@ describe("POST /api/leads/lookup", () => {
     expect(res.body.found["person-240"]).toBeUndefined();
   });
 });
+
+describe("GET /leads/:id next_booking", () => {
+  const Booking = require("../models/Booking");
+  afterEach(() => Booking.deleteMany({}));
+
+  it("is null without a future scheduled call", async () => {
+    const lead = await Lead.create({ account_id: accountId.toString(), first_name: "A" });
+    await Booking.create({ account_id: accountId, lead_id: lead._id, booking_date: new Date(Date.now() - 3600000), status: "scheduled" });
+    const res = await request(app).get(`/api/leads/${lead._id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.next_booking).toBeNull();
+    expect(res.body.first_name).toBe("A");
+  });
+
+  it("returns the soonest scheduled future call", async () => {
+    const lead = await Lead.create({ account_id: accountId.toString(), first_name: "A" });
+    const soon = new Date(Date.now() + 3600000);
+    const end = new Date(soon.getTime() + 1800000);
+    await Booking.create({ account_id: accountId, lead_id: lead._id, booking_date: new Date(Date.now() + 7200000), status: "scheduled" });
+    await Booking.create({ account_id: accountId, lead_id: lead._id, booking_date: soon, end_date: end, status: "scheduled", meeting_url: "https://meet.google.com/x" });
+    await Booking.create({ account_id: accountId, lead_id: lead._id, booking_date: new Date(Date.now() + 1000), status: "cancelled" });
+    const res = await request(app).get(`/api/leads/${lead._id}`);
+    expect(res.body.next_booking).toEqual({
+      start: soon.toISOString(), end: end.toISOString(), status: "scheduled", meeting_url: "https://meet.google.com/x",
+    });
+  });
+});

@@ -148,14 +148,20 @@ router.get("/analytics", async (req, res) => {
 router.get("/", async (req, res) => {
   try {
     const accountId = req.account._id;
-    const { status, start_date, end_date, source, search, sort, today, page, limit } = req.query;
+    const { status, start_date, end_date, source, search, sort, today, upcoming, page, limit } = req.query;
 
     const matchFilter = { account_id: accountId };
 
     if (status && status !== "all") matchFilter.status = status;
     if (source) matchFilter.source = source;
+    if (req.query.lead_id) {
+      if (!mongoose.Types.ObjectId.isValid(req.query.lead_id)) return res.status(400).json({ error: "Invalid lead_id" });
+      matchFilter.lead_id = new mongoose.Types.ObjectId(req.query.lead_id);
+    }
 
-    if (today === "true") {
+    if (upcoming === "true") {
+      matchFilter.booking_date = { $gte: new Date() };
+    } else if (today === "true") {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
@@ -173,6 +179,7 @@ router.get("/", async (req, res) => {
 
     let sortObj = { createdAt: -1 };
     if (sort === "booking_date") sortObj = { booking_date: -1 };
+    if (sort === "booking_date_asc") sortObj = { booking_date: 1 };
 
     const pipeline = [
       { $match: matchFilter },

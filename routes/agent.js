@@ -13,6 +13,7 @@ const IgMessage = require("../models/IgMessage");
 const AgentLock = require("../models/AgentLock");
 const Account = require("../models/Account");
 const MediaInsight = require("../models/MediaInsight");
+const Booking = require("../models/Booking");
 const escapeRegex = require("../utils/escapeRegex");
 const { contactBody, messageBody, lockBody, skipsBody, ALLOWED_CONTACT_FIELDS } = require("../schemas/agent");
 
@@ -285,6 +286,32 @@ function newLeadFromRef(accountId, rawRef) {
 
 const notFound = (res, ref) => res.status(404).json({ error: "Contact not found", ref });
 
+function serializeBooking(b) {
+  if (!b) return null;
+  return {
+    id: String(b._id),
+    uid: b.calcom_uid || null,
+    start: b.booking_date || null,
+    end: b.end_date || null,
+    status: b.status,
+    meeting_url: b.meeting_url || null,
+    provider: b.provider || null,
+    updated_at: b.updatedAt || null,
+  };
+}
+
+async function nextBookingFor(accountObjectId, leadId) {
+  const b = await Booking.findOne({
+    account_id: accountObjectId,
+    lead_id: leadId,
+    status: "scheduled",
+    booking_date: { $gte: new Date() },
+  })
+    .sort({ booking_date: 1 })
+    .lean();
+  return serializeBooking(b);
+}
+
 // ─── contacts ───────────────────────────────────────────────────────────────
 
 router.get("/contacts/:ref", async (req, res) => {
@@ -301,6 +328,7 @@ router.get("/contacts/:ref", async (req, res) => {
 
     res.json({
       contact: serializeContact(lead),
+      next_booking: await nextBookingFor(req.account._id, lead._id),
       messages: msgs.reverse().map(serializeMessage),
       lock: lock ? { run_id: lock.run_id, expires_at: lock.expires_at } : null,
     });
@@ -453,11 +481,49 @@ router.get("/events", async (req, res) => {
       since,
       messages: msgs.map(serializeMessage),
       stage_changes: (lead.stage_history || []).filter((h) => h.at >= since),
+      bookings: (
+        await Booking.find({ account_id: req.account._id, lead_id: lead._id, updatedAt: { $gte: since } })
+          .sort({ updatedAt: 1 })
+          .lean()
+      ).map(serializeBooking),
       last_bot_send_at: lead.last_bot_send_at || null,
       live: !!(lead.live_until && lead.live_until > new Date()),
     });
   } catch (err) {
     logger.error("GET /events error:", err);
+    res.status(500).json({ error: "Internal error" });
+  }
+});
+
+// ─── booking link ───────────────────────────────────────────────────────────
+
+// A personal Cal.com link: the lead's IG id rides along as booking metadata, so the
+// webhook can match the booking to this contact without asking for a handle.
+router.get("/booking-link/:ref", async (req, res) => {
+  try {
+    const accountId = accountKey(req);
+    const lead = await resolveContact(accountId, req.params.ref);
+    if (!lead) return notFound(res, req.params.ref);
+
+    const account = await Account.findById(req.account._id).select("calcom").lean();
+    const base = account?.calcom?.enabled && account.calcom.booking_url;
+    if (!base) return res.status(409).json({ error: "Cal.com is not connected" });
+
+    const url = new URL(base);
+    if (lead.ig_user_id) url.searchParams.set("metadata[ig_user_id]", lead.ig_user_id);
+    if (lead.ig_username) url.searchParams.set("metadata[ig]", lead.ig_username);
+    const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
+    if (name) url.searchParams.set("name", name);
+    if (lead.email) url.searchParams.set("email", lead.email);
+
+    res.json({
+      url: url.toString(),
+      booking_url: base,
+      contact_id: String(lead._id),
+      next_booking: await nextBookingFor(req.account._id, lead._id),
+    });
+  } catch (err) {
+    logger.error("GET /booking-link error:", err);
     res.status(500).json({ error: "Internal error" });
   }
 });
