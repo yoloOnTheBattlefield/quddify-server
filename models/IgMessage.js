@@ -47,6 +47,16 @@ const igMessageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    // who wrote it: the lead, Grokbot, or Cristian himself
+    sent_by: {
+      type: String,
+      enum: ["lead", "bot", "cristian", null],
+      default: null,
+    },
+    zernio_message_id: {
+      type: String,
+      default: null,
+    },
     read_at: {
       type: Date,
       default: null,
@@ -60,6 +70,7 @@ const igMessageSchema = new mongoose.Schema(
 );
 
 igMessageSchema.index({ conversation_id: 1, timestamp: 1 });
+igMessageSchema.index({ zernio_message_id: 1 }, { sparse: true });
 igMessageSchema.index({ sender_id: 1 });
 igMessageSchema.index({ account_id: 1, timestamp: -1 });
 igMessageSchema.index({ outbound_account_id: 1, timestamp: -1 });

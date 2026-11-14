@@ -28,6 +28,18 @@ function isNonEmptyString(value) {
  * Returns null when the payload is malformed, belongs to a different Zernio
  * account, or carries an event we don't act on.
  */
+// Zernio's own conversation id, when the payload carries one. Field names are
+// not documented for every event shape, so look in the likely places.
+function zernioConversationId(payload) {
+  const candidates = [
+    payload?.message?.conversationId,
+    payload?.conversation?.id,
+    payload?.conversation?._id,
+    payload?.conversationId,
+  ];
+  return candidates.find(isNonEmptyString) || null;
+}
+
 function normalizeZernioEvent({ payload, account }) {
   if (!payload || typeof payload !== "object") return null;
   if (!account?.ig_user_id) return null;
@@ -71,6 +83,7 @@ function normalizeZernioEvent({ payload, account }) {
         recipient: { id: account.ig_user_id },
         timestamp: Date.now(),
         message: { mid: message.platformMessageId, text: message.text ?? "" },
+        ...(zernioConversationId(payload) ? { zernio_conversation_id: zernioConversationId(payload) } : {}),
         ...(metadata?.postbackPayload
           ? { postback: { payload: metadata.postbackPayload, title: metadata.postbackTitle } }
           : {}),

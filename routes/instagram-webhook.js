@@ -9,6 +9,7 @@ const IgAttachment = require("../models/IgAttachment");
 const Account = require("../models/Account");
 const { findIgOwner } = require("../utils/igOwner");
 const Lead = require("../models/Lead");
+const escapeRegex = require("../utils/escapeRegex");
 const Notification = require("../models/Notification");
 const socketManager = require("../services/socketManager");
 const { sendPushToAccount } = require("../services/pushNotifications");
@@ -220,7 +221,7 @@ async function handleMessage(event, senderId, recipientId) {
 
       // Check Lead
       const lead = await Lead.findOne({
-        ig_username: { $regex: new RegExp(`^${contactUsername}$`, "i") },
+        ig_username: { $regex: new RegExp(`^${escapeRegex(contactUsername)}$`, "i") },
         account_id: String(owner.account_id),
       });
       if (lead) {
@@ -242,6 +243,25 @@ async function handleMessage(event, senderId, recipientId) {
     }
   }
 
+  // Every inbound DM gets a contact: match by IG id if the username lookup
+  // found nothing, otherwise create one. Never for our own account's id.
+  if (owner && direction === "inbound") {
+    await ensureInboundContact({
+      owner,
+      conversationId: conversation._id,
+      contactIgId: senderId,
+      ownerIgUserId,
+      threadId,
+      messageTimestamp,
+      zernioConversationId: event.zernio_conversation_id || null,
+    });
+  } else if (event.zernio_conversation_id) {
+    await IgConversation.updateOne(
+      { _id: conversation._id, zernio_conversation_id: null },
+      { $set: { zernio_conversation_id: event.zernio_conversation_id } },
+    );
+  }
+
   // Deduplicate on message_id
   const existing = await IgMessage.findOne({ message_id: msg.mid });
   if (existing) {
@@ -258,6 +278,7 @@ async function handleMessage(event, senderId, recipientId) {
     recipient_id: recipientId,
     message_text: msg.text || null,
     message_id: msg.mid,
+    sent_by: direction === "inbound" ? "lead" : null,
     timestamp: messageTimestamp,
     raw_payload: event,
   });
@@ -276,6 +297,74 @@ async function handleMessage(event, senderId, recipientId) {
   logger.info(
     `[ig-webhook] Message stored: ${msg.mid} in thread ${threadId} (${direction}, account: ${owner?.account_id || "unknown"})`,
   );
+}
+
+// ─── Inbound contact bookkeeping ─────────────────────────────────────────────
+async function ensureInboundContact({
+  owner,
+  conversationId,
+  contactIgId,
+  ownerIgUserId,
+  threadId,
+  messageTimestamp,
+  zernioConversationId,
+}) {
+  if (!contactIgId || contactIgId === ownerIgUserId) return;
+  const accountId = String(owner.account_id);
+
+  try {
+    const conv = await IgConversation.findById(conversationId);
+    let lead = conv?.lead_id ? await Lead.findOne({ _id: conv.lead_id, account_id: accountId }) : null;
+    if (!lead) lead = await Lead.findOne({ account_id: accountId, ig_user_id: contactIgId });
+
+    let created = false;
+    if (!lead) {
+      const username = conv?.participant_usernames?.get(contactIgId) || null;
+      if (username) {
+        lead = await Lead.findOne({
+          account_id: accountId,
+          ig_username: { $regex: new RegExp(`^${escapeRegex(username)}$`, "i") },
+        });
+      }
+      if (!lead) {
+        lead = await Lead.create({
+          account_id: accountId,
+          platform: "instagram",
+          ig_username: username,
+          ig_user_id: contactIgId,
+          source: "ig_dm",
+          stage: "new",
+          ig_thread_id: threadId,
+          date_created: new Date().toISOString(),
+          first_conversation_at: messageTimestamp,
+          ...(zernioConversationId ? { zernio_conversation_id: zernioConversationId } : {}),
+        });
+        created = true;
+        logger.info(`[ig-webhook] Created contact ${lead._id} for IG user ${contactIgId}`);
+      }
+    }
+
+    const set = {};
+    if (!lead.ig_user_id) set.ig_user_id = contactIgId;
+    if (!lead.ig_thread_id) set.ig_thread_id = threadId;
+    if (zernioConversationId && !lead.zernio_conversation_id) set.zernio_conversation_id = zernioConversationId;
+    if (!lead.first_conversation_at) set.first_conversation_at = messageTimestamp;
+    await Lead.updateOne(
+      { _id: lead._id },
+      { $max: { last_inbound_at: messageTimestamp, last_conversation_at: messageTimestamp }, ...(Object.keys(set).length ? { $set: set } : {}) },
+    );
+
+    const convSet = {};
+    if (!conv?.lead_id) convSet.lead_id = lead._id;
+    if (zernioConversationId && !conv?.zernio_conversation_id) convSet.zernio_conversation_id = zernioConversationId;
+    if (Object.keys(convSet).length) await IgConversation.updateOne({ _id: conversationId }, { $set: convSet });
+
+    if (created) {
+      await fireLeadNotification(owner.account_id, "new_lead", lead.ig_username || contactIgId);
+    }
+  } catch (err) {
+    logger.error("[ig-webhook] ensureInboundContact failed:", err);
+  }
 }
 
 // ─── Handle read receipt ─────────────────────────────────────────────────────

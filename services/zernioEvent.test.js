@@ -115,6 +115,26 @@ describe("normalizeZernioEvent", () => {
     });
   });
 
+  it("passes Zernio's conversation id through when the payload carries one", () => {
+    const base = {
+      id: "evt_c",
+      event: "message.received",
+      account: { id: "zacct_1", platform: "instagram" },
+      message: { platformMessageId: "mid_c", direction: "incoming", text: "x", sender: { id: "u1" } },
+    };
+    const viaMessage = normalizeZernioEvent({
+      payload: { ...base, message: { ...base.message, conversationId: "conv_a" } },
+      account: ACCOUNT,
+    });
+    expect(viaMessage.entry[0].messaging[0].zernio_conversation_id).toBe("conv_a");
+
+    const viaConversation = normalizeZernioEvent({ payload: { ...base, conversation: { id: "conv_b" } }, account: ACCOUNT });
+    expect(viaConversation.entry[0].messaging[0].zernio_conversation_id).toBe("conv_b");
+
+    const none = normalizeZernioEvent({ payload: base, account: ACCOUNT });
+    expect(none.entry[0].messaging[0]).not.toHaveProperty("zernio_conversation_id");
+  });
+
   it("ignores outgoing message echoes", () => {
     const result = normalizeZernioEvent({
       payload: {

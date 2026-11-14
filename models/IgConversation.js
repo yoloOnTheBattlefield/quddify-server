@@ -40,6 +40,10 @@ const igConversationSchema = new mongoose.Schema(
       of: String,
       default: {},
     },
+    zernio_conversation_id: {
+      type: String,
+      default: null,
+    },
     last_message_at: {
       type: Date,
       default: null,
@@ -53,6 +57,7 @@ const igConversationSchema = new mongoose.Schema(
 );
 
 igConversationSchema.index({ last_message_at: -1 });
+igConversationSchema.index({ zernio_conversation_id: 1 }, { sparse: true });
 igConversationSchema.index({ account_id: 1, last_message_at: -1 });
 igConversationSchema.index({ outbound_account_id: 1, last_message_at: -1 });
 
