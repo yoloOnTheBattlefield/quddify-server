@@ -34,6 +34,7 @@ const agentRoutes = require("./routes/agent");
 const zernioRoutes = require("./routes/zernio");
 const contentAnalyticsRoutes = require("./routes/content-analytics");
 const zernioWebhookRoutes = require("./routes/zernio-webhook");
+const calcomWebhookRoutes = require("./routes/calcom-webhook");
 const igWebhookRoutes = require("./routes/instagram-webhook");
 const igConversationRoutes = require("./routes/ig-conversations");
 const igOAuthRoutes = require("./routes/instagram-oauth");
@@ -117,6 +118,19 @@ app.use(
     },
   }),
   zernioWebhookRoutes,
+);
+
+// Cal.com webhook — HMAC over the raw body, like Zernio
+app.use(
+  "/calcom-webhook",
+  webhookLimiter,
+  cors({ origin: true, credentials: false }),
+  express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+  calcomWebhookRoutes,
 );
 
 // Stripe webhook — needs raw body for signature verification
@@ -218,6 +232,7 @@ const connectDB = async () => {
       require("./models/User"),
       require("./models/Payment"),
       require("./models/AgentLock"),
+      require("./models/Booking"),
     ];
     for (const Model of models) {
       try {

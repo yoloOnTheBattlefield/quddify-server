@@ -57,6 +57,15 @@ const AccountSchema = new mongoose.Schema(
       enabled: { type: Boolean, default: false },
       connected_at: { type: Date, default: null },
     },
+    // Cal.com — event-type webhook for the Instagram call booking page
+    calcom: {
+      webhook_id: { type: String, default: null },
+      webhook_secret: { type: String, default: null },
+      event_type_ids: { type: [Number], default: [] },
+      booking_url: { type: String, default: null },
+      enabled: { type: Boolean, default: false },
+      connected_at: { type: Date, default: null },
+    },
     ig_proxy: { type: String, default: null },
     apify_token: { type: String, default: null },
     replicate_token: { type: String, default: null },
@@ -86,6 +95,7 @@ const ENCRYPTED_FIELDS = [
   "ig_oauth.page_access_token",
   "zernio.api_key",
   "zernio.webhook_secret",
+  "calcom.webhook_secret",
   "stripe_webhook_secret",
   "telegram_bot_token",
 ];

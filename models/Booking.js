@@ -24,6 +24,13 @@ const BookingSchema = new mongoose.Schema(
     calendly_invitee_uri: { type: String, default: null },
     fathom_recording_url: { type: String, default: null },
     fathom_recording_id: { type: String, default: null },
+    provider: { type: String, enum: ["calendly", "calcom", null], default: null },
+    calcom_uid: { type: String, default: undefined },
+    calcom_booking_id: { type: Number, default: null },
+    calcom_event_type_id: { type: Number, default: null },
+    meeting_url: { type: String, default: null },
+    end_date: { type: Date, default: null },
+    rescheduled_from_uid: { type: String, default: null },
   },
   { collection: "bookings", timestamps: true, versionKey: false },
 );
@@ -34,5 +41,6 @@ BookingSchema.index({ lead_id: 1 });
 BookingSchema.index({ outbound_lead_id: 1 });
 BookingSchema.index({ account_id: 1, utm_source: 1 });
 BookingSchema.index({ calendly_event_uri: 1 }, { sparse: true });
+BookingSchema.index({ calcom_uid: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("Booking", BookingSchema);
